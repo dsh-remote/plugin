@@ -184,7 +184,8 @@ node e2e/run.mjs
       `dsh` = 真实内核挂上了，`mock` = 会话是假的。
 - [ ] 在内核挂上之后确认审批卡 / 提问卡是否真的流转（rc.6 的 typertGateway
       只有 `invoke()`、没有流式事件，这是最可能出问题的地方）。
-- [ ] 小程序 appid 目前是 `touristappid`。**真机预览需要换成已注册的 appid**，
+- [x] 小程序 appid 已换成真实 appid；真机还需在微信后台加 socket 合法域名
+      （`开发管理 → 开发设置 → 服务器域名 → socket合法域名` 加 `drc.provid.cc`），
       并把 `drc.provid.cc` 加入小程序后台的 socket 合法域名白名单；
       开发者工具模拟器里勾选「不校验合法域名」即可直接连 wss。
 - [ ] （可选，评估后**决定不做**）CLI bin：配对必须由运行中的 host 生成 PSK，

@@ -106,7 +106,7 @@ drc pair 120
 微信开发者工具打开 `mp/` 目录：
 
 - 勾选「**不校验合法域名**」（开发期）；
-- appid 目前是 `touristappid`，真机/上架前换成你自己的；
+- 已在 `mp/project.config.json` 里配置真实 appid（真机调试/预览都可用）；
 - 真机必须用 `wss://`，且域名要在小程序后台的 socket 合法域名白名单里。
 
 ---
@@ -221,7 +221,7 @@ CI 见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：Node 20 / 22 双
   `ctx.typertGateway` 只有 `invoke()`、没有流式事件，插件会软降级；审批流在本机
   可能走 `apiProxy` 路径。安装后请看日志确认 `carrier=dsh` 而不是 `carrier=mock`。
 - ⚠️ 中继是纯内存的，重启后配对关系丢失（客户端会提示重新配对）。
-- ⚠️ 小程序 appid 用的是 `touristappid`，仅供开发调试。
+- ⚠️ 真机需要在微信后台把 `drc.provid.cc` 加入 **socket 合法域名**（域名需备案）。
 
 ---
 
