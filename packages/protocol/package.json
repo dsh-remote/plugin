@@ -1,0 +1,26 @@
+{
+  "name": "@dsh-rc/protocol",
+  "version": "0.1.0",
+  "description": "Wire protocol + payload-level E2E crypto shared by the DSH Remote Control host plugin, relay server and clients.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    "./mp": "./mp/drc-crypto.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "mp"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test dist/tests/crypto.test.js dist/tests/keepawake.test.js"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.9.0"
+  }
+}

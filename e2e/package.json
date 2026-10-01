@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-rc/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node run.mjs" },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "@dsh-rc/protocol": "workspace:*"
+  }
+}

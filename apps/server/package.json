@@ -1,0 +1,16 @@
+{
+  "name": "@dsh-rc/server",
+  "version": "0.1.0",
+  "description": "Zero-knowledge WebSocket relay for DSH Remote Control (host plugin <-> clients).",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "build": "true",
+    "test": "node --test tests/relay.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": { "node": ">=20" }
+}

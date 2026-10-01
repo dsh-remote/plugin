@@ -1,0 +1,13 @@
+- insert:
+    - id: dsh-remote-control
+      name: dsh-remote-control
+      inject: [commands]
+      config:
+        enabled: true
+        serverUrl: ws://127.0.0.1:8787
+        hostTokenEnv: DRC_HOST_TOKEN
+        hostLabel: dsh-host
+        keepAwake:
+          enabled: true
+          idleReleaseSec: 300
+          keepDisplay: false
