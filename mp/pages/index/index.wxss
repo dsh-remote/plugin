@@ -48,3 +48,10 @@
   text-align: center;
   margin-top: 24rpx;
 }
+
+/* 诊断入口：存在但克制 */
+.link.dim {
+  color: #8a9099;
+  font-size: 24rpx;
+  margin-top: 12rpx;
+}

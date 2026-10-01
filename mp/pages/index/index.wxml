@@ -37,7 +37,8 @@
         placeholder="粘贴主机的二维码内容 dshr:/p?…"
         value="{{pasteText}}"
         bindinput="onPaste" />
-      <view class="btn btn-tight" bindtap="onScan">扫码配对</view>
+      <view class="btn btn-tight" wx:if="{{scanReady}}" bindtap="onScan">扫码配对</view>
+      <view class="muted pair-hint" wx:else>当前环境没有扫码能力，请粘贴下面的二维码内容</view>
       <view class="muted pair-hint" wx:if="{{!hasPsk}}">扫码或粘贴后会自动填入地址与密钥</view>
       <view class="muted pair-hint ok" wx:else>已获取密钥 ✓</view>
     </view>
@@ -63,5 +64,7 @@
       <input class="input field-input" placeholder="中继地址 wss://…" value="{{server}}" bindinput="onServerInput" />
       <input class="input mono field-input" placeholder="配对密钥 PSK" value="{{psk}}" bindinput="onPskInput" />
     </view>
+    <!-- 出问题时要能一句话说清环境有什么，但平时不该占版面 -->
+    <text class="link center dim" bindtap="onCopyDiag">复制环境自检</text>
   </block>
 </view>

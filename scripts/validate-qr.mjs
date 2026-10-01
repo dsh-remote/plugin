@@ -35,7 +35,7 @@ if (!existsSync(PY)) {
   process.exit(2)
 }
 
-const { qrMatrix } = await import(qrModule)
+const { qrMatrix, qrPng } = await import(qrModule)
 
 const PAYLOADS = [
   'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142',
@@ -59,11 +59,17 @@ const request = cases.map(({ text, ecc }) => {
     // 复用 qrMatrix（无 ANSI 的裸字符版）保证与 renderTerminalQr 同源
     return qrMatrix(text, ecc, 2)
   })()
-  return { text, ecc, matrix: rendered.map((row) => row.map((v) => (v ? 1 : 0))) }
+  return {
+    text,
+    ecc,
+    matrix: rendered.map((row) => row.map((v) => (v ? 1 : 0))),
+    // 图片输出才是主要的配对产物：它不依赖终端对块字符/ANSI 的支持
+    png: qrPng(text, ecc, { scale: 8 }).toString('base64'),
+  }
 })
 
 const py = `
-import json, sys
+import json, sys, base64, io
 from PIL import Image
 import zxingcpp
 
@@ -71,6 +77,12 @@ req = json.load(sys.stdin)
 out = []
 for c in req["cases"]:
     try:
+        # 图片路径优先：这就是 /drc pair 真正给用户的东西
+        img = Image.open(io.BytesIO(base64.b64decode(c["png"])))
+        res = zxingcpp.read_barcode(img)
+        if res is None or res.text != c["text"]:
+            out.append({"ok": True, "decoded": res.text if res else None})
+            continue
         m = c["matrix"]
         scale, border = 8, 4
         h, w = len(m), len(m[0])

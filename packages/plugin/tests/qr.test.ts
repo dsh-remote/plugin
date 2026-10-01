@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { qrMatrix, renderTerminalQr } from '../src/qr.js'
+import { qrMatrix, qrPng, renderTerminalQr } from '../src/qr.js'
 
 test('terminal QR renders a square, quiet-zoned, half-block symbol', () => {
   const text = 'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142'
-  const out = renderTerminalQr(text, { ansi: false })
+  const out = renderTerminalQr(text, { ansi: false, style: 'half' })
   const lines = out.split('\n')
 
   assert.ok(lines.length >= 20, `half-block rendering should be compact, got ${lines.length} lines`)
@@ -20,7 +20,7 @@ test('terminal QR renders a square, quiet-zoned, half-block symbol', () => {
 })
 
 test('ANSI mode wraps the symbol in an explicit black-on-white palette', () => {
-  const out = renderTerminalQr('HELLO WORLD')
+  const out = renderTerminalQr('HELLO WORLD', { style: 'half', ansi: true })
   assert.ok(out.startsWith('\x1b[30;107m'), 'must start with black-fg/white-bg')
   assert.ok(out.endsWith('\x1b[0m'), 'must reset styles at the end')
 })
@@ -45,7 +45,7 @@ test('half-block rendering round-trips back to the exact matrix', () => {
   // The terminal output is the product a user will actually photograph — it
   // must reconstruct bit-for-bit, or the pretty print silently broke pairing.
   const text = 'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142'
-  const rendered = renderTerminalQr(text, { ansi: false, quietZone: 0 })
+  const rendered = renderTerminalQr(text, { ansi: false, quietZone: 0, style: 'half' })
   const original = qrMatrix(text, 'M', 0)
 
   const parse = (ch: string): [boolean, boolean] => {
@@ -78,4 +78,34 @@ test('non-ASCII payloads survive: stringToBytes must be UTF-8, not truncating', 
   // the CJK payload must produce a LARGER matrix than the truncation would.
   const cjk = qrMatrix('中文载荷测试：配对信息', 'M', 0)
   assert.equal(cjk.length, 29, '11 CJK chars ×3 bytes needs version 3 (29×29); a truncating bug would emit 21×21')
+})
+
+test('qrPng emits a valid grayscale PNG of the right size', () => {
+  // The slash-command API cannot return an image, but the plugin runs on the
+  // host and can write one — this is the primary pairing output.
+  const text = 'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142'
+  const png = qrPng(text, { scale: 8 })
+
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  assert.ok(png.subarray(0, 8).equals(sig), 'PNG signature')
+  // IHDR starts right after the 8-byte signature + 4-byte length + 4-byte type
+  const ihdr = png.subarray(16, 16 + 13)
+  const width = ihdr.readUInt32BE(0)
+  const height = ihdr.readUInt32BE(4)
+  assert.equal(width, height, 'symbol must be square')
+  assert.equal(ihdr[8], 8, 'bit depth 8')
+  assert.equal(ihdr[9], 0, 'colour type grayscale')
+  // 21+2*4 modules at quietZone 4 => 29 * 8 = 232 for this payload? assert the relation instead
+  const modules = qrMatrix(text, 'M', 4).length
+  assert.equal(width, modules * 8, 'width = modules x scale')
+  assert.ok(png.includes(Buffer.from('IEND')), 'must end with IEND')
+})
+
+test('ascii style is whitespace-collapse safe', () => {
+  // Some TUI panes collapse runs of spaces; if the light modules were spaces
+  // the grid would shift and the symbol would stop scanning.
+  const out = renderTerminalQr('HELLO WORLD', { style: 'ascii' })
+  const body = out.split('\n').slice(2, -2).join('')
+  assert.ok(!/ {2,}/.test(body), 'no runs of spaces to collapse')
+  assert.match(body, /^[#.]+$/, 'only # and . glyphs')
 })

@@ -13,6 +13,7 @@
  * layer (`packages/plugin/cordis.patch.yml`), plus environment overrides
  * (DRC_SERVER_URL / DRC_HOST_TOKEN / DRC_HOST_LABEL).
  */
+import { spawn } from 'node:child_process'
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -20,7 +21,7 @@ import type { Payload } from '@dsh-rc/protocol'
 import { HostRuntime } from './host-runtime.js'
 import { MockHarnessBridge } from './adapter-mock.js'
 import { DshKernelBridge, type ApiProxyLike, type GatewayLike, type InProcServices } from './adapter-dsh.js'
-import { renderTerminalQr } from './qr.js'
+import { qrPng, renderTerminalQr, type QrStyle } from './qr.js'
 
 /** Loose cordis context — we never hard-depend on @deepseek-ai/cordis types. */
 interface LooseContext {
@@ -62,6 +63,18 @@ export interface PluginConfig {
    * human typing `/drc pair`.
    */
   pairOnStartSec: number
+  /**
+   * `/drc pair` writes a real PNG next to the status file and opens it.
+   *
+   * The slash-command API can only settle `{ kind, text }` — there is no image
+   * result type — but the plugin runs on the host, so it can emit an actual
+   * image file instead of fighting whatever the TUI does to block characters.
+   */
+  qrImage: boolean
+  /** Open the generated PNG with the OS default viewer. */
+  qrOpen: boolean
+  /** Text fallback style, used only if the PNG cannot be written. */
+  qrStyle: QrStyle
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
@@ -75,6 +88,13 @@ export const DEFAULT_CONFIG: PluginConfig = {
   statusFile: join(homedir(), '.dsh', 'dsh-remote-control', 'status.json'),
   unarchiveOnPrompt: true,
   pairOnStartSec: Number(process.env.DRC_PAIR_ON_START_SEC ?? 0) || 0,
+  qrImage: process.env.DRC_QR_IMAGE !== '0',
+  qrOpen: process.env.DRC_QR_OPEN !== '0',
+  qrStyle: (['ascii', 'block', 'half'] as const).includes(
+    (process.env.DRC_QR_STYLE ?? '') as QrStyle,
+  )
+    ? (process.env.DRC_QR_STYLE as QrStyle)
+    : 'ascii',
 }
 
 /**
@@ -111,6 +131,53 @@ function writeStatus(file: string, carrier: string, cfg: PluginConfig, state: Re
 }
 
 /** Never let a secret reach a log line. */
+/**
+ * Compose the `/drc pair` reply.
+ *
+ * A real PNG is the primary output: block characters in a TUI depend on the
+ * font, the glyph set and whether ANSI is interpreted at all, and any of those
+ * going wrong turns the symbol into unscannable noise. An image file always
+ * scans, and we can open it directly since we are running on the host.
+ */
+function pairMessage(
+  token: string,
+  qr: string,
+  ttlMs: number,
+  withToken: boolean,
+  cfg: PluginConfig,
+): string {
+  const head =
+    `配对码 ${token}（${Math.round(ttlMs / 1000)}s 内有效）\n` +
+    (withToken ? '二维码已内嵌配对码，扫码即连。\n' : '')
+
+  if (cfg.qrImage) {
+    try {
+      const dir = dirname(cfg.statusFile || join(homedir(), '.dsh', 'dsh-remote-control', 'status.json'))
+      mkdirSync(dir, { recursive: true })
+      const file = join(dir, 'pairing-qr.png')
+      writeFileSync(file, qrPng(qr), { mode: 0o600 })
+      let opened = ''
+      if (cfg.qrOpen) {
+        const opener =
+          process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+        try {
+          // fire-and-forget: a missing opener must not fail the command
+          spawn(opener, [file], { stdio: 'ignore', detached: true }).unref()
+          opened = '（已用默认应用打开）'
+        } catch {
+          opened = ''
+        }
+      }
+      return `${head}\n二维码图片：${file}${opened}\n\n二维码内容：\n${qr}`
+    } catch (e) {
+      // fall through to text — the command must still produce a usable code
+      console.warn('[dsh-remote-control] writing the pairing PNG failed', e)
+    }
+  }
+
+  return `${head}\n${renderTerminalQr(qr, { style: cfg.qrStyle })}\n\n二维码内容：\n${qr}`
+}
+
 function redact(token: string): string {
   if (!token) return '(empty)'
   return token.length <= 8 ? '****' : `${token.slice(0, 4)}…${token.slice(-2)} (len ${token.length})`
@@ -484,16 +551,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig> | undefin
             const secs = Number(parts.filter((p) => /^\d+$/.test(p))[0] ?? 120)
             const ttl = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 120_000
             const p = runtime?.createPairing(ttl, { includeToken: withToken })
-            return p
-              ? {
-                  kind: 'success',
-                  text:
-                    `配对码 ${p.token}（${Math.round(ttl / 1000)}s 内有效）\n` +
-                    (withToken ? '二维码已内嵌配对码，扫码即连。\n' : '') +
-                    `${renderTerminalQr(p.qr)}\n` +
-                    `二维码内容：\n${p.qr}`,
-                }
-              : { kind: 'error', text: 'runtime 未启动：检查 hostToken 配置与中继地址' }
+            if (!p) {
+              return { kind: 'error', text: 'runtime 未启动：检查 hostToken 配置与中继地址' }
+            }
+            return { kind: 'success', text: pairMessage(p.token, p.qr, ttl, withToken, cfg) }
           }
           if (sub === 'help') {
             return {

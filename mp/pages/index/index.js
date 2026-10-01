@@ -19,6 +19,8 @@ Page({
     diagGlobal: 'wx',
     /** 这个容器是否有 WebSocket 能力；false 时页面直接提示，别让用户白试 */
     socketReady: true,
+    /** 这个容器是否有扫码能力；没有就别放一个点了必然报错的按钮 */
+    scanReady: true,
   },
 
   onLoad: function () {
@@ -33,6 +35,7 @@ Page({
       diag: platform.summary(),
       diagGlobal: p.global,
       socketReady: !!p.connectSocket,
+      scanReady: !!p.scanCode,
     })
     this._syncStatus()
   },
@@ -68,7 +71,12 @@ Page({
       var msg = String(evt.message || '')
       // 重新采集一次：失败原因常常就是环境能力，页面上的那一行必须是最新的
       var p = platform.probe(true)
-      this.setData({ diag: platform.summary(), diagGlobal: p.global, socketReady: !!p.connectSocket })
+      this.setData({
+        diag: platform.summary(),
+        diagGlobal: p.global,
+        socketReady: !!p.connectSocket,
+        scanReady: !!p.scanCode,
+      })
       // toast 只显示 40 字，像「环境缺 WebSocket 能力」这种必须完整看到，
       // 否则用户只知道失败了，不知道下一步做什么。
       if (!p.connectSocket || msg.indexOf('SOCKET_UNAVAILABLE') >= 0 || msg.length > 40) {
@@ -102,6 +110,16 @@ Page({
   // ── 扫码 ──────────────────────────────────────────────────────────
   onScan: function () {
     var self = this
+    if (!platform.probe().scanCode) {
+      // 容器没有 scanCode：直接调用只会抛 "is not a function"，
+      // 而用户真正能用的路径（粘贴）就写在下面那个输入框里。
+      wx.showModal({
+        title: '当前环境无法扫码',
+        content: '这个运行环境没有提供扫码能力。请把主机显示的「二维码内容」粘贴到下方输入框。',
+        showCancel: false,
+      })
+      return
+    }
     wx.scanCode({
       onlyFromCamera: false,
       scanType: ['qrCode'],

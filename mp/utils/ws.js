@@ -17,6 +17,8 @@ var platform = require('./platform.js')
 
 var RECONNECT_MIN = 1000
 var RECONNECT_MAX = 30000
+/** 没人喜欢“一直转圈”：连不上就说连不上 */
+var CONNECT_TIMEOUT_MS = 12000
 
 function createSocket(opts) {
   var url = opts.url
@@ -28,9 +30,39 @@ function createSocket(opts) {
   var task = null
   var retry = 0
   var timer = null
+  var openTimer = null
   /** 'task' | 'legacy' | null —— 当前实际使用的实现路径 */
   var mode = null
   var legacyBound = false
+
+  function clearOpenTimer() {
+    if (openTimer) {
+      clearTimeout(openTimer)
+      openTimer = null
+    }
+  }
+
+  /**
+   * 连不上必须说出来。
+   *
+   * 没有超时的话，握手没响应时界面会永远停在「连接中」——用户既不知道
+   * 卡在哪，也没法判断是地址错、中继没起，还是这个容器根本发不出请求。
+   */
+  function armOpenTimeout() {
+    clearOpenTimer()
+    openTimer = setTimeout(function () {
+      openTimer = null
+      if (mode) return // 已经连上了
+      try {
+        task && task.close && task.close()
+      } catch (e) {
+        /* ignore */
+      }
+      task = null
+      onError(new Error('连接超时：' + CONNECT_TIMEOUT_MS / 1000 + ' 秒内没有建立连接。检查中继地址与网络，或主机端是否在线。'))
+      scheduleReconnect()
+    }, CONNECT_TIMEOUT_MS)
+  }
 
   function scheduleReconnect() {
     if (manualClose || timer) return
@@ -52,7 +84,9 @@ function createSocket(opts) {
   function bindTask(t) {
     mode = 'task'
     task = t
+    armOpenTimeout()
     t.onOpen(function () {
+      clearOpenTimer()
       retry = 0
       onOpen()
     })
@@ -95,10 +129,12 @@ function createSocket(opts) {
       },
     }
 
+    armOpenTimeout()
     if (legacyBound) return
     legacyBound = true
     api.onSocketOpen(function () {
       if (mode !== 'legacy' || !task) return
+      clearOpenTimer()
       retry = 0
       onOpen()
     })
@@ -190,6 +226,7 @@ function createSocket(opts) {
     },
     close: function () {
       manualClose = true
+      clearOpenTimer()
       if (timer) {
         clearTimeout(timer)
         timer = null
