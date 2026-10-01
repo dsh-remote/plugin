@@ -76,8 +76,36 @@ node --test e2e/mp-client.test.mjs  # 8 项：真实 drc.js + wx shim 跑完整�
 | 会话列表一直为空 | host 的 `carrier=mock`（内核桥接没挂上），或真的没有会话 |
 | 真机连不上 | 域名白名单 + 必须 `wss://` |
 
+### `wx.connectSocket is not a function`
+
+客户端要的是 **WebSocket**，不是 HTTP。某些运行环境（尤其第三方预览容器）
+压根不提供 `connectSocket`，这时任何配对尝试都会以一句 TypeError 告终，
+用户既不知道缺什么也不知道怎么办。
+
+`utils/platform.js` 会先探测能力，`utils/ws.js` 按探测结果走两条路：
+
+1. **SocketTask**（基础库 1.7.0+）：`connectSocket()` 返回带 `onOpen/onMessage` 的任务对象；
+2. **旧式全局回调**：`onSocketOpen/onSocketMessage/...`（全局监听器只绑一次，避免叠加）。
+
+两条路都没有时，**如实上报「环境缺能力」并停止重连**，配对页显示一行可复制的
+环境自检（含 `global.connectSocket` 之类的事实）。把那一行复制出来就能定位。
+
+这类容器里远程控制在原理上无法工作——需要换成微信开发者工具，
+或用自己的 AppID 真机调试（并把 `wss://` 域名加进小程序后台的 socket 合法域名）。
+
+## 配对二维码
+
+主机端 `/drc pair` 会在终端直接渲染可扫的二维码（半块字符 + 黑底白字 ANSI），
+**默认内嵌 6 位配对码**（`&t=`），所以扫码即连，不用再手输。
+想生成不带码的裸载荷：`/drc pair --no-token`。
+
+编码器是 vendored 的 `qrcode-generator` 1.4.4（MIT），因为插件装进外部 profile 时
+必须自包含；校验不靠肉眼——`scripts/validate-qr.mjs` 用 zxing-cpp **真实解码**
+渲染结果（28 组含 CJK 与公网 URL）。手写过一版，被这个校验器抓出系统性差异后放弃。
+
 ## 还没做
 
 - 图片/文件附件（`cmd.send_prompt.attachments` 协议里有字段，UI 没做）
 - 多主机切换（现在是单配对，重新配对会覆盖）
 - 消息历史持久化（小程序只保留本次会话的内存流）
+- 无 WebSocket 的容器下没有替代传输（协议是 WS-only，不打算再造一套）

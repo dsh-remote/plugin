@@ -73,7 +73,8 @@
     </view>
     <view class="row-between" style="margin-top:14rpx;">
       <text class="muted">{{running ? '运行中…' : (statusText || '空闲')}}</text>
-      <text class="stop" bindtap="onInterrupt">中断</text>
+      <!-- 只在真的在跑时出现：一个永不生效的按钮只会让人误点 -->
+      <text wx:if="{{running}}" class="stop" bindtap="onInterrupt">中断</text>
     </view>
   </view>
 </view>

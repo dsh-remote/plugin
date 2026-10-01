@@ -15,11 +15,10 @@
     </view>
   </view>
 
-  <view class="card">
-    <view class="row-between">
-      <text class="card-title">会话列表</text>
-      <text class="refresh" bindtap="refresh">{{refreshing ? '刷新中…' : '刷新'}}</text>
-    </view>
+  <!-- 标题行单独成卡是浪费：它只是标签，不是内容容器 -->
+  <view class="section">
+    <text class="card-title">会话</text>
+    <text class="refresh" bindtap="refresh">{{refreshing ? '刷新中…' : '刷新'}}</text>
   </view>
 
   <view wx:if="{{sessions.length === 0}}" class="card">

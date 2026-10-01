@@ -68,6 +68,14 @@
   font-size: 22rpx;
 }
 
+/* 列表标题行：不是卡片，只是一行标签 */
+.section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8rpx 4rpx;
+}
+
 .switch-row {
   display: flex;
   align-items: center;

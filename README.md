@@ -139,17 +139,19 @@ node scripts/verify-deployment.mjs --pair <6位码> --qr '<dshr:/p?…>'   # 连
 ```sh
 pnpm install -r
 pnpm -r build
-pnpm -r test      # 52 项 + relay e2e 9 步
+pnpm -r test      # 77 项 + relay e2e 9 步
 node e2e/run.mjs  # 单独跑：配对→指令→审批→提问→防休眠→中断→零知识审计
+node scripts/validate-qr.mjs  # 二维码：zxing-cpp 真实解码 28 组
 ```
 
 | 套件 | 项数 | 覆盖 |
 |---|---|---|
 | `packages/protocol` | 11 | 加密、篡改检测、配对 QR（含内嵌配对码）、三平台防休眠命令 |
 | `apps/server` | 13 | 中继闭环 + **加固行为**（限流、帧大小上限、连接上限、优雅停机、孤儿会话清理） |
-| `packages/plugin` | 14 | 激活降级、carrier 选择、配置校验、恶意 ctx 不抛异常、状态文件 |
+| `packages/plugin` | 27 | 激活降级、carrier 选择、配置校验、恶意 ctx 不抛异常、状态文件、**终端二维码**、会话列表/归档/事件窗口 |
 | `e2e/mp-crypto` | 11 | 小程序 crypto 与 Node **逐字节对拍** |
 | `e2e/mp-client` | 8 | 真实小程序客户端代码走完整闭环 |
+| `e2e/mp-platform` | 3 | 无 `connectSocket` 的容器：如实报错 + 旧式全局回调回退 |
 | `e2e/run.mjs` | 9 步 | 真实 server + HostRuntime + 模拟小程序 + 零知识审计 |
 
 后两个是专为小程序写的（CI 里开不了微信开发者工具）：
