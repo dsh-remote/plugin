@@ -326,7 +326,17 @@ wss.on('connection', (ws) => {
         const sessionId = 'c_' + randomBytes(6).toString('hex')
         conversations.set(sessionId, { hostId: p.hostId, clients: new Set([session.clientId]), seqHost: 0 })
         send({ t: 'paired', hostId: p.hostId, sessionId })
-        host.ws.send(JSON.stringify({ t: 'peer-joined', sessionId, clientId: session.clientId }))
+        // The host keeps one PSK per offered token; without the token it would
+        // default to "the most recent" one and derive keys the client cannot
+        // reproduce — every frame then fails to decrypt (see HANDOFF 5.15).
+        host.ws.send(
+          JSON.stringify({
+            t: 'peer-joined',
+            sessionId,
+            clientId: session.clientId,
+            pairingToken: f.pairingToken,
+          }),
+        )
         log('info', 'paired', { sessionId, hostId: p.hostId, clientId: session.clientId })
         return
       }

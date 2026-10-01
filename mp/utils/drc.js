@@ -153,6 +153,20 @@ DrcClient.prototype.unpair = function () {
   this._setStatus('needs-pair', '已解除配对')
 }
 
+/** Drop the unusable pairing and ask for a fresh scan. */
+DrcClient.prototype._resetPairing = function (why) {
+  this.disconnect()
+  store.clearPairing()
+  this.convId = ''
+  this.kC2H = null
+  this.kH2C = null
+  this._resume = null
+  this.sessions = []
+  this._decryptFails = 0
+  this._setStatus('needs-pair', why)
+  this.emit({ kind: 'error', message: why })
+}
+
 DrcClient.prototype.sendControl = function (frame) {
   return this.sock ? this.sock.send(frame) : false
 }
@@ -279,9 +293,19 @@ DrcClient.prototype._onEncrypted = function (f) {
   if (!this.kH2C) return
   var payload = crypto.open(this.kH2C, f)
   if (!payload) {
-    this.emit({ kind: 'error', message: '收到无法解密的数据（密钥不匹配？）' })
+    // A key mismatch means this conversation is unusable — every later frame
+    // will fail the same way. Don't leave the user staring at an empty list:
+    // drop the pairing and tell them exactly what to do. Two strikes first,
+    // so one corrupted frame cannot throw away a healthy pairing.
+    this._decryptFails = (this._decryptFails || 0) + 1
+    if (this._decryptFails >= 2) {
+      this._resetPairing('配对已失效（密钥不匹配），请重新扫码')
+      return
+    }
+    this.emit({ kind: 'error', message: '有一条数据无法解密，若持续出现请重新扫码配对' })
     return
   }
+  this._decryptFails = 0
   // bookkeeping that every page needs, kept here so pages stay dumb
   if (payload.t === 'ev.session_changed') {
     this.sessions = payload.sessions || []

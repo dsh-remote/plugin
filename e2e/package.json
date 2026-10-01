@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test mp-crypto.test.mjs && node --test mp-client.test.mjs && node run.mjs",
+    "test": "node --test mp-crypto.test.mjs && node --test mp-client.test.mjs && node --test mp-platform.test.mjs && node --test multi-pair.test.mjs && node run.mjs",
     "test:mp-crypto": "node --test mp-crypto.test.mjs",
     "test:mp-client": "node --test mp-client.test.mjs",
-    "test:relay": "node run.mjs"
+    "test:relay": "node run.mjs",
+    "test:multi-pair": "node --test multi-pair.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0",

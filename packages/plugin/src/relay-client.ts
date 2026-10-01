@@ -29,6 +29,9 @@ export interface RelayClientOptions {
 
 export type RelayStatus = 'connecting' | 'online' | 'offline' | 'auth-failed'
 
+/** Upper bound on concurrently offered pairing codes (memory safety). */
+const MAX_PENDING_PAIRS = 32
+
 /** one paired client conversation */
 interface Conversation {
   sessionId: string
@@ -41,8 +44,16 @@ interface Conversation {
 export class RelayClient {
   private ws: WebSocket | null = null
   private conversations = new Map<string, Conversation>()
-  /** psk by 6-digit token currently offered for pairing */
-  private pendingPair: { token: string; psk: string; expiresAt: number } | null = null
+  /**
+   * PSK by 6-digit token.
+   *
+   * NOT a single slot: several pairings can be outstanding at once (an
+   * auto-published code plus a `/drc pair`, or two `/drc pair`s). Keys must be
+   * derived from the PSK belonging to the token the client actually used —
+   * using "the latest" produces keys the client cannot reproduce, and then
+   * every payload fails to decrypt with no obvious cause.
+   */
+  private pendingPairs = new Map<string, { psk: string; expiresAt: number }>()
   /** TTL the relay reported for the last pairing (authoritative). */
   lastPairTtlMs: number | null = null
   /**
@@ -160,7 +171,31 @@ export class RelayClient {
         return
       case 'peer-joined': {
         // host side: the conversation was created server-side; psk was ours
-        const psk = this.pendingPair?.token === undefined ? null : this.pendingPair.psk
+        // The PSK is the one we offered for THIS token. With several pairings
+        // outstanding, "the most recent token" is not necessarily the one the
+        // client used — picking that one yields keys it cannot reproduce, and
+        // then every payload fails to decrypt with no obvious cause.
+        let psk: string | null = null
+        const usedToken = (f as { pairingToken?: string }).pairingToken
+        if (usedToken) {
+          const rec = this.pendingPairs.get(usedToken)
+          if (rec && rec.expiresAt >= Date.now()) psk = rec.psk
+          this.pendingPairs.delete(usedToken) // single-use
+        }
+        if (!psk) {
+          // Relays older than this change do not echo the token. Fall back to
+          // the newest live entry and say so — better than dropping the peer.
+          for (const [k, rec] of [...this.pendingPairs].reverse()) {
+            if (rec.expiresAt >= Date.now()) {
+              psk = rec.psk
+              this.pendingPairs.delete(k)
+              this.say('peer-joined without a matching token; using the newest pending PSK', {
+                sessionId: f.sessionId,
+              })
+              break
+            }
+          }
+        }
         if (!psk) {
           this.say('peer-joined without pending pair — dropping', f.sessionId)
           return
@@ -196,6 +231,14 @@ export class RelayClient {
   }
 
   // ── pairing ─────────────────────────────────────────────
+  /** Drop expired pairing codes. */
+  private sweepPendingPairs(): void {
+    const now = Date.now()
+    for (const [token, rec] of this.pendingPairs) {
+      if (rec.expiresAt < now) this.pendingPairs.delete(token)
+    }
+  }
+
   /**
    * Issue a one-time pairing token (6-digit) + PSK; returns QR text for display.
    * @param includeToken embed the code in the QR so a camera-less client
@@ -205,7 +248,13 @@ export class RelayClient {
   createPairing(ttlMs = 120_000, opts: { includeToken?: boolean } = {}): { token: string; qr: string } {
     const psk = generatePairingSecret()
     const token = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
-    this.pendingPair = { token, psk, expiresAt: Date.now() + ttlMs }
+    this.sweepPendingPairs()
+    // cap: an operator hammering `/drc pair` must not grow this without bound
+    if (this.pendingPairs.size >= MAX_PENDING_PAIRS) {
+      const oldest = this.pendingPairs.keys().next().value
+      if (oldest !== undefined) this.pendingPairs.delete(oldest)
+    }
+    this.pendingPairs.set(token, { psk, expiresAt: Date.now() + ttlMs })
     this.lastPairTtlMs = null // re-learned from the next pair-ready
     const qr = buildPairingQr({
       v: 1,
