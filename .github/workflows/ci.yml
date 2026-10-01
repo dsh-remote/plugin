@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Unit + integration tests
+        run: pnpm -r test
+
+      - name: Relay end-to-end
+        run: node e2e/run.mjs
+
+  # The relay ships as a standalone script with no build step; make sure it
+  # still boots and answers under the minimum supported Node.
+  relay-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install ws
+        run: npm install --prefix apps/server ws
+      - name: Boot relay and hit healthz
+        run: |
+          DRC_HOST_TOKEN=ci-token DRC_PORT=8787 node apps/server/src/main.mjs &
+          for i in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:8787/healthz; then echo "relay up"; exit 0; fi
+            sleep 0.1
+          done
+          echo "relay failed to boot"; exit 1
+      - name: Reject a missing token
+        run: |
+          if node apps/server/src/main.mjs; then echo "should have failed"; exit 1; fi
+          echo "missing DRC_HOST_TOKEN correctly rejected"

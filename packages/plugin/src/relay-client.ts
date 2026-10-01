@@ -43,6 +43,14 @@ export class RelayClient {
   private conversations = new Map<string, Conversation>()
   /** psk by 6-digit token currently offered for pairing */
   private pendingPair: { token: string; psk: string; expiresAt: number } | null = null
+  /** TTL the relay reported for the last pairing (authoritative). */
+  lastPairTtlMs: number | null = null
+  /**
+   * Bumped on every successful (re)authentication. A relay restart wipes its
+   * pending-pair table, so anything we published before is dead — callers use
+   * this to know their published pairing must be re-issued.
+   */
+  connectionGeneration = 0
   private reconnectTimer: NodeJS.Timeout | null = null
   private backoff = 1000
   private closed = false
@@ -91,7 +99,14 @@ export class RelayClient {
       this.backoff = 1000
       this.send({ t: 'auth', role: 'host', token: this.opts.hostToken, label: this.opts.hostLabel })
     })
-    ws.on('message', (raw) => this.onFrame(String(raw)))
+    ws.on('message', (raw) => {
+      try {
+        this.onFrame(String(raw))
+      } catch (e) {
+        // a malformed/odd frame must not surface as an uncaught exception
+        this.say('frame handling failed', e)
+      }
+    })
     ws.on('error', (e) => this.say('ws error', (e as Error).message))
     ws.on('close', () => {
       if (this.ws === ws) {
@@ -126,6 +141,7 @@ export class RelayClient {
     }
     switch (f.t) {
       case 'auth-ok':
+        this.connectionGeneration++
         this.hostId = f.hostId
         this.setStatus('online')
         this.say(`relay online as host ${f.hostId}`)
@@ -136,7 +152,11 @@ export class RelayClient {
         this.say('relay auth failed — check DRC_HOST_TOKEN / serverUrl')
         return
       case 'pair-ready':
-        this.say(`pairing token ${f.pairingToken} ready (ttl ${f.ttlMs}ms)`)
+        // The SERVER owns the expiry. Assuming our requested TTL is
+        // authoritative is how status.json ended up advertising a code that
+        // had already expired relay-side.
+        if (typeof f.ttlMs === 'number' && f.ttlMs > 0) this.lastPairTtlMs = f.ttlMs
+        this.say(`pairing token ${f.pairingToken} ready (server ttl ${f.ttlMs}ms)`)
         return
       case 'peer-joined': {
         // host side: the conversation was created server-side; psk was ours
@@ -176,14 +196,24 @@ export class RelayClient {
   }
 
   // ── pairing ─────────────────────────────────────────────
-  /** Issue a one-time pairing token (6-digit) + PSK; returns QR text for display. */
-  createPairing(ttlMs = 120_000): { token: string; qr: string } {
+  /**
+   * Issue a one-time pairing token (6-digit) + PSK; returns QR text for display.
+   * @param includeToken embed the code in the QR so a camera-less client
+   *   (WeChat simulator, CLI) can pair from one paste. Off by default — see
+   *   `PairingQr.token` for the trade-off.
+   */
+  createPairing(ttlMs = 120_000, opts: { includeToken?: boolean } = {}): { token: string; qr: string } {
     const psk = generatePairingSecret()
     const token = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
     this.pendingPair = { token, psk, expiresAt: Date.now() + ttlMs }
-    const url = this.opts.serverUrl.replace(/^ws/, 'http')
-    const qr = buildPairingQr({ v: 1, server: this.opts.serverUrl, hostLabel: this.opts.hostLabel, psk })
-    void url
+    this.lastPairTtlMs = null // re-learned from the next pair-ready
+    const qr = buildPairingQr({
+      v: 1,
+      server: this.opts.serverUrl,
+      hostLabel: this.opts.hostLabel,
+      psk,
+      token: opts.includeToken ? token : '',
+    })
     this.send({ t: 'pair-begin', pairingToken: token, psk, hostLabel: this.opts.hostLabel })
     return { token, qr }
   }

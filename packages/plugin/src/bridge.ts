@@ -16,6 +16,13 @@ export interface BridgeEvents {
 }
 
 export interface HarnessBridge {
+  /** which kernel face is driving us; 'mock' for the in-memory stand-in */
+  readonly carrier?: string
+  /** last failure the bridge swallowed, for diagnostics */
+  lastError?: string | null
+  /** shape probe written into status.json */
+  describe?(): Record<string, unknown>
+
   listSessions(): Promise<SessionSummary[]>
   /** send a user prompt into a session (starts/resumes a run) */
   sendPrompt(sessionId: string, text: string): Promise<{ ok: boolean; message?: string }>

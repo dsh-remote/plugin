@@ -104,6 +104,17 @@ export interface PairingQr {
   hostLabel: string
   /** pre-shared secret (base64 16B) */
   psk: string
+  /**
+   * Optional 6-digit pairing code embedded in the QR.
+   *
+   * The host shows the code next to the QR anyway, so embedding it is not a
+   * real security downgrade — but a QR that leaks on its own (screenshot,
+   * clipboard manager) would then also leak the code. So it is OPT-IN
+   * (`drc pair --with-token`) and off by default; absent means "ask the user".
+   * Always present in the parsed shape ('' when absent) so the Mini Program
+   * and Node implementations stay deep-equal.
+   */
+  token: string
 }
 
 export function parsePairingQr(text: string): PairingQr | null {
@@ -114,7 +125,14 @@ export function parsePairingQr(text: string): PairingQr | null {
     const psk = params.get('psk')
     const server = params.get('s')
     if (!psk || !server) return null
-    return { v: 1, server, hostLabel: params.get('n') ?? 'dsh', psk }
+    const t = params.get('t')
+    return {
+      v: 1,
+      server,
+      hostLabel: params.get('n') ?? 'dsh',
+      psk,
+      token: t && /^\d{6}$/.test(t) ? t : '',
+    }
   } catch {
     return null
   }
@@ -126,6 +144,7 @@ export function buildPairingQr(qr: PairingQr): string {
   p.set('s', qr.server)
   p.set('n', qr.hostLabel)
   p.set('psk', qr.psk)
+  if (qr.token) p.set('t', qr.token)
   return `dshr:/p?${p.toString()}`
 }
 

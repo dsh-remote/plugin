@@ -1,0 +1,179 @@
+/* chat page —— 三段式：滚动区 / 卡片区 / 输入区
+   关键：flex 列里的滚动子项必须能「收缩」，否则它按内容高度撑开，
+   把底部的输入区推出屏幕 —— 这正是「手机排版错乱」的表现。 */
+.chat-wrap {
+  display: flex;
+  flex-direction: column;
+  /* 用 100% 而不是 100vh：100vh 在 iOS 上含导航栏高度 */
+  height: 100%;
+  background: #f5f6f8;
+}
+
+.scroll {
+  flex: 1 1 auto;
+  /* 没有 min-height:0，flex 子项不会收缩到内容以下 */
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pad {
+  padding: 20rpx 24rpx 24rpx;
+}
+
+.empty {
+  text-align: center;
+  padding: 80rpx 40rpx;
+}
+
+.msg-row {
+  margin-bottom: 18rpx;
+  display: flex;
+  /* 长内容换行，不撑宽 */
+  min-width: 0;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.msg-row.assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 18rpx 22rpx;
+  border-radius: 18rpx;
+  font-size: 28rpx;
+  line-height: 44rpx;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.bubble.user {
+  background: #2b6cf6;
+  color: #ffffff;
+  border-bottom-right-radius: 6rpx;
+}
+
+.bubble.assistant {
+  background: #ffffff;
+  color: #1f2329;
+  border-bottom-left-radius: 6rpx;
+  box-shadow: 0 2rpx 10rpx rgba(31, 35, 41, 0.05);
+}
+
+.tool-line {
+  width: 100%;
+  background: #eef1f5;
+  color: #5c6470;
+  border-radius: 12rpx;
+  padding: 12rpx 18rpx;
+  font-size: 24rpx;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.caret {
+  display: inline-block;
+  width: 8rpx;
+  height: 26rpx;
+  background: #2b6cf6;
+  margin-left: 6rpx;
+  vertical-align: -3rpx;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.1; }
+}
+
+/* 审批 / 提问面板：不可被压缩，否则一问就挤成一条 */
+.panel {
+  flex: 0 0 auto;
+  background: #ffffff;
+  border-top: 2rpx solid #eef0f3;
+  padding: 24rpx 28rpx;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.panel-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  margin-bottom: 12rpx;
+}
+
+.panel-body {
+  font-size: 27rpx;
+  line-height: 42rpx;
+  margin-bottom: 8rpx;
+}
+
+.panel-body .mono {
+  overflow-wrap: anywhere;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 12rpx 24rpx;
+  border-radius: 999rpx;
+  background: #f0f1f3;
+  color: #1f2329;
+  font-size: 26rpx;
+  margin: 0 16rpx 12rpx 0;
+}
+
+.chip-primary {
+  background: #2b6cf6;
+  color: #ffffff;
+}
+
+.chip-danger {
+  background: #fdeceb;
+  color: #d93026;
+}
+
+/* 输入区 —— 固定在底部，带安全区 */
+.composer {
+  flex: 0 0 auto;
+  background: #ffffff;
+  border-top: 2rpx solid #eef0f3;
+  padding: 20rpx 28rpx calc(20rpx + env(safe-area-inset-bottom));
+}
+
+.composer .row {
+  gap: 16rpx;
+}
+
+.composer .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.send {
+  flex: 0 0 auto;
+  background: #2b6cf6;
+  color: #ffffff;
+  border-radius: 12rpx;
+  padding: 0 32rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+}
+
+.send-disabled {
+  background: #c9cdd4;
+}
+
+.stop {
+  color: #d93026;
+  font-size: 26rpx;
+  padding: 6rpx 16rpx;
+}

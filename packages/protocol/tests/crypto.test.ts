@@ -45,11 +45,30 @@ test('psk direction keys differ', () => {
 })
 
 test('pairing QR roundtrip', () => {
-  const qr = { v: 1 as const, server: 'wss://example.com:8787', hostLabel: 'mb-林', psk: generatePairingSecret() }
+  const qr = {
+    v: 1 as const,
+    server: 'wss://example.com:8787',
+    hostLabel: 'mb-林',
+    psk: generatePairingSecret(),
+    token: '',
+  }
   const text = buildPairingQr(qr)
   const back = parsePairingQr(text)
   assert.deepEqual(back, qr)
   assert.equal(parsePairingQr('https://nope'), null)
+})
+
+test('pairing QR can carry the 6-digit code (opt-in) and rejects a bogus one', () => {
+  const psk = generatePairingSecret()
+  const withToken = buildPairingQr({ v: 1, server: 'wss://x', hostLabel: 'mb', psk, token: '042391' })
+  assert.equal(parsePairingQr(withToken)?.token, '042391')
+
+  // omitted by default
+  assert.ok(!buildPairingQr({ v: 1, server: 'wss://x', hostLabel: 'mb', psk, token: '' }).includes('t='))
+
+  // a non-6-digit token is dropped rather than trusted
+  const bogus = `dshr:/p?v=1&s=${encodeURIComponent('wss://x')}&n=mb&psk=${encodeURIComponent(psk)}&t=abc`
+  assert.equal(parsePairingQr(bogus)?.token, '')
 })
 
 test('frame parse', () => {

@@ -7,14 +7,21 @@
  */
 import { spawn } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import WebSocket from 'ws'
 import { derivePskKey, seal, open, parsePairingQr } from '../packages/protocol/dist/src/index.js'
-import { HostRuntime } from '../packages/plugin/lib/host-runtime.js'
-import { MockHarnessBridge } from '../packages/plugin/lib/adapter-mock.js'
+import { HostRuntime } from '../packages/plugin/dist/src/host-runtime.js'
+import { MockHarnessBridge } from '../packages/plugin/dist/src/adapter-mock.js'
 
 const PORT = 18793
 const TOKEN = '***'
 const url = `ws://127.0.0.1:${PORT}`
+// Resolve repo-root-relative paths so the suite also works when `pnpm -r test`
+// runs it with cwd = e2e/.
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.resolve(HERE, '..')
+const rp = (p) => path.join(ROOT, p)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const results = []
@@ -62,7 +69,7 @@ class MpClient {
   close() { this.ws.close() }
 }
 
-const server = spawn(process.execPath, ['apps/server/src/main.mjs'], {
+const server = spawn(process.execPath, [rp('apps/server/src/main.mjs')], {
   env: { ...process.env, DRC_PORT: String(PORT), DRC_HOST_TOKEN: TOKEN },
   stdio: ['ignore', 'pipe', 'inherit'],
 })
@@ -112,12 +119,31 @@ try {
     assert.ok(ev.data.sessions.some((s) => s.id === 'ses_mock1'))
   })
 
-  await step('send prompt -> deltas stream to client', async () => {
+  await step('send prompt -> deltas stream, windowed without loss', async () => {
     const mp = globalThis.__mp
     const cmd = { t: 'cmd.send_prompt', cmdId: 'p1', sessionId: 'ses_mock1', text: '生成周报并跑测试' }
     mp.send({ t: 'enc', sessionId: mp.conv.sessionId, seq: 2, ciphertext: seal(mp.conv.kC2H_reverse, cmd).ciphertext })
-    const d0 = await mp.until((p) => p.t === 'ev.message_delta', 5000, 'first delta')
-    assert.ok(d0.delta.includes('段0'))
+
+    // The mock emits 段0/段1/段2 as THREE separate deltas. The host merges them
+    // into a short window, so the contract to assert is the CONCATENATION:
+    // complete and in order, delivered in no more frames than were produced.
+    const seen = []
+    const deadline = Date.now() + 6000
+    while (Date.now() < deadline) {
+      const f = await mp.until((p) => p.t === 'ev.message_delta', 1500).catch(() => null)
+      if (!f) break
+      seen.push(f.delta)
+      if (seen.join('').includes('段2')) break
+    }
+    const merged = seen.join('')
+    assert.ok(seen.length >= 1, 'at least one delta frame must arrive')
+    assert.ok(merged.includes('段0'), 'first part present')
+    assert.ok(merged.includes('段1') && merged.includes('段2'), 'windowing must not drop a delta')
+    assert.ok(
+      merged.indexOf('段0') < merged.indexOf('段1') && merged.indexOf('段1') < merged.indexOf('段2'),
+      'order preserved across the merge',
+    )
+    assert.ok(seen.length <= 3, `windowing must not inflate frame count (got ${seen.length})`)
   })
 
   await step('permission request reaches client; approve resumes run to completion', async () => {

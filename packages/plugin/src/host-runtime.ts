@@ -8,6 +8,25 @@ import type { Payload, SessionSummary } from '@dsh-rc/protocol'
 import { RelayClient } from './relay-client.js'
 import { handlePayload, type HarnessBridge } from './bridge.js'
 
+/**
+ * Event-stream windowing. A busy turn emits hundreds of tiny deltas; one
+ * encrypted frame each is what makes a phone UI stutter and grows every
+ * buffer along the path. Merging inside a short window collapses that to
+ * ~8 frames/second regardless of model speed, and the caps mean a stuck or
+ * pathological stream can never grow without bound.
+ */
+const DELTA_FLUSH_MS = 120
+const MAX_DELTA_CHARS = 4096
+const MAX_DELTA_SESSIONS = 32
+
+interface DeltaEntry {
+  text: string
+  messageId: string
+  part: number
+  done: boolean
+  timer: NodeJS.Timeout | null
+}
+
 export interface HostRuntimeConfig {
   serverUrl: string
   hostToken: string
@@ -28,6 +47,8 @@ export class HostRuntime {
   readonly keepAwake: KeepAwake
   private bridge: HarnessBridge
   private unwatch: (() => void) | null = null
+  /** sessionId -> pending coalesced delta */
+  private deltaBuf = new Map<string, DeltaEntry>()
   private say: (m: string, x?: unknown) => void
   private sessionsCache: SessionSummary[] = []
 
@@ -38,7 +59,11 @@ export class HostRuntime {
       serverUrl: opts.config.serverUrl,
       hostToken: opts.config.hostToken,
       hostLabel: opts.config.hostLabel,
-      onPayload: (sessionId, _clientId, payload) => void this.onPayload(sessionId, payload),
+      // NOTE: never `void` an async handler without a catch — an escaping
+      // rejection inside the DSH process is far worse than a logged error.
+      onPayload: (sessionId, _clientId, payload) => {
+        this.onPayload(sessionId, payload).catch((e) => this.say('payload handler failed', e))
+      },
       onPeerJoined: (sessionId) => {
         this.say(`client paired into ${sessionId}`)
         this.markActivity('peer-joined')
@@ -61,33 +86,88 @@ export class HostRuntime {
   }
 
   start(): void {
-    this.relay.start()
-    this.unwatch = this.bridge.watch((ev) => this.forward(ev))
+    // A failure here must never take the Harness down: the plugin is an
+    // optional add-on, so every startup step is individually guarded.
+    try {
+      this.relay.start()
+    } catch (e) {
+      this.say('relay failed to start', e)
+    }
+    try {
+      this.unwatch = this.bridge.watch((ev) => this.forward(ev))
+    } catch (e) {
+      this.say('bridge.watch failed', e)
+    }
     // periodic session refresh (cheap; bridge may be mock)
-    const timer = setInterval(() => void this.pushSessionsToAll(), 15_000)
+    const timer = setInterval(() => {
+      this.pushSessionsToAll().catch(() => { /* already logged */ })
+    }, 15_000)
     timer.unref?.()
   }
 
   stop(): void {
-    this.unwatch?.()
+    this.flushAllDeltas()
+    try {
+      this.unwatch?.()
+    } catch (e) {
+      this.say('unwatch failed', e)
+    }
     this.unwatch = null
-    this.keepAwake.disable('plugin-stop')
-    this.relay.stop()
+    try {
+      this.keepAwake.disable('plugin-stop')
+    } catch (e) {
+      this.say('keepAwake.disable failed', e)
+    }
+    try {
+      this.relay.stop()
+    } catch (e) {
+      this.say('relay.stop failed', e)
+    }
   }
 
-  createPairing(ttlMs?: number): { token: string; qr: string } {
-    return this.relay.createPairing(ttlMs)
+  createPairing(ttlMs?: number, opts?: { includeToken?: boolean }): { token: string; qr: string } {
+    return this.relay.createPairing(ttlMs, opts)
   }
 
   keepAwakeStateEvent(): Payload {
     return { t: 'ev.keep_awake_state', ...this.keepAwake.state }
   }
 
-  /** forward host events to the right client(s) + activity heuristics */
+  /** TTL the relay actually gave the last pairing (null until reported). */
+  get pairingTtlMs(): number | null {
+    return this.relay.lastPairTtlMs
+  }
+
+  /** Increments whenever we (re)authenticate; a changed value invalidates
+   *  anything the caller published before. */
+  get relayGeneration(): number {
+    return this.relay.connectionGeneration
+  }
+
+  /**
+   * Forward host events to the right client(s).
+   *
+   * Streaming deltas are COALESCED: a busy turn can emit hundreds of tiny
+   * deltas per second, and forwarding each one as its own encrypted frame is
+   * what makes a phone UI stutter (and grows every buffer in the path). We
+   * accumulate per session and flush on a short timer, on size, or the moment
+   * anything marks the turn as finished.
+   */
   private forward(ev: Payload): void {
     this.markActivityFor(ev)
+
+    if (ev.t === 'ev.message_delta') {
+      this.bufferDelta(ev)
+      return
+    }
+    // Anything else ends or describes the turn: flush first so ordering holds.
+    if ('sessionId' in ev && ev.sessionId) this.flushDelta(ev.sessionId)
+    this.emitTo(ev)
+  }
+
+  private emitTo(ev: Payload): void {
     if ('sessionId' in ev && ev.sessionId) {
-      const targets = this.relay.pairedClients.filter((c) => c.sessionId === ev.sessionId || !('sessionId' in ev))
+      const targets = this.relay.pairedClients.filter((c) => c.sessionId === ev.sessionId)
       if (targets.length === 0) {
         // events for sessions nobody follows yet: fan out to all clients
         this.relay.broadcast(ev)
@@ -97,6 +177,60 @@ export class HostRuntime {
       return
     }
     this.relay.broadcast(ev)
+  }
+
+  private bufferDelta(ev: Extract<Payload, { t: 'ev.message_delta' }>): void {
+    const key = ev.sessionId
+    const cur = this.deltaBuf.get(key)
+    if (cur) {
+      cur.text += ev.delta
+      cur.part = ev.part
+      cur.done = cur.done || ev.done === true
+    } else {
+      // hard cap on concurrently buffered sessions: never grow without bound
+      if (this.deltaBuf.size >= MAX_DELTA_SESSIONS) {
+        const oldest = this.deltaBuf.keys().next().value
+        if (oldest !== undefined) this.flushDelta(oldest)
+      }
+      this.deltaBuf.set(key, {
+        text: ev.delta,
+        messageId: ev.messageId,
+        part: ev.part,
+        done: ev.done === true,
+        timer: null,
+      })
+    }
+    const entry = this.deltaBuf.get(key)!
+    if (ev.done === true) return this.flushDelta(key)
+    if (entry.text.length >= MAX_DELTA_CHARS) return this.flushDelta(key)
+    if (entry.timer === null) {
+      entry.timer = setTimeout(() => this.flushDelta(key), DELTA_FLUSH_MS)
+      entry.timer.unref?.()
+    }
+  }
+
+  private flushDelta(sessionId: string): void {
+    const entry = this.deltaBuf.get(sessionId)
+    if (!entry) return
+    this.deltaBuf.delete(sessionId)
+    if (entry.timer) clearTimeout(entry.timer)
+    // A done-only frame carries no text but is NOT empty news: it is the only
+    // signal that the run finished, so dropping it leaves the phone spinning
+    // forever. Only a frame with neither text nor a terminal flag is noise.
+    if (!entry.text && !entry.done) return
+    this.emitTo({
+      t: 'ev.message_delta',
+      sessionId,
+      messageId: entry.messageId,
+      part: entry.part,
+      delta: entry.text,
+      done: entry.done,
+    })
+  }
+
+  /** Flush every buffered delta (used on stop / before a run-state change). */
+  private flushAllDeltas(): void {
+    for (const sessionId of [...this.deltaBuf.keys()]) this.flushDelta(sessionId)
   }
 
   private markActivityFor(ev: Payload): void {
@@ -181,6 +315,14 @@ export class HostRuntime {
       clients: this.relay.pairedClients.length,
       keepAwake: this.keepAwake.state,
       sessions: this.sessionsCache.length,
+      // Full bridge diagnostics: which face we drive, the last error we
+      // swallowed, and the ACTUAL shape of the kernel services we found. A
+      // bridge that silently returns [] must be distinguishable from "you
+      // have no sessions".
+      bridge: this.bridge.describe?.() ?? {
+        carrier: this.bridge.carrier,
+        lastError: this.bridge.lastError ?? null,
+      },
     }
   }
 }

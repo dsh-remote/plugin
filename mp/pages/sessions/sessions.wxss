@@ -1,0 +1,95 @@
+/* sessions page
+   这一页原本没有任何样式，全靠行内 style，长 id / 长路径 + break-all 会在手机上折成
+   一堆碎行 —— 这就是「排版错乱」。这里把不可控长度的字段统一改成省略号或两行截断。 */
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
+.session-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.session-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 500;
+  line-height: 42rpx;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* 无标题时用 id 顶替，长 uuid 必须省略而不是折行 */
+.session-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26rpx;
+  color: #8a9099;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+}
+
+.session-meta .mono {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.session-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  color: #8a9099;
+  font-size: 22rpx;
+}
+
+.session-foot .mono {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 22rpx;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.switch-row .label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.refresh {
+  flex-shrink: 0;
+  color: #2b6cf6;
+  font-size: 26rpx;
+  padding: 8rpx 12rpx;
+  margin: -8rpx -12rpx;
+}
+
+.hint-empty {
+  text-align: center;
+  padding: 40rpx 0;
+}

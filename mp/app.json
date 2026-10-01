@@ -1,0 +1,21 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/sessions/sessions",
+    "pages/chat/chat"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTitleText": "DSH 远程控制",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f6f8"
+  },
+  "permission": {
+    "scope.camera": {
+      "desc": "用于扫描主机上显示的配对二维码"
+    }
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

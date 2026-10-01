@@ -56,8 +56,14 @@ export interface SessionSummary {
   title?: string
   workspace?: string
   updatedAt?: string
+  /** Session creation time (ISO), when the kernel header reports one. */
+  createdAt?: string
+  /** 'subagent' for delegated child sessions. */
+  origin?: string
   running?: boolean
-  state?: 'idle' | 'running' | 'awaiting-permission' | 'awaiting-answer' | string
+  /** `detached` = persisted but not loaded in the host process (still openable). */
+  /** `archived` = the host refuses every step until it is restored. */
+  state?: 'idle' | 'running' | 'detached' | 'archived' | 'awaiting-permission' | 'awaiting-answer' | string
 }
 
 // ────────────────────────────────────────────────────────────────

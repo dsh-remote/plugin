@@ -8,6 +8,10 @@ import { randomUUID } from 'node:crypto'
 import type { HarnessBridge } from './bridge.js'
 
 export class MockHarnessBridge implements HarnessBridge {
+  /** Sessions from this bridge are FAKE — status.json says so. */
+  readonly carrier = 'mock'
+  lastError: string | null = null
+
   private emit: ((ev: Payload) => void) | null = null
   private sessions: SessionSummary[] = [
     { id: 'ses_mock1', title: 'mock: 周报生成', workspace: '/tmp/weekly', state: 'idle', updatedAt: new Date().toISOString() },

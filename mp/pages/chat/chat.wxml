@@ -1,0 +1,79 @@
+<view class="chat-wrap">
+
+  <scroll-view class="scroll" scroll-y scroll-into-view="{{toView}}" scroll-with-animation enable-flex>
+    <view class="pad">
+      <view wx:if="{{messages.length === 0}}" class="empty">
+        <text class="muted">发送一条指令开始，例如「生成周报并跑测试」。</text>
+      </view>
+
+      <view wx:for="{{messages}}" wx:key="key" id="m{{index}}" class="msg-row {{item.kind}}">
+        <view wx:if="{{item.kind === 'user'}}" class="bubble user"><text>{{item.text}}</text></view>
+        <view wx:elif="{{item.kind === 'assistant'}}" class="bubble assistant">
+          <text>{{item.text}}</text>
+          <text wx:if="{{!item.done}}" class="caret"></text>
+        </view>
+        <view wx:else class="tool-line"><text>{{item.text}}</text></view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <!-- 审批卡 -->
+  <view wx:if="{{pendingPermission}}" class="panel">
+    <view class="panel-title">需要审批</view>
+    <view class="panel-body">
+      <view><text class="mono">{{pendingPermission.action}}</text></view>
+      <view wx:if="{{pendingPermission.resource}}" class="mono muted">{{pendingPermission.resource}}</view>
+      <view wx:if="{{pendingPermission.reason}}" class="muted" style="margin-top:8rpx;">{{pendingPermission.reason}}</view>
+    </view>
+    <view class="panel-actions">
+      <view
+        wx:for="{{pendingPermission.options}}"
+        wx:key="id"
+        class="chip {{item.id === 'reject' ? 'chip-danger' : 'chip-primary'}}"
+        data-decision="{{item.id}}"
+        bindtap="onPermissionTap">{{item.label}}</view>
+    </view>
+  </view>
+
+  <!-- 提问卡 -->
+  <view wx:if="{{pendingQuestion}}" class="panel">
+    <view class="panel-title">主机正在询问</view>
+    <block wx:for="{{pendingQuestion.questions}}" wx:for-item="q" wx:for-index="qi" wx:key="id">
+      <view class="panel-body">
+        <view>{{q.question}}</view>
+        <view class="panel-actions" style="margin-top:16rpx;">
+          <view
+            wx:for="{{q.options}}"
+            wx:for-item="o"
+            wx:for-index="oi"
+            wx:key="id"
+            class="chip {{o.checked ? 'chip-primary' : 'chip'}}"
+            data-qi="{{qi}}"
+            data-oi="{{oi}}"
+            bindtap="onOptionTap">{{o.label}}</view>
+        </view>
+      </view>
+    </block>
+    <input class="input" style="margin-top:16rpx;" placeholder="补充说明（可选）" bindinput="onFreeText" />
+    <view class="btn" style="margin-top:16rpx;" bindtap="onAnswer">提交回答</view>
+  </view>
+
+  <!-- 输入区 -->
+  <view class="composer">
+    <view class="row">
+      <input
+        class="input"
+        style="flex:1;margin-right:16rpx;"
+        placeholder="输入指令…"
+        value="{{inputText}}"
+        confirm-type="send"
+        bindinput="onInput"
+        bindconfirm="onSend" />
+      <view class="send {{inputText ? '' : 'send-disabled'}}" bindtap="onSend">发送</view>
+    </view>
+    <view class="row-between" style="margin-top:14rpx;">
+      <text class="muted">{{running ? '运行中…' : (statusText || '空闲')}}</text>
+      <text class="stop" bindtap="onInterrupt">中断</text>
+    </view>
+  </view>
+</view>

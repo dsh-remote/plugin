@@ -1,0 +1,63 @@
+/* index page —— 配对页 */
+
+.pair-hint {
+  margin-top: 20rpx;
+}
+
+.paste-input {
+  margin-top: 16rpx;
+  font-size: 24rpx;
+}
+
+/* 6 位配对码：字距大 + 居中，但不能溢出，所以宽度锁死、字距随屏幕收敛 */
+.code-input {
+  margin-top: 16rpx;
+  letter-spacing: 8rpx;
+  text-indent: 8rpx; /* 抵消 letter-spacing 造成的整体右偏 */
+  text-align: center;
+  font-size: 40rpx;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.psk-state {
+  margin-top: 12rpx;
+}
+
+.field-label {
+  margin-top: 20rpx;
+}
+
+.field-input {
+  margin-top: 12rpx;
+}
+
+.btn-tight {
+  margin-top: 24rpx;
+}
+
+.diag-card {
+  margin-bottom: 24rpx;
+}
+
+.diag-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12rpx;
+}
+
+.diag-copy {
+  color: #2b6cf6;
+  font-size: 26rpx;
+  padding: 8rpx 12rpx;
+  margin: -8rpx -12rpx;
+}
+
+.footer-note {
+  text-align: center;
+  margin-top: 24rpx;
+  line-height: 36rpx;
+}
+
+.warn {
+  color: #d93026;
+}

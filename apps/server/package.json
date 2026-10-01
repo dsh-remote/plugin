@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/main.mjs",
     "build": "true",
-    "test": "node --test tests/relay.test.mjs"
+    "test": "node --test tests/relay.test.mjs tests/hardening.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"

@@ -32,13 +32,19 @@ importers:
 
   packages/plugin:
     dependencies:
-      '@dsh-rc/protocol':
-        specifier: workspace:*
-        version: link:../protocol
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
+      tweetnacl-util:
+        specifier: ^0.15.1
+        version: 0.15.1
       ws:
         specifier: ^8.18.0
         version: 8.22.0
     devDependencies:
+      '@dsh-rc/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.4

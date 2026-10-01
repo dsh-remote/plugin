@@ -1,0 +1,92 @@
+<view class="container">
+
+  <!-- 环境自检：这一行决定「这个容器能不能连中继」，出问题时直接复制发回 -->
+  <view class="card diag-card" wx:if="{{!socketReady}}">
+    <view class="card-title warn">当前环境无法建立连接</view>
+    <view class="muted">
+      这个运行环境没有提供 WebSocket 能力（{{diagGlobal}}.connectSocket 不存在），
+      所以无法连接中继。微信开发者工具、或用自己的 AppID 以真机调试运行都正常。
+    </view>
+    <view class="diag" style="margin-top:16rpx;">{{diag}}</view>
+    <view class="diag-actions">
+      <text class="diag-copy" bindtap="onCopyDiag">复制诊断</text>
+    </view>
+  </view>
+
+  <!-- 状态卡 -->
+  <view class="card">
+    <view class="row-between">
+      <text class="card-title">连接状态</text>
+      <text wx:if="{{status === 'online'}}" class="tag tag-ok">已配对</text>
+      <text wx:elif="{{status === 'connecting' || status === 'pairing'}}" class="tag tag-running">连接中</text>
+      <text wx:elif="{{status === 'error'}}" class="tag tag-wait">异常</text>
+      <text wx:else class="tag tag-idle">未配对</text>
+    </view>
+    <view class="muted" style="margin-top:12rpx;">{{statusText || '尚未连接'}}</view>
+    <view wx:if="{{hostLabel}}" class="muted" style="margin-top:8rpx;">主机：{{hostLabel}}</view>
+  </view>
+
+  <!-- 已配对：直接进入 -->
+  <view wx:if="{{status === 'online'}}" class="card">
+    <view class="btn" bindtap="onGoSessions">进入会话列表</view>
+    <view class="btn btn-danger" bindtap="onUnpair">解除配对</view>
+  </view>
+
+  <!-- 未配对：扫码 + 配对码 -->
+  <view wx:else>
+    <view class="card">
+      <view class="card-title">第一步 · 扫描主机上的配对二维码</view>
+      <view class="muted">二维码里包含中继地址与一次性密钥（PSK）。主机端通过 <text class="mono">drc pair</text> 生成。</view>
+      <view class="btn btn-tight" bindtap="onScan">扫码配对</view>
+      <view class="muted pair-hint">没有摄像头（例如开发者工具模拟器）时，直接把主机显示的「二维码内容」粘贴到下面。</view>
+      <input
+        class="input mono paste-input"
+        placeholder="粘贴 dshr:/p?…"
+        value="{{pasteText}}"
+        bindinput="onPaste" />
+    </view>
+
+    <view class="card">
+      <view class="card-title">第二步 · 输入 6 位配对码</view>
+      <input
+        class="input code-input"
+        type="number"
+        maxlength="6"
+        placeholder="000000"
+        value="{{token}}"
+        bindinput="onTokenInput" />
+      <view wx:if="{{hasPsk}}" class="muted psk-state">已获取密钥 ✓</view>
+      <view wx:else class="muted psk-state">尚未获取密钥，请先扫码</view>
+    </view>
+
+    <view class="card">
+      <view class="row-between" bindtap="toggleAdvanced">
+        <text class="card-title">高级设置</text>
+        <text class="muted">{{showAdvanced ? '收起' : '展开'}}</text>
+      </view>
+      <block wx:if="{{showAdvanced}}">
+        <view class="muted field-label">中继服务地址</view>
+        <input class="input field-input" placeholder="wss://drc.example.com" value="{{server}}" bindinput="onServerInput" />
+        <view class="muted field-label">配对密钥 PSK（扫码后自动填入）</view>
+        <input class="input mono field-input" placeholder="base64 16 字节" value="{{psk}}" bindinput="onPskInput" />
+      </block>
+    </view>
+
+    <view class="card">
+      <view class="{{busy ? 'btn btn-disabled' : 'btn'}}" bindtap="onPair">{{busy ? '处理中…' : '开始配对'}}</view>
+    </view>
+  </view>
+
+  <!-- 环境信息：一行，可复制 -->
+  <view class="card">
+    <view class="row-between">
+      <text class="card-title">环境自检</text>
+      <text class="diag-copy" bindtap="onCopyDiag">复制</text>
+    </view>
+    <view class="diag">{{diag || '（未采集）'}}</view>
+  </view>
+
+  <view class="muted footer-note">
+    开发者工具请勾选「不校验合法域名」，真机需使用 wss 并配置服务器域名白名单。
+  </view>
+</view>
