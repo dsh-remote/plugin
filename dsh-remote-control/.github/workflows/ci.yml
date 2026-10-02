@@ -33,8 +33,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
-      # 本仓不随源码提交 pnpm-lock.yaml：协议层是 git 依赖（github:providcc/dsh-remote-protocol），
-      # 仓库公开前无法在本地解析，锁文件也就无法生成。故用 --no-frozen-lockfile。
+      # 本仓暂不带 pnpm-lock.yaml：`dsh-remote-protocol` 还没发布到 npm 时，`^1.0.0` 解析不出来。
+      # 引导顺序：① 先发协议包 → ② 在本仓跑一次 `pnpm install` 并把生成的 pnpm-lock.yaml 提交
+      # → ③ 把这里改成 `--frozen-lockfile`。
       - name: Install
         run: pnpm install --no-frozen-lockfile
 

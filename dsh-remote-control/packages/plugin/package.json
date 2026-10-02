@@ -53,7 +53,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "dsh-remote-protocol": "github:providcc/dsh-remote-protocol#v1.0.0",
+    "dsh-remote-protocol": "^1.0.0",
     "qrcode": "^1.5.4",
     "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",

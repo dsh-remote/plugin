@@ -15,7 +15,7 @@
 
 | 文档里写的                              | 现在是什么                                                                                   |
 | --------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `packages/protocol`、`@dsh-rc/protocol` | 独立仓库 **`dsh-remote-protocol`**（本插件以 git 依赖消费）                                  |
+| `packages/protocol`、`@dsh-rc/protocol` | 独立仓库 **`dsh-remote-protocol`**（本插件以 npm 依赖消费）                                  |
 | `apps/server`、`@dsh-rc/server`         | 独立仓库 **`dsh-remote-server`**（零知识中继）                                               |
 | `packages/plugin`                       | 本仓库 `packages/plugin`（宿主侧插件，npm 包名 `dsh-remote-control`）                        |
 | `packages/presentation`                 | 本仓库 `packages/presentation`（右栏二维码半侧，npm 包名 `dsh-remote-control-presentation`） |

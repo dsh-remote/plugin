@@ -36,7 +36,7 @@ jobs:
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
 
-      # 同 CI：不提交锁文件（协议层是 git 依赖，公开前解析不了）。
+      # 同 CI：协议包发布前无法冻结锁文件。
       - name: Install
         run: pnpm install --no-frozen-lockfile
 

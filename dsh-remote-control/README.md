@@ -1,6 +1,8 @@
 # dsh-remote-control
 
 [![CI](https://github.com/providcc/dsh-remote-control/actions/workflows/ci.yml/badge.svg)](https://github.com/providcc/dsh-remote-control/actions/workflows/ci.yml)
+[![npm: dsh-remote-control](https://img.shields.io/npm/v/dsh-remote-control.svg)](https://www.npmjs.com/package/dsh-remote-control)
+[![npm: dsh-remote-control-presentation](https://img.shields.io/npm/v/dsh-remote-control-presentation.svg)](https://www.npmjs.com/package/dsh-remote-control-presentation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 **DSH Remote Control** 的宿主侧——跑在 DeepSeek Harness 里的 cordis 插件。它把本机的 DSH 与
@@ -15,7 +17,7 @@
 
 其余两半在各自仓库：[`dsh-remote-server`](https://github.com/providcc/dsh-remote-server)（零知识中继）、
 `dsh-remote-mp`（微信小程序客户端）。三者共用
-[`dsh-remote-protocol`](https://github.com/providcc/dsh-remote-protocol)（线协议，本插件以 git 依赖消费）。
+[`dsh-remote-protocol`](https://github.com/providcc/dsh-remote-protocol)（线协议，本插件以 npm 依赖消费）。
 
 ```
 ┌──────────────────┐  wss + host token   ┌────────────────┐  wss + 配对码   ┌────────────────┐
@@ -35,10 +37,20 @@
 
 ## 安装到 DSH profile
 
+### 前置条件
+
+`dsh-remote-protocol` 是 npm 依赖，本仓的 `pnpm install` 需要它已经发布。首次引导顺序：
+
+1. 在 `dsh-remote-protocol` 仓打 `v*` 标签走它的 Release，把包发到 npm；
+2. 回到本仓跑一次 `pnpm install`，把生成的 `pnpm-lock.yaml` 提交；
+3. 把 `.github/workflows/ci.yml` 里的 `--no-frozen-lockfile` 改成 `--frozen-lockfile`。
+
+（步骤 2、3 是一次性的。协议升版后重跑即可。）
+
 插件不进 `node_modules`，而是打成**自包含单文件**装进 profile：
 
 ```sh
-pnpm install          # 装依赖（含作为 git 依赖的 dsh-remote-protocol）
+pnpm install          # 装依赖（含 dsh-remote-protocol，需先发布该包）
 sh scripts/install-to-profile.sh
 # DSH_PROFILE=~/.dsh/profiles/tui sh scripts/install-to-profile.sh   # 指定其它 profile
 ```
