@@ -83,6 +83,11 @@ const DEFAULTS: RuntimeOptions = {
   unarchiveOnPrompt: true,
 }
 
+/** 一次列表最多给手机多少条会话（与中继侧的会话上限同源，取证 §5.3）。 */
+const LISTING_LIMIT = 100
+/** 相邻两条 `ev.session_changed` 的最小间隔；小于它就改成尾随推送。 */
+const SESSION_MERGE_MS = 500
+
 export class HostRuntime {
   private readonly options: RuntimeOptions
   private readonly window: DeltaWindow
@@ -90,6 +95,9 @@ export class HostRuntime {
   private unsubscribe: (() => void) | undefined
   private detachSink: (() => void) | undefined
   private refreshTimer: unknown
+  /** 被合并掉的那次推送：定时器 + 最后一次触发它的原因。 */
+  private mergeTimer: unknown
+  private mergePendingReason = 'merged'
   private sessions: SessionSummary[] = []
   private started = false
   private stopped = false
@@ -139,6 +147,10 @@ export class HostRuntime {
     }
     this.detachSink?.()
     if (this.refreshTimer !== undefined) this.clock.clearTimeout(this.refreshTimer)
+    if (this.mergeTimer !== undefined) {
+      this.clock.clearTimeout(this.mergeTimer)
+      this.mergeTimer = undefined
+    }
     for (const [id, item] of [...this.pending]) this.settle(id, undefined)
   }
 
@@ -233,23 +245,44 @@ export class HostRuntime {
   /**
    * 推一次全量会话列表（F7/F8）。
    *
-   * 相邻两次推送之间至少隔一个"帧预算"，因为内核可以在一个 turn 里连发十几条
+   * 相邻两次推送之间至少隔一个"合并窗口"，因为内核可以在一个 turn 里连发十几条
    * `sessions-changed`；列表是全量快照，合并掉中间几次没有信息损失。
+   *
+   * **但"合并"不等于"丢掉"**（第一版就是把它写成了丢掉）：被合并的那一次必须变成一次
+   * 尾随推送，否则最后那次变化永远没人告知手机——F8 要求"任何会改变会话状态的动作
+   * 之后都必须额外推一条 session_changed"，而手机不看 `ev.result.data.sessions`，
+   * 于是"发完指令列表却停在旧状态"最长要等到 15 秒的兜底刷新。
    */
   async pushSessions(reason: string): Promise<SessionSummary[]> {
-    const now = this.clock.now()
+    if (this.stopped) return this.sessions
     try {
-      const limit = 100
-      const listed = await this.kernel.listSessions(limit)
+      const listed = await this.kernel.listSessions(LISTING_LIMIT)
       this.sessions = listed.map((item) => item.summary)
     } catch (error) {
+      // 读失败时**保留上一次已知的快照**再照常广播：把列表清成空白比停在旧状态更糟
+      // （手机会以为会话全没了），而 keep_awake 那一侧的状态仍然必须送达（M25）。
       this.log('list sessions failed', { message: messageOf(error), reason })
     }
-    if (now - this.lastPushAt < 500 && reason !== 'start' && reason !== 'list') {
-      // 合并掉 500ms 内的重复推送：列表是全量快照，中间几次没有信息损失。
+    // 判窗口用的是"数据到手"的时刻，不是进入函数的时刻：内核读列表可能很慢，
+    // 用进入时刻会让一次 400ms 的读直接吃掉整个合并窗口。
+    const now = this.clock.now()
+    const sinceLast = now - this.lastPushAt
+    if (sinceLast < SESSION_MERGE_MS && reason !== 'start' && reason !== 'list') {
+      this.mergePendingReason = reason
+      if (this.mergeTimer === undefined) {
+        this.mergeTimer = this.clock.setTimeout(() => {
+          this.mergeTimer = undefined
+          void this.pushSessions(this.mergePendingReason)
+        }, SESSION_MERGE_MS - sinceLast)
+      }
       return this.sessions
     }
     this.lastPushAt = now
+    if (this.mergeTimer !== undefined) {
+      // 这一条全量快照已经把待推的内容覆盖到了，尾随推送不必再发（否则会多发一条重复列表）。
+      this.clock.clearTimeout(this.mergeTimer)
+      this.mergeTimer = undefined
+    }
     this.transport.broadcast(sessionChanged(this.sessions, reason))
     this.transport.broadcast(keepAwakeState(this.sleep.snapshot()))
     return this.sessions
@@ -379,12 +412,6 @@ export class HostRuntime {
   }
 
   /**
-   * 选一条会话把这轮交互发出去。
-   *
-   * 此刻的拓扑恒为 1 host : 1 client（中继每次认领新建一条会话），
-   * 但这里仍按"这个 DSH 会话最近有过活动的通道"来选，而不是假设只有一个。
-   */
-  /**
    * 挑一条配对通道把这轮交互发出去。
    *
    * 为什么不能按 sessionId 精确定位：手机是在**配对通道**上收消息的，
@@ -405,11 +432,4 @@ export class HostRuntime {
 
 function messageOf(error: unknown): string {
   return String((error as Error)?.message ?? error)
-}
-
-/** 给单测用：把一次交互强制结算。 */
-export const pendingIdOf = (runtime: HostRuntime, sessionId: string): string | undefined => {
-  void runtime
-  void sessionId
-  return undefined
 }

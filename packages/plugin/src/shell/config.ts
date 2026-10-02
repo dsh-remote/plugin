@@ -74,6 +74,18 @@ export interface ConfigProblem {
   message: string
 }
 
+/**
+ * 环境变量里的数字：只收「有限的非负数」，其余折成 0（= 关）。
+ *
+ * 为什么不能写成 `Number(v) || 0`：`Number('Infinity')` 是 Infinity，而它是**真值**，
+ * `|| 0` 放过去了——`pairOnStartSec=Infinity` 的语义是"这张仍然带着 PSK 的配对码
+ * 永久有效"，正好是这条配置想避免的事。NaN 侥幸会被 `|| 0` 折掉，但那是巧合不是规则。
+ */
+function envSeconds(value: string | undefined): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+}
+
 /** 合成三级配置。`injected` 来自 cordis 的 patch 层。 */
 export function readConfig(injected: Partial<PluginConfig> | undefined, env: NodeJS.ProcessEnv = process.env): PluginConfig {
   const merged: PluginConfig = {
@@ -85,7 +97,7 @@ export function readConfig(injected: Partial<PluginConfig> | undefined, env: Nod
   if (fromEnv('DRC_SERVER_URL')) merged.serverUrl = env.DRC_SERVER_URL as string
   if (fromEnv('DRC_HOST_LABEL')) merged.hostLabel = env.DRC_HOST_LABEL as string
   if (fromEnv('DRC_HOST_ID')) merged.hostId = env.DRC_HOST_ID as string
-  if (fromEnv('DRC_PAIR_ON_START_SEC')) merged.pairOnStartSec = Number(env.DRC_PAIR_ON_START_SEC) || 0
+  if (fromEnv('DRC_PAIR_ON_START_SEC')) merged.pairOnStartSec = envSeconds(env.DRC_PAIR_ON_START_SEC)
   if (fromEnv('DRC_QR_IMAGE') === '0') merged.qrImage = false
   if (fromEnv('DRC_QR_OPEN') === '0') merged.qrOpen = false
   if (fromEnv('DRC_QR_STYLE')) {
@@ -126,6 +138,11 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
   if (config.pairTtlMs <= 0) {
     problems.push({ level: 'warn', field: 'pairTtlMs', message: '必须为正数，已夹回 120000' })
     config.pairTtlMs = 120_000
+  }
+  if (!secondsSchema.safeParse(config.pairOnStartSec).success || config.pairOnStartSec < 0) {
+    // patch 文件里写 `pairOnStartSec: .inf` 也会走到这里：env 侧已经折掉了，注入侧不能漏。
+    problems.push({ level: 'warn', field: 'pairOnStartSec', message: '必须是非负的有限秒数，已折回 0（关闭自动发码）' })
+    config.pairOnStartSec = 0
   }
   if (config.pairOnStartSec > 0) {
     problems.push({

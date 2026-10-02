@@ -46,12 +46,25 @@ export class StatusFile implements StatusSink {
     }
   }
 
-  /** 打开定时器刷新（调用方负责在每次 tick 里提供最新状态）。 */
+  /**
+   * 打开定时器刷新（调用方提供的是**纯构造器**：只负责返回当下最新的状态）。
+   *
+   * 写盘这件事归本类，不归调用方：第一版这里只 `refresh()` 把返回值丢掉了，
+   * 于是 status.json 永远停在启动那一版——而 live-e2e 与外部脚本取配对码读的就是
+   * 这个文件（取证 docs/legacy-spec/host-plugin-cordis.md §5.3 的"年龄 < 25s"判据）。
+   * 更糟的是 `carrier`/`relay` 再也不更新，GUI 宿主里唯一的排错入口变成了死数据。
+   */
   start(refresh: () => Record<string, unknown>): void {
     if (!this.file || this.timer !== undefined) return
     const tick = (): void => {
-      refresh()
+      // 先续期再写：写盘内部已经吞异常，但构造器是调用方的代码，
+      // 它抛了也不该让刷新节拍断掉——节拍一断就等于回到"停在启动那一版"。
       this.timer = this.clock.setTimeout(tick, this.refreshMs)
+      try {
+        this.write(refresh())
+      } catch {
+        /* 同上：状态入口不许成为崩溃源 */
+      }
     }
     this.timer = this.clock.setTimeout(tick, this.refreshMs)
   }
@@ -61,6 +74,11 @@ export class StatusFile implements StatusSink {
       this.clock.clearTimeout(this.timer)
       this.timer = undefined
     }
+  }
+
+  /** 此刻是否在按节拍刷新（测试与 status 自身的 `refreshing` 字段读它）。 */
+  get refreshing(): boolean {
+    return this.timer !== undefined
   }
 
   get path(): string {

@@ -362,5 +362,39 @@ node scripts/validate-qr.mjs              # 28 组 zxing-cpp 真实解码（含 
    同时删掉两个从未被使用的声明：`session-list` 帧与 `cmd.subscribe` 载荷。
 4. **zod 取代手写校验**（§6 那条"判断而非事实"被实测推翻，见 §6 表格更新）。
 
+### 2026-10-02 · 阶段 B 完成（中继）
+
+`apps/server` 从零写完：`config` / `log` / `limits` / `state` / `server` / `main` + `tsup`→`esbuild` 产物。
+实测 `pnpm --filter @dsh-rc/server test` → **62 项全绿**（state 单测 + relay 端到端 + hardening + bundle 产物级断言）。
+复核落地的那几条都在这一批里有了机械防线：R1 的 `resync`/`session-leave` 路由、R2 的中文 `message`、
+R3 的 client 顶号（4000 replaced）、R5 的 bundle 唯一入口、R7 的 F1/F3/F4/F11/T1/T3/T6 逐条成测。
+
+### 2026-10-02 · 阶段 C 收口：7 个"测试全绿但行为是错的"
+
+第一版插件写完时有 129 项单测**全绿**，而其中 7 条行为是错的——这是本次重写最贵的一课：
+绿色的测试套件不等于行为正确，判据必须能**杀掉**实现里的错。逐条修掉并各配一条红测试，
+再用变异验证（把实现改回错的形状，看有没有测试失败）确认每条都被真正锁住：
+
+| # | 缺陷 | 后果（手机上看得见的那一面） | 变异验证 |
+|---|---|---|---|
+| 1 | `StatusFile.start()` 的 tick 只调 `refresh()`、把返回值丢掉 | status.json 永远停在启动那一版：`carrier`/`relay` 不再更新，而 live-e2e 取配对码读的就是这个文件 | `status-no-write` → 定时刷新那条红 |
+| 2 | `pushSessions` 的 500ms 合并把被合并的那次**丢弃**（不补发） | F8 要求"状态变了必须额外推 session_changed"，丢掉就变成"发完指令列表停在旧状态，最长等 15 秒兜底刷新" | `runtime-merge-dropped` → 尾随推送那条红 |
+| 3 | `voidConversation` 对本地没有记录的 convId 直接 `return` | 复核 R1 的出口被堵死：主机重启后中继仍把手机密文转过来，手机既等不到回复也等不到 `unknown_session`，表现是"永远转圈且没有任何提示" | `relay-void-noop-unknown` → 两条红（主动声明 + enc 撞上陌生 convId） |
+| 4 | 入站载荷只验 MAC 不验形状（`open<CmdPayload>` 直接递给 runtime），且 `switch` 缺 `default` | 一条密文就能决定宿主被怎么调用；同时 `pair-fail` 这个 case 根本没有——手机扫完码主机侧完全无痕 | `relay-no-cmd-schema` → 形状拒收那条红 |
+| 5 | `maxCharsPerFrame` 只当"何时 flush"，没当"多大" | 一次到达 5 万字符仍出一帧 5 万字符，可能顶到中继 `MAX_FRAME_BYTES` 被断链：手机表现为"聊着聊着掉线" | `window-no-hard-cap` → 硬上限那条红 |
+| 6 | flush 删掉 entry 后重建，`part` 归零 | 一条长回答的所有分片都是 `part:0`，"分片是否连续"这个唯一判据形同不存在 | `window-part-reset` → 连续性那条红 |
+| 7 | `Number(env) \|\| 0` 放行 `Infinity`（它是真值） | `DRC_PAIR_ON_START_SEC=Infinity` = 这张带着 PSK 的配对码永久有效，正好是这条配置想避免的事 | `config-or-zero` → 非有限值那条红 |
+
+顺带两处机械卫生：三个包的 `test` 脚本原本**手写测试文件名清单**（插件那份还列着不存在的
+`qr.test.js`，`pnpm test` 直接 MODULE_NOT_FOUND），改成 `node --test "dist/tests/*.test.js"` 后
+新增文件不可能被静默跳过；`pnpm-workspace.yaml` 里 `allowBuilds.esbuild` 被留成 pnpm 报错模板原文
+（`set this to true or false`），改成布尔 `true`。
+
+实测：协议层 **76** 项、中继 **62** 项、插件 **138** 项全绿。
+唯一仍然红的不是判据本身，而是 `packages/plugin/src/index.ts` 里在改的载体探测块引用了未定义的
+`scoped`（5 处 TS2304）——`tsconfig` 的 `noEmitOnError: true` 因此不产出 JS，插件的 `pnpm test`
+（含 build）暂不能跑通；上表的插件断言是先编译再 `node --test` 跑的。这条随真机 carrier 取证一起收。
+
+
 
 

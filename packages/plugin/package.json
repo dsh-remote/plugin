@@ -13,7 +13,7 @@
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc -p tsconfig.json && node ../../scripts/bundle-plugin.mjs",
-    "test": "pnpm build && node --test dist/tests/window.test.js dist/tests/runtime.test.js dist/tests/sleep.test.js dist/tests/qr.test.js dist/tests/config.test.js dist/tests/status.test.js dist/tests/guard.test.js dist/tests/relay-client.test.js"
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\""
   },
   "dependencies": {
     "@dsh-rc/protocol": "workspace:*",

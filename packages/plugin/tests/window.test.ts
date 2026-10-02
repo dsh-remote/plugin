@@ -125,6 +125,57 @@ test('maxCharsPerFrame 切帧：字符一个都不丢、顺序不乱，且不提
   assert.equal(new Set(frames.map((frame) => frame.messageId)).size, 1, '同一条消息切帧不许换 messageId（换了手机会拆成两段）')
 })
 
+test('maxCharsPerFrame 是出站硬上限：一次 push 就写超也要切，不许出一帧 5 万字符', () => {
+  const { frames, win } = harness({ windowMs: 10_000, maxCharsPerFrame: 10 })
+  const input = 'x'.repeat(37) // 一次到达就超上限三次以上：内核一个 delta 事件带一大段文本是常态
+  win.push('ses_a', 'msg_1', input)
+  win.complete('ses_a', 'msg_1')
+
+  assert.ok(frames.length >= 4, `一帧 37 字符（上限 10）只切了 ${frames.length} 帧：上限只管了"何时 flush"，没管"多大"`)
+  assert.ok(
+    frames.every((frame) => frame.delta.length <= 10),
+    `仍有超限帧：${JSON.stringify(frames.map((frame) => frame.delta.length))}。中继侧 MAX_FRAME_BYTES 会把整条连接断开，手机表现为"聊着聊着掉线"`,
+  )
+  assert.equal(frames.map((frame) => frame.delta).join(''), input, '切帧不许丢字符')
+  // 到顶的那一次先冲掉 4 片（part 0..3），随后 complete() 补一条收尾帧（part 4）。
+  // 这条 done 只能是独立一帧：前 4 帧已经在 complete 之前发出去了。
+  assert.deepEqual(
+    frames.map((frame) => frame.part),
+    [0, 1, 2, 3, 4],
+    '同一条消息的分片序号必须逐帧递增：手机与日志靠它判断"分片是否连续"，全 0 就等于没有这个判据',
+  )
+  assert.equal(frames[frames.length - 1]?.done, true, 'done 只能落在最后一片上')
+  assert.equal(frames.slice(0, -1).every((frame) => frame.done === undefined), true, '中间片不许提前带 done')
+})
+
+test('part 跨 flush 连续：同一条消息被窗口切成两帧时，序号不能归零', async () => {
+  const { clock, frames, win } = harness({ windowMs: 120 })
+  win.push('ses_a', 'msg_1', '第一段')
+  await clock.advance(200) // 窗口到期 → part 0
+  win.push('ses_a', 'msg_1', '第二段')
+  await clock.advance(200) // 同一个 messageId 的下一片 → 必须是 part 1
+  win.complete('ses_a', 'msg_1')
+
+  assert.equal(frames.length, 3, `预期 3 帧，实收 ${frames.length}`)
+  assert.deepEqual(
+    frames.map((frame) => frame.part),
+    [0, 1, 2],
+    'flush 把 entry 删掉、下一条重建时 part 归零 → 一条长回答的所有分片都是 part:0，"分片完整性"无从判断',
+  )
+  assert.equal(new Set(frames.map((frame) => frame.messageId)).size, 1, '同一条消息不许换 messageId')
+
+  // 换一条消息才是新的序列：从 0 重新开始。
+  const second = harness({ windowMs: 120 })
+  second.win.push('ses_a', 'msg_1', '甲')
+  await second.clock.advance(200)
+  second.win.push('ses_a', 'msg_1', '乙')
+  await second.clock.advance(200)
+  second.win.push('ses_a', 'msg_2', '丙')
+  second.win.stop()
+  const msg2 = second.frames.filter((frame) => frame.messageId === 'msg_2')
+  assert.equal(msg2[0]?.part, 0, `新消息的分片序号应从 0 开始，实际 ${msg2[0]?.part}`)
+})
+
 test('maxSessionsPerRound 生效：一轮只冲最旧的 N 个会话，吵闹的会话饿死不了其它会话', () => {
   const { frames, win } = harness({ windowMs: 10_000, maxSessionsPerRound: 2 })
   for (const sessionId of ['ses_1', 'ses_2', 'ses_3', 'ses_4', 'ses_5']) {

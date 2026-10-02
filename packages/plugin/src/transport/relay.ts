@@ -17,7 +17,7 @@
  */
 import { WebSocket } from 'ws'
 import { randomBytes } from 'node:crypto'
-import { type CmdPayload, type EvPayload, base64Text, open, parseRelayFrameText, seal } from '@dsh-rc/protocol'
+import { type CmdPayload, type EvPayload, base64Text, open, parseCmdPayload, parseRelayFrameText, seal } from '@dsh-rc/protocol'
 import { ConversationBook, type PairSlot } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
 
@@ -45,6 +45,12 @@ export interface RelayClientOptions {
   lookupPairingSlot: (token: string) => PairSlot | null
   /** `pair-ready` 到达：调用方据此改写本地 PSK 过期时间。 */
   onPairReady: (pairingToken: string, ttlMs: number) => void
+  /**
+   * 中继宣告"这张配对码没配上"（`expired` / `already_used` / `rate_limited` /
+   * `invalid_or_expired`）。主机侧唯一的用处是**退避自动补发**：
+   * 被限速时还按原节拍发码，只会让自己继续被拒。
+   */
+  onPairFail?: (reason: string) => void
   /** 连接状态变化，直接进 status.json。 */
   onState: (state: RelayStateInfo) => void
   /** 重连后的第一批帧之前要不要等一会（手机端可能还在旧 convId 上发）。 */
@@ -62,6 +68,8 @@ export interface RelayStateInfo {
 const BACKOFF_MIN_MS = 1000
 const BACKOFF_MAX_MS = 30_000
 const HANDSHAKE_TIMEOUT_MS = 10_000
+/** 已声明作废的 convId 记住多少条：远超一次会话里可能出现的配对通道数，又不会无界增长。 */
+const VOIDED_MAX = 256
 
 export class RelayClient {
   readonly conversations = new ConversationBook()
@@ -73,6 +81,8 @@ export class RelayClient {
   private handshakeTimer: unknown
   /** 连续解不开的会话：解不开说明这端已经没有对应密钥，留着它只会让手机永远转圈。 */
   private readonly undecryptable = new Map<string, number>()
+  /** 已经向中继声明过的 convId（防重复 `session-leave`）；有上界，见 {@link VOIDED_MAX}。 */
+  private readonly voided = new Set<string>()
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -158,9 +168,26 @@ export class RelayClient {
     return this.conversations.ids()
   }
 
-  /** 复核 R1：本端解不开的会话必须主动作废，手机才会收到"请重新配对"的中文提示。 */
+  /**
+   * 作废一条配对通道：本地删密钥 + 告诉中继"这条别再转给我了" + 通知上层。
+   *
+   * **本端没有记录时同样要发 `session-leave`**（复核 R1①）。这是"主机重启之后"的出口：
+   * PSK 随进程没了，中继却还留着会话并继续把手机的密文转过来。若这里因为
+   * `!has(id)` 直接 return（第一版就是这么写的），中继永远不知道该删这条会话，
+   * 手机也就永远撞不上 `unknown_session` → 表现是"发什么都没反应、也不提示重新配对"，
+   * 而这是整条链路上唯一能让手机脱身的机制。
+   *
+   * 幂等：同一条通道只声明一次（`voided` 有上界，避免长会话里堆内存）。
+   * 重新配对（`peer-joined`）会清掉这条记录，所以下次作废仍能声明。
+   */
   voidConversation(conversationId: string): void {
-    if (!this.conversations.has(conversationId)) return
+    if (this.voided.has(conversationId)) return
+    if (this.voided.size >= VOIDED_MAX) {
+      const oldest = this.voided.values().next().value
+      if (oldest !== undefined) this.voided.delete(oldest)
+    }
+    this.voided.add(conversationId)
+    this.undecryptable.delete(conversationId)
     this.conversations.close(conversationId)
     this.raw({ t: 'session-leave', sessionId: conversationId })
     this.options.onConversationGone(conversationId)
@@ -179,7 +206,11 @@ export class RelayClient {
 
   private onFrame(text: string): void {
     const frame = parseRelayFrameText(text)
-    if (!frame) return
+    if (!frame) {
+      // 只记形状不记内容：坏帧的原文可能是半条配对码，日志里不许出现凭据与业务明文。
+      this.options.log('relay frame rejected', { bytes: text.length })
+      return
+    }
     switch (frame.t) {
       case 'hello-ok': {
         this.generation += 1
@@ -203,6 +234,8 @@ export class RelayClient {
           return
         }
         this.conversations.open({ id: frame.sessionId, psk: slot.psk, generation: this.generation, now: this.options.clock.now() })
+        // 这条通道现在又有密钥了：清掉"已声明作废"的记号，否则下次真要作废时发不出去。
+        this.voided.delete(frame.sessionId)
         this.raw({ t: 'resync', sessionIds: this.conversations.ids() })
         this.emitState('online')
         this.options.onPeerJoined(frame.sessionId, frame.pairingToken)
@@ -218,6 +251,13 @@ export class RelayClient {
         return
       case 'paired':
         return
+      case 'pair-fail':
+        // 第一版这个 case 根本没有：手机扫码后中继回了"这张码已用过/已过期"，
+        // 主机一侧完全无痕，status.json 也看不出配对为什么没成。
+        // 清槽是安全的：这张码的 PSK 已经不可能再被用上了。
+        this.options.log('pair failed', { reason: frame.reason })
+        this.options.onPairFail?.(frame.reason)
+        return
       case 'error':
         // 中继只会把错误码发给"该对它负责"的那一端；本端把它记进状态，
         // 会话清理交给 enc 路径（那里才知道具体是哪条通道）。
@@ -228,6 +268,11 @@ export class RelayClient {
       case 'enc':
       case 'enc-batch':
         this.onEncrypted(frame)
+        return
+      default:
+        // F1 的纪律：新帧名必须被静默忽略、不许破坏状态，但**必须留痕**。
+        // 没有这一条的话，中继侧加一个名字、主机侧永远是哑的，只能靠猜。
+        this.options.log('relay frame ignored (no handler)', { t: (frame as { t?: string }).t ?? '?' })
         return
     }
   }
@@ -243,13 +288,22 @@ export class RelayClient {
     let decryptedAny = false
     for (const record of records) {
       if (!base64Text.safeParse(record.ciphertext).success) continue
-      const payload = open<CmdPayload>(conversation.kC2H, { ciphertext: record.ciphertext })
-      if (!payload) {
+      const decrypted = open<unknown>(conversation.kC2H, { ciphertext: record.ciphertext })
+      if (!decrypted) {
+        // 解不开 = 这端已经没有对应密钥，交给"两次就作废"那条出口。
         this.noteUndecryptable(frame.sessionId)
         continue
       }
+      // MAC 过了不等于形状对。`onCommand` 下游是 `switch (cmd.t)` + 真实内核调用，
+      // 把未校验的对象直接递下去 = 让手机用一条密文决定宿主被怎么调用。
+      const cmd = parseCmdPayload(decrypted)
+      if (!cmd) {
+        const name = typeof (decrypted as { t?: unknown }).t === 'string' ? String((decrypted as { t?: unknown }).t) : '?'
+        this.options.log('inbound payload failed cmd schema', { sessionId: frame.sessionId, t: name })
+        continue
+      }
       decryptedAny = true
-      this.options.onCommand(frame.sessionId, payload, (frame as { clientId?: string }).clientId)
+      this.options.onCommand(frame.sessionId, cmd, (frame as { clientId?: string }).clientId)
     }
     if (decryptedAny) this.undecryptable.delete(frame.sessionId)
   }

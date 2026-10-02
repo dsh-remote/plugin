@@ -2,3 +2,13 @@ packages:
   - packages/*
   - apps/*
   - e2e
+
+# pnpm 11：允许执行 postinstall 的依赖要显式放行（写在 package.json 的 pnpm 字段已不被读取）。
+# esbuild 需要它的安装脚本落下平台二进制，而中继与插件的打包步骤都要用它。
+# 注意 `allowBuilds` 的值必须是布尔：pnpm 报错时给的模板是"set this to true or false"，
+# 原样留着那行字符串等于留了一个解析不了的键。
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

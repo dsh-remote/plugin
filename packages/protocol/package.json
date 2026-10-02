@@ -51,7 +51,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm build && node --test dist/tests/outbound.test.js dist/tests/keys.test.js dist/tests/record.test.js dist/tests/pairing.test.js dist/tests/frames.test.js dist/tests/payloads.test.js dist/tests/sleep.test.js dist/tests/ids.test.js"
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\""
   },
   "dependencies": {
     "tweetnacl": "^1.0.3",

@@ -16,6 +16,11 @@
  *    不然工具行会插到它自己的文本前面。
  * 4. **一轮最多处理 N 个会话**，超出就从最旧的开始冲刷。会话多时这保证
  *    单个吵闹的会话不会饿死其它会话（也顺带给出内存上界）。
+ *
+ * 另有两条是重写时补的（第一版只做"触发时机"，没做"大小"与"连续性"）：
+ * `maxCharsPerFrame` 是**出站硬上限**——一帧最多这么多字符，超了就切多帧；
+ * `part` 在**同一条 messageId 内连续**，跨 flush、跨切帧都不归零，
+ * 否则手机上"分片是否完整"这件事没有任何可核对依据。
  */
 import type { EvMessageDelta } from '@dsh-rc/protocol'
 import type { Clock } from '../ports/index.js'
@@ -50,6 +55,12 @@ interface Entry {
 
 export class DeltaWindow {
   private readonly entries = new Map<string, Entry>()
+  /**
+   * 每个会话"这条消息已经发到第几片"。必须活在 entry 之外：flush 会把 entry 删掉，
+   * 下一条同 messageId 的增量于是重建 entry、`part` 归零——一条长回答发出去全是
+   * `part:0`，手机与日志都失去了"分片是否连续"这个唯一的判据。
+   */
+  private readonly partCursor = new Map<string, { messageId: string; next: number }>()
   private flushed = 0
   private droppedEmpty = 0
 
@@ -78,7 +89,7 @@ export class DeltaWindow {
         text: '',
         role,
         done: false,
-        part: 0,
+        part: this.nextPart(sessionId, messageId),
         since: this.clock.now(),
         timer: undefined,
       }
@@ -98,8 +109,9 @@ export class DeltaWindow {
     const entry = this.entries.get(sessionId)
     if (!entry || entry.messageId !== messageId) {
       // 缓冲里根本没有这条消息（例如一条工具调用没产生任何文本就直接结束）：
-      // 仍然要补一条 done-only 帧。
-      this.emit({ t: 'ev.message_delta', sessionId, messageId, delta: '', done: true, ...(role ? { role } : {}) })
+      // 仍然要补一条 done-only 帧。走 flushedDoneOnly() 而不是裸 emit——
+      // 直接 emit 会让 stats.flushed 与实际出站帧数分叉（"发出去了但没人知道"是红线）。
+      this.flushedDoneOnly(sessionId, messageId, role)
       return
     }
     entry.done = true
@@ -118,7 +130,17 @@ export class DeltaWindow {
       this.droppedEmpty += 1
       return
     }
-    this.emitFrame(entry, entry.text, entry.done)
+    const chunks = this.splitToCap(entry.text)
+    if (chunks.length === 0) {
+      // 收尾且一个字都没有：仍必须出站（F9），手机只认 done。
+      this.emitFrame(entry, '', true)
+    } else {
+      chunks.forEach((chunk, index) => this.emitFrame(entry, chunk, index === chunks.length - 1 ? entry.done : false))
+    }
+    // 分片序号要跨 flush 接着数；这条消息已经带 done 收尾了就把游标清掉，
+    // 下一条消息从 0 开始才是它自己的序列。
+    if (entry.done) this.partCursor.delete(sessionId)
+    else this.partCursor.set(sessionId, { messageId: entry.messageId, next: entry.part })
     entry.text = ''
   }
 
@@ -142,10 +164,48 @@ export class DeltaWindow {
     this.flushAll()
     for (const entry of this.entries.values()) this.clearTimer(entry)
     this.entries.clear()
+    // 游标也要清：会话没了还留着它的分片序号，等于给未来同 id 的消息一个凭空的起点。
+    this.partCursor.clear()
   }
 
   get stats(): { buffered: number; flushed: number; droppedEmpty: number } {
     return { buffered: this.entries.size, flushed: this.flushed, droppedEmpty: this.droppedEmpty }
+  }
+
+  /**
+   * 硬切成 `maxCharsPerFrame` 以内的片。
+   *
+   * 第一版只在 `entry.text.length >= cap` 时"触发一次 flush"，而 flush 是整串发出去的：
+   * 一次 push 就写进 5 万字符时，出站的那一帧仍然是 5 万字符——上限只管了时机、没管大小，
+   * 于是手机可能顶到中继的帧上限（`MAX_FRAME_BYTES`）而被整条连接断开。
+   */
+  private splitToCap(text: string): string[] {
+    const cap = this.options.maxCharsPerFrame
+    if (!Number.isFinite(cap) || cap <= 0 || text.length <= cap) return text.length === 0 ? [] : [text]
+    const parts: string[] = []
+    for (let at = 0; at < text.length; at += cap) parts.push(text.slice(at, at + cap))
+    return parts
+  }
+
+  /** 这条消息的下一个分片序号：跨 flush 连续，换 messageId 就归零。 */
+  private nextPart(sessionId: string, messageId: string): number {
+    const cursor = this.partCursor.get(sessionId)
+    if (!cursor) return 0
+    if (cursor.messageId !== messageId) {
+      this.partCursor.delete(sessionId)
+      return 0
+    }
+    return cursor.next
+  }
+
+  /** 缓冲区里从来没有过这条消息的收尾帧（例如一条工具调用一个字都没出就直接结束）。 */
+  private flushedDoneOnly(sessionId: string, messageId: string, role?: 'assistant' | 'user' | 'system'): void {
+    this.flushed += 1
+    // 收尾帧同样是这条消息的一片：序号要接得上（前面已经发过 2 片时它就是第 3 片），
+    // 从来没有过缓冲时才回到 0。发完就把游标清掉，下一条消息重新计数。
+    const part = this.nextPart(sessionId, messageId)
+    this.partCursor.delete(sessionId)
+    this.emit({ t: 'ev.message_delta', sessionId, messageId, delta: '', part, done: true, ...(role ? { role } : {}) })
   }
 
   private emitFrame(entry: Entry, text: string, done: boolean): void {
