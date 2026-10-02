@@ -1,46 +1,32 @@
 {
   "name": "dsh-remote-control",
-  "version": "0.1.0",
-  "description": "Remote control for DeepSeek Harness — DSH plugin (Host) + zero-knowledge relay server + WeChat Mini Program client, with keep-awake.",
+  "version": "2.0.0",
+  "description": "DSH Remote Control host plugin: pairs a running DeepSeek Harness with the DRC relay so a WeChat Mini Program can send prompts, watch streamed output, and answer approvals. Payload-level E2E encryption; the relay never sees plaintext.",
   "type": "module",
-  "main": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/src/index.d.ts",
-      "default": "./dist/src/index.js"
-    },
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
+  "license": "MIT",
+  "main": "./dist/bundle/index.js",
   "files": [
     "dist",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
+    "cordis.patch.yml"
   ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node ../../scripts/bundle-protocol.mjs",
-    "test": "pnpm build && node --test dist/tests/*.test.js"
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/bundle-plugin.mjs",
+    "test": "pnpm build && node --test dist/tests/window.test.js dist/tests/runtime.test.js dist/tests/sleep.test.js dist/tests/qr.test.js dist/tests/config.test.js dist/tests/status.test.js dist/tests/guard.test.js dist/tests/relay-client.test.js"
   },
   "dependencies": {
-    "ws": "^8.18.0",
+    "@dsh-rc/protocol": "workspace:*",
+    "qrcode": "^1.5.4",
     "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1"
+    "ws": "^8.18.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@dsh-rc/protocol": "workspace:*",
-    "typescript": "^5.6.3",
     "@types/node": "^22.9.0",
-    "@types/ws": "^8.5.12"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "license": "MIT"
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.27.7",
+    "typescript": "^5.6.3"
+  }
 }
