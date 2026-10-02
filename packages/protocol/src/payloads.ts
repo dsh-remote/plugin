@@ -144,6 +144,35 @@ export const evResult = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
 })
 
+/** evSessionChanged 的推导类型。 */
+export type EvSessionChanged = z.infer<typeof evSessionChanged>
+/** evMessageDelta 的推导类型。 */
+export type EvMessageDelta = z.infer<typeof evMessageDelta>
+/** evToolEvent 的推导类型。 */
+export type EvToolEvent = z.infer<typeof evToolEvent>
+/** evPermissionRequest 的推导类型。 */
+export type EvPermissionRequest = z.infer<typeof evPermissionRequest>
+/** evQuestionRequest 的推导类型。 */
+export type EvQuestionRequest = z.infer<typeof evQuestionRequest>
+/** evRunState 的推导类型。 */
+export type EvRunState = z.infer<typeof evRunState>
+/** evKeepAwakeState 的推导类型。 */
+export type EvKeepAwakeState = z.infer<typeof evKeepAwakeState>
+/** evResult 的推导类型。 */
+export type EvResult = z.infer<typeof evResult>
+/** cmdSendPrompt 的推导类型。 */
+export type CmdSendPrompt = z.infer<typeof cmdSendPrompt>
+/** cmdAnswer 的推导类型。 */
+export type CmdAnswer = z.infer<typeof cmdAnswer>
+/** cmdResolvePermission 的推导类型。 */
+export type CmdResolvePermission = z.infer<typeof cmdResolvePermission>
+/** cmdInterrupt 的推导类型。 */
+export type CmdInterrupt = z.infer<typeof cmdInterrupt>
+/** cmdListSessions 的推导类型。 */
+export type CmdListSessions = z.infer<typeof cmdListSessions>
+/** cmdKeepAwake 的推导类型。 */
+export type CmdKeepAwake = z.infer<typeof cmdKeepAwake>
+
 /**
  * 出站载荷（host → client）。小程序解密后按 `t` 分发，认不出的类型被**静默丢弃**，
  * 所以新增名字安全，改既有语义不安全。

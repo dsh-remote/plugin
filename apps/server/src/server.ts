@@ -22,6 +22,20 @@ import {
   type RelayFrame,
 } from '@dsh-rc/protocol/frames'
 import { newHostId } from '@dsh-rc/protocol/ids'
+import {
+  encBatchToClient,
+  encToClient,
+  helloOkForClient,
+  helloOkForHost,
+  makeError as makeErrorFrame,
+  pairFail as pairFailFrameOf,
+  pairReady as pairReadyFrameOf,
+  paired as pairedFrameOf,
+  peerJoinedForHost,
+  peerJoinedNotice,
+  peerLeft as peerLeftFrame,
+  pong as pongFrameOf,
+} from '@dsh-rc/protocol/outbound'
 import type { RelayConfig } from './config.js'
 import { Budget, FrameRateGate } from './limits.js'
 import { Log, REDACTED } from './log.js'
@@ -89,8 +103,27 @@ export function createRelay(config: RelayConfig): RelayHandle {
     if (peer) sendTo(peer.ws, frame)
   }
 
+  /**
+   * 发给手机侧的**每一条 error 都必须带中文 message**（复核 R2）。
+   * 客户端对未知 code 的处理是 `f.message || f.code`，没有 message 就是一条
+   * 40 字宽的英文 toast——用户既看不懂也没有下一步。
+   */
+  const CLIENT_ERROR_TEXT: Partial<Record<ErrorCode, string>> = {
+    unknown_session: '会话已失效，请重新扫码配对',
+    not_member: '这条指令不属于当前会话，请重新配对',
+    host_unavailable: '主机暂时不在线，请稍后重试',
+    rate_limited: '操作太快，请稍后再试',
+    bad_frame: '有一帧数据不合法，已丢弃',
+    bad_json: '收到无法解析的数据，已丢弃',
+    unknown_frame: '对端版本不认识这个帧',
+    pair_table_full: '配对表已满，请稍后再试',
+    need_client: '需要先从手机侧发起配对',
+    internal: '中继内部错误',
+  }
+
   function sendError(peer: Peer | undefined, code: ErrorCode, message?: string): void {
-    sendToPeer(peer, { t: 'error', code, ...(message ? { message } : {}) })
+    const text = message ?? (peer?.role === 'client' ? CLIENT_ERROR_TEXT[code] : undefined)
+    sendToPeer(peer, makeErrorFrame(code, text))
   }
 
   /** 慢消费者：缓冲区超限持续 10 秒即断开，而不是无限堆积把中继内存吃掉。 */
@@ -132,7 +165,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       const { replaced } = state.attachHost(hostId, peer.ws, frame.label ?? '')
       peer.role = 'host'
       peer.hostId = hostId
-      sendToPeer(peer, { t: 'hello-ok', role: 'host', hostId, protocol: frame.protocol })
+      sendToPeer(peer, helloOkForHost(hostId, frame.protocol))
       log.info('host online', { hostId, label: frame.label ?? '', replaced: replaced ? 1 : 0 })
       if (replaced) replaced.close(CLOSE_REPLACED, 'replaced_by_newer_socket')
       // 主机重连：把它名下的会话作为"有对端在听"的通知重放给已连接的客户端，
@@ -158,12 +191,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
         log.warn('client replaced by newer socket', { clientId })
         replaced.close(CLOSE_REPLACED, 'replaced_by_newer_socket')
       }
-      sendToPeer(peer, {
-        t: 'hello-ok',
-        role: 'client',
-        clientId,
-        protocol: frame.protocol,
-      })
+      sendToPeer(peer, helloOkForClient(clientId, frame.protocol))
       log.info('client online', { clientId, platform: frame.clientMeta?.platform })
       return
     }
@@ -183,7 +211,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       return
     }
     // **服务端权威 TTL**：主机必须据此改写本地过期时间（旧实现的第一起事故）。
-    sendToPeer(peer, { t: 'pair-ready', pairingToken: frame.pairingToken, ttlMs: config.pairTtlMs })
+    sendToPeer(peer, pairReadyFrameOf(frame.pairingToken, config.pairTtlMs))
     // D2：info 级不落完整配对码。需要排错时开 debug。
     log.info('pair token issued', { hostId: peer.hostId, token: REDACTED, ttlMs: config.pairTtlMs })
     log.debug('pair token issued (debug)', { hostId: peer.hostId, pairingToken: frame.pairingToken })
@@ -195,14 +223,14 @@ export function createRelay(config: RelayConfig): RelayHandle {
       return
     }
     if (!pairBudget.take(Date.now())) {
-      sendToPeer(peer, { t: 'pair-fail', reason: 'rate_limited' })
+      sendToPeer(peer, pairFailFrameOf('rate_limited'))
       log.warn('pair budget exhausted (global)', { clientId: peer.clientId })
       return
     }
     const claimed = state.claim(frame.pairingToken, peer.clientId)
     if (!claimed.ok) {
       peer.pairAttempts += 1
-      sendToPeer(peer, { t: 'pair-fail', reason: claimed.reason })
+      sendToPeer(peer, pairFailFrameOf(claimed.reason))
       log.info('pair failed', {
         clientId: peer.clientId,
         reason: claimed.reason,
@@ -214,14 +242,9 @@ export function createRelay(config: RelayConfig): RelayHandle {
       return
     }
     peer.pairAttempts = 0
-    sendToPeer(peer, { t: 'paired', sessionId: claimed.conversationId, hostId: claimed.hostId })
+    sendToPeer(peer, pairedFrameOf(claimed.conversationId, claimed.hostId))
     // 发给主机的那一条**必须带 pairingToken**：主机按它取自己那份 PSK（多码并存事故）。
-    sendToPeer(peerOfHost(claimed.hostId), {
-      t: 'peer-joined',
-      sessionId: claimed.conversationId,
-      clientId: peer.clientId,
-      pairingToken: frame.pairingToken,
-    })
+    sendToPeer(peerOfHost(claimed.hostId), peerJoinedForHost(claimed.conversationId, peer.clientId, frame.pairingToken))
     log.info('paired', { sessionId: claimed.conversationId, hostId: claimed.hostId, clientId: peer.clientId })
   }
 
@@ -255,7 +278,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
     // 下行：中继重新编号（客户端不信 seq 的单调性，但编号让审计与合并可写）。
     const seq = state.nextHostSequence(frame.sessionId)
     for (const sock of state.clientSockets(frame.sessionId)) {
-      sendTo(sock, { t: 'enc', sessionId: frame.sessionId, ...(seq === undefined ? {} : { seq }), ciphertext: frame.ciphertext })
+      if (seq !== undefined) sendTo(sock, encToClient(frame.sessionId, seq, frame.ciphertext))
     }
   }
 
@@ -273,11 +296,15 @@ export function createRelay(config: RelayConfig): RelayHandle {
       state.touchConversation(frame.sessionId)
       return
     }
-    const items = frame.items.map((item) => {
+    // 下行批量帧由中继逐条编号（客户端只看 ciphertext，但编号让"帧数不膨胀、顺序不乱"
+    // 这类审计断言可写）。编号失败说明会话在飞行中被删了——那这一批就不该再发出去。
+    const items: Array<{ seq: number; ciphertext: string }> = []
+    for (const item of frame.items) {
       const seq = state.nextHostSequence(frame.sessionId)
-      return { ...(item.seq === undefined ? {} : { seq: item.seq }), ...(seq === undefined ? {} : { seq }), ciphertext: item.ciphertext }
-    })
-    for (const sock of clients) sendTo(sock, { t: 'enc-batch', sessionId: frame.sessionId, items })
+      if (seq === undefined) return
+      items.push({ seq, ciphertext: item.ciphertext })
+    }
+    for (const sock of clients) sendTo(sock, encBatchToClient(frame.sessionId, items))
   }
 
   function handleFrame(peer: Peer, frame: EndpointFrame): void {
@@ -305,22 +332,36 @@ export function createRelay(config: RelayConfig): RelayHandle {
       case 'enc-batch':
         return forwardEncBatch(peer, frame)
       case 'session-leave': {
+        /**
+         * 两条完全不同的路，共用一帧（复核 R1）：
+         * - 客户端发：它离开这个会话，主机收到 peer-left 只是"少了一个观众"，会话保留；
+         * - 主机发：**作废**这个会话。主机重启后密钥没了、或它连续解不开某一会话时走这条。
+         *   此时必须向该会话的所有客户端发 peer-left，手机才会中文提示"主机已断开，
+         *   请重新配对"并停在这里等用户，而不是继续把密文发给一个没有钥匙的对端
+         *   ——那才是真正的静默黑洞。
+         */
+        if (peer.role === 'host' && peer.hostId) {
+          const conv = state.conversations.get(frame.sessionId)
+          if (!conv || conv.hostId !== peer.hostId) return
+          const dropped = state.dropConversation(frame.sessionId)
+          for (const clientId of dropped?.clientIds ?? []) {
+            sendTo(state.clients.get(clientId)?.ws, peerLeftFrame(frame.sessionId, peer.hostId))
+          }
+          log.info('conversation voided by host', { sessionId: frame.sessionId, clients: (dropped?.clientIds ?? []).length })
+          return
+        }
         if (!peer.clientId) {
           sendError(peer, 'need_client')
           return
         }
         const removed = state.leave(peer.clientId, frame.sessionId)
         if (removed) {
-          sendTo(state.hostSocket(frame.sessionId), {
-            t: 'peer-left',
-            sessionId: frame.sessionId,
-            clientId: peer.clientId,
-          })
+          sendTo(state.hostSocket(frame.sessionId), peerLeftFrame(frame.sessionId, peer.clientId))
         }
         return
       }
       case 'ping':
-        return sendToPeer(peer, { t: 'pong', ...(frame.ts === undefined ? {} : { ts: frame.ts }) })
+        return sendToPeer(peer, pongFrameOf(frame.ts))
       default:
         return sendError(peer, 'unknown_frame', String((frame as { t?: string }).t))
     }
@@ -379,7 +420,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       const declaredType = (parsed as { t?: unknown } | null)?.t
       if (typeof declaredType === 'string' && !parseEndpointFrame(parsed)) {
         if (declaredType === 'pair-begin-client') {
-          sendToPeer(peer, { t: 'pair-fail', reason: 'invalid_or_expired' })
+          sendToPeer(peer, pairFailFrameOf('invalid_or_expired'))
           return
         }
         if (declaredType === 'pair-begin') {
@@ -415,7 +456,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       peers.delete(ws)
       if (peer.role === 'client' && peer.clientId) {
         for (const notice of state.clientGone(peer.clientId, ws)) {
-          sendTo(state.hostSocket(notice.conversationId), { t: 'peer-left', sessionId: notice.conversationId, clientId: notice.clientId })
+          sendTo(state.hostSocket(notice.conversationId), peerLeftFrame(notice.conversationId, notice.clientId))
         }
         log.info('client disconnected', { clientId: peer.clientId })
       }
@@ -457,7 +498,9 @@ export function createRelay(config: RelayConfig): RelayHandle {
     // D6：超过宽限期仍没回来的主机，才真正通知它的客户端重配对。
     for (const dropped of state.expireOfflineHosts(config.hostGraceMs)) {
       for (const clientId of dropped.clientIds) {
-        sendTo(state.clients.get(clientId)?.ws, { t: 'peer-left', sessionId: dropped.conversationId, clientId: dropped.hostId })
+        for (const clientId of dropped.clientIds) {
+          sendTo(state.clients.get(clientId)?.ws, peerLeftFrame(dropped.conversationId, dropped.hostId))
+        }
       }
       log.info('host grace expired', { hostId: dropped.hostId, sessions: dropped.conversationId })
     }

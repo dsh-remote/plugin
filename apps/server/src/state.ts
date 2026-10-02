@@ -316,6 +316,15 @@ export class RelayState implements Clock {
     return true
   }
 
+  /** 主机主动作废某条会话（R1）：返回被摘掉的客户端，调用方据此发 peer-left。 */
+  dropConversation(conversationId: string): { conversationId: string; clientIds: string[] } | undefined {
+    const conv = this.conversations.get(conversationId)
+    if (!conv) return undefined
+    const clientIds = [...conv.clients]
+    this.conversations.delete(conversationId)
+    return { conversationId, clientIds }
+  }
+
   /** 立即判死某个主机（用于主机主动解配或会话被清）。返回需要向客户端发 peer-left 的清单。 */
   dropHost(hostId: string): Array<{ conversationId: string; hostId: string; clientIds: string[] }> {
     const dropped: Array<{ conversationId: string; hostId: string; clientIds: string[] }> = []

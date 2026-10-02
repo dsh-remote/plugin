@@ -566,3 +566,172 @@ test('/api/pair-status 默认 404：不给 6 位码留免认证的判定 oracle'
     await ctx.close()
   }
 })
+
+// ── 复核 R7 要求补齐的机械防线（原来"只有文档没有测试"的那几条）────────
+
+test('F1：未知的帧名不会改动任何状态（新帧名必须落进 default）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { client, conversationId } = await pairUp(ctx)
+    const before = ctx.relay.health()
+    for (const name of ['keepalive', 'subscribe', 'auth', 'session-list', 'peer-left', 'paired']) {
+      client.send({ t: name, sessionId: conversationId })
+      await client.until((f) => f.t === 'error')
+    }
+    // 关键：借用过的帧名（peer-left / paired）不许触发状态机
+    const after = ctx.relay.health()
+    assert.deepEqual(
+      { hosts: after.hosts, clients: after.clients, conversations: after.conversations },
+      { hosts: before.hosts, clients: before.clients, conversations: before.conversations },
+    )
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('F4：每一条 hello 都必有一个 hello-ok（错 role 也要有回应）', async () => {
+  const ctx = await startRelay()
+  try {
+    for (const hello of [
+      { t: 'hello', role: 'client', clientId: 'a1' },
+      { t: 'hello', role: 'weird' },
+      { t: 'hello' },
+    ]) {
+      const peer = await Peer.connect(ctx.url)
+      ctx.open.push(peer)
+      peer.send(hello)
+      const reply = await peer.next()
+      assert.ok(['hello-ok', 'error'].includes(reply.t), `${hello.role ?? '无 role'} 必须有明确回应`)
+      if (hello.role === 'client') assert.equal(reply.t, 'hello-ok')
+      else assert.equal(reply.t, 'error')
+    }
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('F3：出站帧里的 sessionId 与配对时下发的逐字一致，不做任何加工', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    const paired = client.frames.find((f) => f.t === 'paired')
+    assert.equal(paired.sessionId, conversationId)
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    const down = await client.until((f) => f.t === 'enc')
+    assert.equal(down.sessionId, conversationId)
+    assert.equal(typeof down.sessionId, 'string')
+    // 上行同理：主机收到的 sessionId 必须是通道 id，而不是被换成 DSH 会话 id（F3 的事故面）
+    client.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER, clientId: 'inst-1' })
+    const up = await host.until((f) => f.t === 'enc')
+    assert.equal(up.sessionId, conversationId)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('T3：下行顺序与主机发出顺序一致，且帧数不膨胀', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    const marker = client.frames.length
+    for (let i = 0; i < 12; i++) {
+      host.send({ t: 'enc', sessionId: conversationId, ciphertext: Buffer.from(`片段-${i}`, 'utf8').toString('base64') })
+    }
+    await client.until(() => client.frames.length >= marker + 12)
+    const downs = client.frames.slice(marker).filter((f) => f.t === 'enc')
+    assert.equal(downs.length, 12, '既不能丢也不能重')
+    for (let i = 0; i < 12; i++) {
+      assert.equal(Buffer.from(downs[i].ciphertext, 'base64').toString('utf8'), `片段-${i}`)
+      assert.equal(downs[i].seq, i + 1, 'seq 必须由中继连续编号')
+    }
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('T6：根路径与任意自定义路径都能 upgrade（老地址不能连不上）', async () => {
+  const ctx = await startRelay()
+  try {
+    for (const path of ['/', '/ws', '/drc', '/a/b/c']) {
+      const peer = await Peer.connect(ctx.url + path)
+      ctx.open.push(peer)
+      peer.send({ t: 'hello', role: 'client', clientId: `p-${path}` })
+      assert.equal((await peer.until((f) => f.t === 'hello-ok')).role, 'client', path)
+    }
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('R2：发给手机的 error 一律带中文 message（英文 code 不可能是用户看到的全部）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId } = await pairUp(ctx)
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', clientId: 'reader' })
+    await client.until((f) => f.t === 'hello-ok')
+    client.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    const err = await client.until((f) => f.t === 'error')
+    assert.equal(err.code, 'unknown_session')
+    assert.match(err.message, /配对|会话/, `客户端侧的中文提示缺失：${JSON.stringify(err)}`)
+
+    client.send({ t: 'heartbeat' })
+    const second = await client.until((f) => f.t === 'error' && f.code === 'unknown_frame')
+    assert.ok(second.message, 'unknown_frame 也要带可读文案')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('R1：主机主动作废会话时，它的客户端收到 peer-left 而不是继续对着没钥匙的对端发密文', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    host.send({ t: 'session-leave', sessionId: conversationId })
+    const left = await client.until((f) => f.t === 'peer-left')
+    assert.equal(left.sessionId, conversationId)
+    assert.equal(ctx.relay.state.conversations.has(conversationId), false)
+    // 客户端此后拿旧 convId 发帧：既有 peer-left 的即时提示，也有兜底的 unknown_session
+    client.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await client.until((f) => f.t === 'error')).code, 'unknown_session')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('R1 边界：客户端发的 session-leave 只摘自己，不得把主机侧会话删掉（与主机发起的那条相对）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    client.send({ t: 'session-leave', sessionId: conversationId })
+    await host.until((f) => f.t === 'peer-left')
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true, '客户端离开不该删会话')
+    void client
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('R3：被顶号的旧 socket 会重连并重新拿到身份（不靠人工干预）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId, host } = await pairUp(ctx)
+    const first = ctx.open[1]
+    const newer = await Peer.connect(ctx.url)
+    ctx.open.push(newer)
+    newer.send({ t: 'hello', role: 'client', clientId: 'inst-1' })
+    await newer.until((f) => f.t === 'hello-ok')
+    assert.equal((await first.closed).code, 4000)
+    // 小程序的 socket 层在收到 close 后会自动重连；这里模拟它重连回来的那条连接
+    const reconnected = await Peer.connect(ctx.url)
+    ctx.open.push(reconnected)
+    reconnected.send({ t: 'hello', role: 'client', clientId: 'inst-1' })
+    await reconnected.until((f) => f.t === 'hello-ok')
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await reconnected.until((f) => f.t === 'enc')).sessionId, conversationId)
+  } finally {
+    await ctx.close()
+  }
+})

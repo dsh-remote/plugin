@@ -28,6 +28,7 @@ export * from './record.js'
 export * from './pairing.js'
 export * from './frames.js'
 export * from './payloads.js'
+export * from './outbound.js'
 export * from './sleep.js'
 export * from './ids.js'
 
