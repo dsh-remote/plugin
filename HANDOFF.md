@@ -216,6 +216,22 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
    `slowConsumers` 计数是否在**同一台设备上反复**出现。别凭猜改这 45s——它同时是
    "手机在后台被系统冻结时不误杀"的唯一余量。
 
+6. **真机「连接被拒」≠ 中继故障**（2026-10-02 排错结论，下次别再从头查）。症状：手机小程序
+   状态行显示 `wss://drc.provid.cc`（地址没错），弹窗是 `connection refused /
+   Could not connect to the server`。判据链条（全在服务端取证，5 分钟可复现）：
+   - `curl -s https://drc.provid.cc/healthz` 返回 `{"ok":true,...}` → 公网可达、证书与安全组 OK；
+   - `dig +short A drc.provid.cc` 只有一条 A 记录（无 AAAA）；
+   - `journalctl -u dsh-remote-control` 里**没有任何 `client online`** → 客户的包根本没到中继，
+     失败发生在 TCP 握手之前（配对码被拒会记成 `pair failed`，那是完全不同的症状）；
+   - `grep -c "limiting connections" /var/log/nginx/drc.error.log` 的限流全部来自扫描器 IP，
+     对真实客户端没有 5xx。
+   **主动拒绝**（而非 12s 超时黑洞）最常见两种，按此顺序排除：
+   (a) **微信「socket 合法域名」未配**——体验版/正式版强制，开发版只有开「调试模式」才跳过
+   （`docs/MINI-PROGRAM.md:10-11`）；(b) 手机侧网络/代理（VPN、加速器、WeChat 代理）或手机
+   DNS 缓存指向别的 IP。**10 秒判定**：用**手机浏览器**打开 `https://drc.provid.cc/healthz`
+   —— 能出 JSON 就是 (a)，打不开就是 (b)。这条只涉及手机/微信后台配置，**仓库里没有可改的
+   代码**（`mp/` 归并行会话）。
+
 ## 6. 命令速查
 
 ```sh
