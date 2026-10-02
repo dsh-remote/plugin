@@ -1,7 +1,6 @@
 {
   "pages": [
     "pages/sessions/sessions",
-    "pages/pair/pair",
     "pages/chat/chat"
   ],
   "lazyCodeLoading": "requiredComponents",

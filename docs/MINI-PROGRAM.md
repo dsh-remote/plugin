@@ -41,10 +41,20 @@ mp/
     client.js           客户端核心：握手、配对、指令、事件分发（DrcClient）
     package.json        仅用于把该目录标记为 CommonJS（Node 侧测试用）
   pages/
-    sessions/  入口页：主机状态 + 防休眠开关 + 会话列表（含已归档徽标）
-    pair/      配对：扫码/粘贴二维码 + 6 位配对码 + 高级设置 + 环境自检
+    sessions/  入口页：未配对时**就地扫码配对**；已配对是主机状态 + 防休眠 + 会话列表
     chat/      对话：文档流（步骤组可折叠）+ 流式正文 + 审批卡、提问卡、中断
 ```
+
+**只有两页。** 配对曾经是独立的 `pages/pair/`，后来按「首页直接扫码」删掉了 ——
+配对是打开 app 最可能要做的事，多一次跳转就多一次"我到底该去哪"。
+扫码/粘贴/6 位配对码/环境自检全部内联在 `sessions` 页：
+
+- **未配对态**只有一个主动作「扫描主机二维码」，扫完即连（不跳页）；
+  手动输入（粘贴 / 6 位码）收在「手动输入」折叠区里。
+- **已配对态**底部是「重新配对 / 解除配对 / 深浅切换」—— 配对页删掉之后，
+  这里是换主机和解除配对的**唯一**入口，不能省。
+- 状态切换靠 `data.paired` 走 `wx:if` 分支：连上后 `_onEvent` 收到 `status: online`
+  就 `setData({paired: true})`，界面自己换过去，不需要任何导航。
 
 ## 主题：浅色（默认）/ 深色
 
@@ -77,7 +87,7 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
 `core/theme.js` 的 `toggle()` 三件事都做，缺一件就是"切了但没切干净"：
 
 1. **页面根容器加 `theme-dark` class** —— 变量挂在这个 class 上，靠继承铺满整页。
-   必须挂在**根 view**（`sessions`/`pair` 的 `.page-pad`、`chat` 的 `.chat-wrap`）上：
+   必须挂在**根 view**（`sessions` 的 `.page-pad`、`chat` 的 `.chat-wrap`）上：
    挂在子树深处只能染到那一小片。
 2. **导航栏** `wx.setNavigationBarColor` —— 原生组件，不吃 CSS 变量，也不受 `page` 上的
    变量影响。不改的话深色页面上方留一条白顶栏。
@@ -285,11 +295,17 @@ node --test e2e/mp-client.test.mjs    # 13 项：真实 client.js + wx shim 跑�
 node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
 node --test e2e/mp-chat-blocks.test.mjs   # 22 项：chat 页块流时序 + 历史回放 + 过程窗口
 node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
+node --test e2e/mp-pairing.test.mjs       # 18 项：首页内联的配对（扫码即连、失败可重试、解除配对）
 node --test e2e/mp-theme.test.mjs         # 9 项：浅/深主题（默认、双向、跨启动、导航栏、存不下）
-pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义 + 主题三段接线
+pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义 + 主题接线 + 配对入口在位
 pnpm mp:theme --check                 # 两份变量表是否还与 TDesign 同步（含深浅覆盖对账）
 pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
+
+`check:mp-ui` 第 ⑦ 项盯住**配对入口不许消失**：首页必须有 `wx.scanCode`、
+必须有元素 `bindtap` 到它、必须有 `bindtap="onUnpair"`、必须有 `wx:if="{{paired}}"`
+的两态分支。配对页删掉后这些能力全靠内联，丢一条不会编译报错、也不会让测试变红 ——
+只会在真机上变成"装好了却没有任何办法连上"。三条断言都做过反证。
 
 **需要开发者工具**（人工触发，不进 CI）的那两个：
 

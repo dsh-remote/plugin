@@ -246,8 +246,42 @@ for (const must of ['node_modules', 'core/package.json', 'package-lock.json']) {
   }
 
   // 默认必须是浅色：用户没选过时
-  if (!/themeName:\s*'light'/.test(read(path.join(MP_DIR, `${pages[0]}.js`)))) {
-    problems.push(`${PAGES[0]}.js: data.themeName 默认值不是 'light' —— 约定是"没选过就是浅色"`)
+  const firstPage = pages[0]
+  if (!/themeName:\s*'light'/.test(read(path.join(MP_DIR, `${firstPage}.js`)))) {
+    problems.push(`${firstPage}.js: data.themeName 默认值不是 'light' —— 约定是"没选过就是浅色"`)
+  }
+}
+
+// ⑦ 配对入口：删掉过独立的配对页，配对就发生在**首页**。
+//    如果哪天首页又没有扫码入口了，用户会遇到「装好了却没有任何办法连上」——
+//    而编译、预览、单测全都照常通过，是最难发现的一种坏。
+{
+  const home = pages[0]
+  const homeWxml = read(path.join(MP_DIR, `${home}.wxml`))
+  const homeJs = read(path.join(MP_DIR, `${home}.js`))
+  // 「定义」在 js 里，「有人点」在 wxml 里。两边都要有：只有 js 有 = 死代码，
+  // 只有 wxml 有 = 点了报 "does not have a method"（真机控制台才看得到）。
+  // 属性值要**闭合**：只匹配 `bindtap="onScan` 会连 `bindtap="onScanXXX"` 一起命中，
+  // 反证时才发现这条断言形同虚设。
+  const checks = [
+    ['扫码', /wx\.scanCode\(\{/, /bindtap="onScan"/],
+    ['解除配对', /onUnpair:\s*function/, /bindtap="onUnpair"/],
+  ]
+  for (const [what, inJs, inWxml] of checks) {
+    if (!inJs.test(homeJs)) {
+      problems.push(
+        `${home}.js: 首页没有实现${what} —— 配对必须在首页完成。` +
+          '配对曾经是独立一页，删掉后能力必须内联回来，不能凭空消失',
+      )
+    }
+    if (!inWxml.test(homeWxml)) {
+      problems.push(`${home}.wxml: 没有任何元素 bindtap 到${what} —— 用户没有入口`)
+    }
+  }
+  // 未配对与已配对必须分成两态渲染，且已配对分支要显式带条件：
+  // 写成 wx:else 就没法断言"两态都在"，将来有人改成单态就会静默少一块。
+  if (!/wx:if="\{\{paired\}\}"/.test(homeWxml)) {
+    problems.push(`${home}.wxml: 缺少 wx:if="{{paired}}" 的已配对分支 —— 未配对与已配对要分成两态`)
   }
 }
 

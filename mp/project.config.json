@@ -61,8 +61,8 @@
     "miniprogram": {
       "list": [
         {
-          "name": "配对页",
-          "pathName": "pages/pair/pair",
+          "name": "会话列表",
+          "pathName": "pages/sessions/sessions",
           "query": "",
           "scene": null
         }

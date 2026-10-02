@@ -15,8 +15,8 @@
  * 若 IDE 本来开着，先 `cli quit` 再起，否则端口不会监听。
  *
  * ── 用法 ──────────────────────────────────────────────────────────────
- *   node scripts/mp-shots.mjs                  # 三页 + pair 的三个交互态
- *   node scripts/mp-shots.mjs --pages pair     # 只截指定页（逗号分隔）
+ *   node scripts/mp-shots.mjs                  # 三页的各个交互态
+ *   node scripts/mp-shots.mjs --pages sessions # 只截指定页（逗号分隔）
  *   node scripts/mp-shots.mjs --out /tmp/shots
  */
 import { createRequire } from 'node:module'
@@ -216,10 +216,36 @@ const SHOTS = {
       },
     },
     {
-      name: 'dark-pair',
-      url: '/pages/pair/pair',
+      // 未配对态（首页）。**这是配对的唯一入口**了 —— 配对页已删，
+      // 所以这张图等于"新用户打开 app 看到的第一屏"，必须真的看。
+      name: 'sessions-unpaired',
+      url: '/pages/sessions/sessions',
+      data: { paired: false },
+    },
+    {
+      // 手动输入展开态：折叠区里的原生 input 高度最容易在真机上塌成一条缝，
+      // 这张就是专门盯那三个框的。
+      name: 'sessions-manual',
+      url: '/pages/sessions/sessions',
+      data: {
+        paired: false,
+        manualOpen: true,
+        hasPsk: true,
+        token: '042391',
+        pasteText: 'dshr:/p?eyJ2IjoxLCJzZXJ2ZXIiOiJ3c3M6Ly9kcmMucHJvdmlkLmNjIn0',
+      },
+    },
+    {
+      // 正在连接：按钮转圈 + 文案变化。用户最容易在这时候以为卡死了。
+      name: 'sessions-connecting',
+      url: '/pages/sessions/sessions',
+      data: { paired: false, busy: true },
+    },
+    {
+      name: 'dark-unpaired',
+      url: '/pages/sessions/sessions',
       theme: 'dark',
-      data: { server: 'wss://drc.provid.cc', hostLabel: 'Linbin 的 MacBook' },
+      data: { paired: false, manualOpen: true, hasPsk: true, token: '042391' },
     },
     {
       // 深色下的 chat 页**有内容**：用户气泡、助手正文、展开的过程组、输入区四处
@@ -288,32 +314,6 @@ const SHOTS = {
       url: '/pages/chat/chat',
       theme: 'light',
       data: { title: '重做小程序对话页信息流' },
-    },
-  ],
-  pair: [
-    { name: 'pair', url: '/pages/pair/pair' },
-    {
-      name: 'pair-adv',
-      url: '/pages/pair/pair',
-      data: {
-        showAdvanced: true,
-        pasteText: 'dshr:/p?eyJ2IjoxLCJzZXJ2ZXIiOiJ3c3M6Ly9kcmMucHJvdmlkLmNjIn0',
-      },
-    },
-    { name: 'pair-code', url: '/pages/pair/pair', data: { token: '042391' } },
-    {
-      // 已配对态：本地很难真连上主机，用 data 直接摆出渲染分支（与真实路径同一套 wxml）
-      name: 'pair-online',
-      url: '/pages/pair/pair',
-      data: {
-        online: true,
-        status: 'online',
-        statusLabel: '已配对',
-        statusTheme: 'success',
-        statusText: '已连接到主机，可以下发指令',
-        hostLabel: 'Linbin 的 MacBook',
-        hasPsk: true,
-      },
     },
   ],
   chat: [
