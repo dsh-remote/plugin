@@ -285,3 +285,31 @@ test('反证：把 KDF 的末尾分隔符去掉，向量立刻全红（证明这
   assert.notEqual(hex(withoutTrailing(['a', 'b'])), v.keyHex, '去掉末尾分隔符还能对得上，说明向量没在守这条')
   assert.equal(hex(kdfHash(['a', 'b'])), v.keyHex, '正确实现必须对得上')
 })
+
+/**
+ * F6 的机械防线：`pair-fail.reason` 的取值集合必须是**小程序认识的那些**。
+ *
+ * 这条是被真 bug 逼出来的：中继在"全局配对配额用尽"时回过 `rate_limited`，
+ * 而 `mp/core/client.js:translatePairFail` 的表里没有这个键 —— 它的兜底是
+ * `map[reason] || reason`，于是手机上弹出一条英文字面量 "rate_limited"。
+ * 小程序是冻结的（一行都不改），所以能改的只有我们这一侧：
+ * 内部原因进日志，落到线上的 reason 必须是这张表里的一个。
+ *
+ * 这里不写死"四个"，而是**从冻结源文件里读出来**比对：以后小程序加了映射，
+ * 协议层放宽枚举才成为可能；反过来协议层擅自加一个，测试立刻红。
+ */
+test('F6：pair-fail 的 reason 枚举必须落在小程序 translatePairFail 的表里（读冻结源文件比对）', async () => {
+  const { pairFailFrame } = await import(new URL('../packages/protocol/dist/src/frames.js', import.meta.url).href)
+  const source = readFileSync(path.join(here, '..', 'mp', 'core', 'client.js'), 'utf8')
+  const block = source.match(/function translatePairFail[\s\S]*?\n\}/)
+  assert.ok(block, 'mp/core/client.js 里找不到 translatePairFail：小程序那份冻结代码变了，这条防线要看的东西也没了')
+  const keys = [...block[0].matchAll(/^\s*([a-z_]+):\s*'/gm)].map((match) => match[1])
+  assert.ok(keys.length >= 3, `从冻结源里只解析出 ${keys.length} 个键，解析方式怕是错了：${JSON.stringify(keys)}`)
+  const ours = pairFailFrame.options?.reason?.options ?? pairFailFrame.shape?.reason?.options
+  assert.ok(Array.isArray(ours), '拿不到 pair-fail 的 reason 枚举（schema 改了要同步改这条断言）')
+  for (const reason of ours) {
+    assert.ok(keys.includes(reason), `pair-fail 会发出小程序翻译不了的 reason "${reason}"（手机上就是英文原文）`)
+  }
+  // 反向也要有交代：小程序能翻的，中继要么会发、要么明确不发（这里只要求不静默漂移）。
+  assert.deepEqual([...ours].sort(), ['already_used', 'bad_token', 'host_offline', 'invalid_or_expired'], 'reason 集合变了：既可能弹英文给用户，也可能把内部原因写上线')
+})

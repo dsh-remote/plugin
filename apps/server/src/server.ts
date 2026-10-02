@@ -223,8 +223,11 @@ export function createRelay(config: RelayConfig): RelayHandle {
       return
     }
     if (!pairBudget.take(Date.now())) {
-      sendToPeer(peer, pairFailFrameOf('rate_limited'))
-      log.warn('pair budget exhausted (global)', { clientId: peer.clientId })
+      // 手机上 `translatePairFail` 只认四个 reason（F6 的冻结消费面），所以我们不能把
+      // 内部原因 `rate_limited` 直接写进 pair-fail —— 那会把英文字面量弹给用户。
+      // 对用户有意义且成立的只有"这张码现在配不上"，真正的限速原因进日志给运维。
+      sendToPeer(peer, pairFailFrameOf('invalid_or_expired'))
+      log.warn('pair budget exhausted (global)', { clientId: peer.clientId, reason: 'rate_limited' })
       return
     }
     const claimed = state.claim(frame.pairingToken, peer.clientId)

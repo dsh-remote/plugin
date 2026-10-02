@@ -189,7 +189,7 @@ test('配对爆破：单连接用尽尝试次数后 4008 断开', async () => {
   }
 })
 
-test('全局配对配额：一秒内超过预算即 rate_limited，而不是让 6 位码空间被无限枚举', async () => {
+test('全局配对配额：超预算必须被拒，但落到线上的 reason 必须是小程序能翻译的那四个（F6）', async () => {
   const server = await boot({ DRC_PAIR_GLOBAL_PER_SEC: '2', DRC_PAIR_ATTEMPTS_PER_CONN: '100' })
   try {
     const peer = connect(server.url)
@@ -198,8 +198,18 @@ test('全局配对配额：一秒内超过预算即 rate_limited，而不是让 
     await waitFrames(peer, 1)
     for (let i = 0; i < 12; i++) peer.send({ t: 'pair-begin-client', pairingToken: String(200000 + i) })
     const frames = await waitFrames(peer, 12)
-    const limited = frames.filter((f) => f.t === 'pair-fail' && f.reason === 'rate_limited')
-    assert.ok(limited.length >= 5, `超预算的请求必须被拒（实际拒了 ${limited.length} 条）`)
+    const failed = frames.filter((f) => f.t === 'pair-fail')
+    assert.ok(failed.length >= 5, `超预算的请求必须被拒（实际拒了 ${failed.length} 条）`)
+    // 小程序 `translatePairFail` 只认这四个键；发别的（例如内部的 rate_limited）
+    // 就等于把英文字面量弹到用户脸上——这条曾经真的发生过。
+    const TRANSLATABLE = ['invalid_or_expired', 'already_used', 'host_offline', 'bad_token']
+    for (const frame of failed) {
+      assert.ok(TRANSLATABLE.includes(frame.reason), `pair-fail 带了小程序翻译不了的 reason：${String(frame.reason)}`)
+    }
+    // 真实原因不能丢：限速发生在服务端，运维必须在日志里看得见。
+    const logText = server.text()
+    assert.match(logText, /pair budget exhausted/, '配额用尽没进日志：运维只能看到一个"码无效"的假象')
+    assert.match(logText, /rate_limited/, '日志里要写着真正的原因是 rate_limited')
   } finally {
     await server.kill()
   }

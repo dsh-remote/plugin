@@ -174,9 +174,12 @@ export const pairedFrame = z.object({
 })
 
 /** 四个 reason 是 UI 分支条件，小程序有逐字的中文映射表（F6）。 */
+// reason 的取值集合是**冻结消费面**的一部分（F6）：小程序 `mp/core/client.js:translatePairFail`
+// 只认这五个键，多一个就把英文字面量弹到用户脸上。中继侧内部原因（rate_limited 之类）
+// 要记进日志，落到线上的 reason 必须是这张表里的一个。
 export const pairFailFrame = z.object({
   t: z.literal('pair-fail'),
-  reason: z.enum(['invalid_or_expired', 'already_used', 'host_offline', 'bad_token', 'rate_limited']),
+  reason: z.enum(['invalid_or_expired', 'already_used', 'host_offline', 'bad_token']),
 })
 
 export const peerJoinedFrame = z.object({
