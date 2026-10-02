@@ -272,3 +272,47 @@ test('重复的 releaseHold 必须幂等：不许把后端的停止计数打乱'
   await clock.advance(360_000)
   assert.equal(backend.stops, 1, `同一个 requestId 释放了两次，后端却停了 ${backend.stops} 次：幂等性破了会让 sleep 后端的计数不可信`)
 })
+
+/**
+ * 停机纪律。这一条是 e2e 那"60 秒尾巴"的根因，也是真机上会咬人的泄漏：
+ * `releaseHold()` 完全可能在 `stop()` **之后**才到达（超时结算、平台撤销、手机迟迟不点），
+ * 而 `releaseHold → evaluate → ensureTimer` 会再装一个自循环定时器。没有 `stopped` 闸门时
+ * 这个定时器永远清不掉：插件已经拆了 socket，节拍还在续锁——
+ * 表现一是"进程永不退出"（`node e2e/run.mjs` 打完全绿之后要再等一分钟），
+ * 表现二是用户关了远程控制、机器的 caffeinate 还挂着不让睡。
+ */
+test('stop() 之后到达的 releaseHold 不许再装节拍定时器，也不许重新持锁', async () => {
+  const { clock, backend, sleep } = fixture()
+  sleep.setEnabled(true, 300)
+  sleep.hold('ap_1')
+  sleep.hold('ap_2')
+  const startsWhileHolding = backend.starts.length
+  assert.ok(startsWhileHolding >= 1, '夹具自检：挂起期间应当持锁')
+
+  sleep.stop()
+  const startsAfterStop = backend.starts.length
+  const stopsAfterStop = backend.stops
+  assert.equal(stopsAfterStop, 1, 'stop() 必须放锁一次')
+
+  // 停机之后结算一次挂起（审批超时/撤销的真实顺序就是这样）。
+  sleep.releaseHold('ap_1')
+  sleep.releaseHold('ap_2')
+  sleep.markActive()
+  sleep.setEnabled(true, 300)
+  await clock.advance(600_000) // 十个 tick 的时间
+
+  assert.equal(backend.starts.length, startsAfterStop, `停机之后又持了一次锁（starts 从 ${startsAfterStop} 涨到 ${backend.starts.length}）：用户关了远程控制，机器还是不睡`)
+  assert.equal(sleep.snapshot().active, false, '停机之后快照不许谎报"仍在持锁"')
+  assert.equal(clock.pending, 0, `停机之后还剩 ${clock.pending} 个定时器：节拍没停，e2e 进程因此多活一分钟，宿主里则是关不掉的锁`)
+})
+
+test('stop() 之后再 advance 也不许有任何事件被处理（闸门在 evaluate 入口，不在调用方自觉）', async () => {
+  const { clock, backend, sleep } = fixture({ idleReleaseMs: 1 })
+  sleep.setEnabled(true, 0)
+  assert.equal(sleep.snapshot().active, true, '夹具自检：正在持锁')
+  sleep.stop()
+  const before = backend.starts.length + backend.stops
+  await clock.advance(1_000_000)
+  assert.equal(backend.starts.length + backend.stops, before, '停机后节拍仍在驱动拿锁/放锁')
+  assert.equal(clock.pending, 0, '停机后仍有定时器存活')
+})

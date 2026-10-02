@@ -53,6 +53,7 @@ export class KeepAwake {
   private lastRefreshAt = 0
   private readonly holds = new Set<string>()
   private timer: unknown
+  private stopped = false
   private reason: string | undefined
 
   constructor(
@@ -102,6 +103,8 @@ export class KeepAwake {
    * 拆成单独方法是为了能被单测直接驱动（注入假时钟，不真的等 300 秒）。
    */
   evaluate(): KeepAwakeSnapshot {
+    // 停机之后一律惰性：不持锁、不装定时器，只回一份"已经关了"的快照。
+    if (this.stopped) return this.snapshot()
     const now = this.clock.now()
     const idleExpired = this.options.idleReleaseMs > 0 && now - this.lastActiveAt > this.options.idleReleaseMs
     const shouldHold = this.enabled && (this.holds.size > 0 || !idleExpired)
@@ -131,8 +134,17 @@ export class KeepAwake {
     }
   }
 
-  /** 停机：放锁并撤掉节拍。 */
+  /**
+   * 停机：放锁并撤掉节拍。
+   *
+   * `stopped` 这个闸门不是洁癖。审批的 `releaseHold()` 可能在 `stop()` **之后**才到达
+   * （手机端迟迟没点、平台撤销、超时结算三条路都可能），而 `releaseHold → evaluate →
+   * ensureTimer` 会再装一个 `tickMs` 自循环定时器——没有这个标记时它永远清不掉：
+   * 插件已经拆了 socket，节拍还在续锁，表现是"进程永不退出"（e2e 里那 60 秒的尾巴）
+   * 和"用户关了远程控制，caffeinate 还在拦住机器睡眠"。
+   */
   stop(): void {
+    this.stopped = true
     this.stopLock()
     if (this.timer !== undefined) {
       this.clock.clearTimeout(this.timer)
@@ -154,9 +166,10 @@ export class KeepAwake {
   }
 
   private ensureTimer(): void {
-    if (this.timer !== undefined) return
+    if (this.stopped || this.timer !== undefined) return
     this.timer = this.clock.setTimeout(() => {
       this.timer = undefined
+      if (this.stopped) return
       this.tick()
     }, this.options.tickMs)
   }

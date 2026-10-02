@@ -85,6 +85,7 @@ node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须�
 - **D9：apiProxy / typert 两个弱 carrier 整个删掉**，只留 `services` + `mock`。
 - **F6：`pair-fail.reason` 只能是小程序能翻译的四个**。中继的全局限速原因
   （`rate_limited`）只进日志，线上写 `invalid_or_expired`——弹英文给用户是不允许的。
+- **配对二维码不出图片、不离开 DSH**（用户拍板）：`/drc pair` 的文本输出里直接给半块字符二维码 + 可粘贴的 `dshr:/p?…` 一行；`qrImage`/`qrOpen`/`qrAnsi` 默认全关，`qrStyle` 默认 `half`。命令 API 只接受纯文本，所以文本就是主路径，图片是旁路。
 - 环境变量：中继的默认值逐项继承旧值，但**三个变量名改了**
   （`DRC_MAX_AUTH_ATTEMPTS`→`DRC_HOST_AUTH_MAX_ATTEMPTS`、
   `DRC_MAX_PAIR_ATTEMPTS`→`DRC_PAIR_ATTEMPTS_PER_CONN`、
@@ -138,12 +139,14 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
 
 1. **真机审批与提问取证**（§1.1）。需要一个会真的弹审批的会话，以及一个暴露
    `userQuestions` 提供者的宿主版本。
-2. **host 侧 conversations 没有上界**（DESIGN-REVIEW 🟡8）：中继会 idle-drop 会话，
-   但主机的 `ConversationBook` 只在 `voidConversation`/`closeBefore` 时删。
-   现在靠 R1 的 `session-leave` 兜住大部分情形，长期跑仍需一个 TTL。
-3. **e2e 收尾句柄**：`node e2e/run.mjs` 1.2s 就打完全绿，但进程约 60s 后才退出
-   （某个 ~60s 定时器没被 `stop()` 清掉；`sleep-policy` 的 `pendingRefreshMs` 是首要嫌疑）。
-   不影响判定，只让 CI 多等一分钟。
+2. **host 侧通道上界已补**（原 DESIGN-REVIEW 🟡8）：`ConversationBook.pruneStale` 按"最后活动"剪
+   （`conversationIdleTtlSec`，默认 24h）并保留 64 条硬上界，剪枝一定走 `voidConversation`
+   （发 `session-leave` + 通知上层），由 status 的 3s 节拍驱动。四条变异验证锁住：只删内存不发
+   `session-leave`、按创建序剪、没有硬上界、KeepAwake 停机闸门被删——全部被指名的断言杀掉。
+3. **e2e 收尾句柄**：`node e2e/run.mjs` 1.2s 就打完全绿，但进程约 60s 后才退出。
+   KeepAwake 的停机闸门已经补上并有测试（`stop()` 之后到达的 `releaseHold` 不再装节拍），
+   但那 60s 的尾巴还在——**首要嫌疑已排除，剩下的是 e2e 装置里某个 ~60s 的一次性定时器**
+   （`Timeout` 句柄，不是 `PipeWrap`）。不影响判定，只让 CI 多等一分钟。
 4. `docs/SECURITY.md` / `SELF-HOSTING.md` / `MINI-PROGRAM.md` 仍描述旧实现的具体路径与
    帧名，需要按 §3 的偏离重写（`deploy/README.md` 已经改过）。
 5. 慢消费者 1008 与小程序 12s 超时/30s 退避可能形成循环（阈值的取值来自参考实现，

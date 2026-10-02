@@ -17,18 +17,41 @@ const C2H: Direction = 'c2h'
 const H2C: Direction = 'h2c'
 
 export interface Conversation {
-  /** 配对通道 id（`c_xxx`），来自中继的 `paired`/`peer-joined`。 */
   id: string
-  /** 手机侧的安装 id；用于把消息定向回发起者（可为空）。 */
   clientIds: Set<string>
   kC2H: Uint8Array
   kH2C: Uint8Array
   psk: string
   /** host→client 方向的本地序号（中继也会编号，本端这一个是给"顺序可核对"用的）。 */
   seqHost: number
-  /** 这张会话是哪次连接建立的：中继重启后旧会话一律作废（见 generation）。 */
   generation: number
   createdAt: number
+  /** 最近一次有实际收发的时刻；剪枝只看这个，不看 `createdAt`。 */
+  lastActivityAt: number
+}
+
+/**
+ * 一本有界的密钥簿。
+ *
+ * 为什么必须有界（复核 🟡8）：D3 之后配对通道跨断连长存，而**中继侧的空闲 TTL 是 7 天**
+ * （`apps/server/src/config.ts` 的 `DRC_CONV_IDLE_TTL_MS`）。也就是说"中继先把它忘掉"
+ * 这件事几乎不会发生，长期跑的主机会把每一条曾经配对过的通道连同一份 PSK 永远留在内存里，
+ * 并且每次广播都还对它们逐个密封一遍（白做功且随天数线性增长）。
+ * 剪枝只由 host 侧负责，且必须**同时通知中继与上层**（见 `RelayClient.pruneConversations`），
+ * 否则手机会对着一条主机已经不认得的通道说话。
+ */
+export interface PrunePolicy {
+  /** 距今超过这么久而没有任何收发的通道可以剪掉。 */
+  idleTtlMs: number
+  /** 通道数硬上界：超了就从最不活跃的开始剪（剪枝不看创建时刻，看最后活动）。 */
+  maxConversations: number
+}
+
+export const DEFAULT_PRUNE_POLICY: PrunePolicy = {
+  // 一天没有任何收发就认为这条通道不会再被用（手机真回来时会重新扫码，
+  // 而且它会先撞上 `unknown_session` → 中文提示，而不是"永远转圈"）。
+  idleTtlMs: 24 * 3600 * 1000,
+  maxConversations: 64,
 }
 
 export class ConversationBook {
@@ -49,9 +72,18 @@ export class ConversationBook {
       seqHost: 0,
       generation: args.generation,
       createdAt: args.now,
+      lastActivityAt: args.now,
     }
     this.byId.set(args.id, conversation)
     return conversation
+  }
+
+  /** 有实际收发就记一笔活跃（剪枝只看这个时刻）。未知通道返回 false，不顺手建条目。 */
+  touch(id: string, now: number): boolean {
+    const conversation = this.byId.get(id)
+    if (!conversation) return false
+    conversation.lastActivityAt = now
+    return true
   }
 
   get(id: string): Conversation | undefined {
@@ -73,6 +105,33 @@ export class ConversationBook {
       if (conversation.generation < generation) {
         this.byId.delete(id)
         dropped.push(id)
+      }
+    }
+    return dropped
+  }
+
+  /**
+   * 按策略剪枝，返回被剪掉的 id（调用方负责通知中继与上层，见
+   * `RelayClient.pruneConversations`）。
+   *
+   * 两条规则都做，因为它们是两种不同的失控：
+   * - 空闲超 TTL：一条通道一天没有任何收发，就不会再有人用它了；
+   * - 超出硬上界：从**最不活跃**的开始剪。没有这条，一个每天配一次对的用户
+   *   会在两周内攒下 260 条密钥，并且每次广播都对它们逐个密封一遍。
+   */
+  pruneStale(now: number, policy: PrunePolicy = DEFAULT_PRUNE_POLICY): string[] {
+    const dropped: string[] = []
+    for (const [id, conversation] of [...this.byId]) {
+      if (now - conversation.lastActivityAt > policy.idleTtlMs) {
+        this.byId.delete(id)
+        dropped.push(id)
+      }
+    }
+    if (this.byId.size > policy.maxConversations) {
+      const ordered = [...this.byId.values()].sort((a, b) => a.lastActivityAt - b.lastActivityAt)
+      for (const conversation of ordered.slice(0, this.byId.size - policy.maxConversations)) {
+        this.byId.delete(conversation.id)
+        dropped.push(conversation.id)
       }
     }
     return dropped

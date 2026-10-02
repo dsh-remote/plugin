@@ -240,7 +240,9 @@ test('takeOverQuestions=true 时才注册提问提供者；没有那个服务要
   delete bare.userQuestions
   const kernel2 = createServicesKernel(bare, { clock, takeOverQuestions: true, log: () => {} })
   kernel2.attachInteractionSink!({ approval: async () => 'allowed-once', question: async () => null })
-  assert.equal((kernel2.describe() as Record<string, unknown>).questionsFace, 'no userQuestions provider', '接管失败要能说清是"宿主没有这个服务"')
+  const face = String((kernel2.describe() as Record<string, unknown>).questionsFace)
+  assert.match(face, /no registerProvider/, '接管失败要说清是缺服务还是这一代换了 API 名字')
+  assert.match(face, /keys=/, '必须把服务实际暴露的成员报出来：真机上就是靠这个判断"这一代宿主没有注册口"')
 })
 
 test('未知事件类型不映射但要在 kernel.unmappedEventTypes 里看得见', () => {

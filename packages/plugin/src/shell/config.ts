@@ -34,6 +34,8 @@ export interface PluginConfig {
   pairTtlMs: number
   qrImage: boolean
   qrOpen: boolean
+  /** 是否给文本二维码套 ANSI 反色。默认关：宿主按纯文本渲染时会把转义序列打成乱码。 */
+  qrAnsi: boolean
   qrStyle: 'ascii' | 'block' | 'half'
   /** 强 carrier 未到时，等多久才落到弱 carrier。 */
   carrierGraceMs: number
@@ -41,6 +43,16 @@ export interface PluginConfig {
   takeOverQuestions: boolean
   approvalTimeoutSec: number
   listingRefreshSec: number
+  /**
+   * 一条配对通道多久没有任何收发就可以被剪掉（秒）。
+   *
+   * 为什么需要：D3 之后配对通道跨断连长存，而**中继侧的空闲 TTL 是 7 天**
+   * （`DRC_CONV_IDLE_TTL_MS`），"中继先忘掉这条会话"几乎不会发生。不剪的话，
+   * 每天配一次对的主机两周就能攒两百多条密钥，且每次广播都对它们逐个密封一遍。
+   * 剪枝一定同时发 `session-leave`，所以手机不会因此静默转圈——它撞上的是
+   * 中文的"会话已失效，请重新配对"。
+   */
+  conversationIdleTtlSec: number
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
@@ -54,15 +66,19 @@ export const DEFAULT_CONFIG: PluginConfig = {
   mockBridge: false,
   statusFile: path.join(homedir(), '.dsh', 'dsh-remote-control', 'status.json'),
   unarchiveOnPrompt: true,
+  // 配对码只在 `/drc pair` 的文本输出里给（半块字符最接近正方形取景）。
+  // 写图片、开图片查看器都是可选旁路，默认关——配对不该被赶到 DSH 外面去完成。
   pairOnStartSec: 0,
   pairTtlMs: 120_000,
-  qrImage: true,
-  qrOpen: true,
-  qrStyle: 'ascii',
+  qrImage: false,
+  qrOpen: false,
+  qrAnsi: false,
+  qrStyle: 'half',
   carrierGraceMs: 5000,
   takeOverQuestions: false,
   approvalTimeoutSec: 180,
   listingRefreshSec: 15,
+  conversationIdleTtlSec: 86_400,
 }
 
 const loopback = /^wss?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/
@@ -86,6 +102,13 @@ function envSeconds(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
+/** 布尔开关的环境变量写法：`1`/`0`（`true`/`false` 也认）是这里的运维习惯，其余值不猜、退回上层值。 */
+function envFlag(value: string | undefined, fallback: boolean): boolean {
+  if (value === '1' || value === 'true') return true
+  if (value === '0' || value === 'false') return false
+  return fallback
+}
+
 /** 合成三级配置。`injected` 来自 cordis 的 patch 层。 */
 export function readConfig(injected: Partial<PluginConfig> | undefined, env: NodeJS.ProcessEnv = process.env): PluginConfig {
   const merged: PluginConfig = {
@@ -98,11 +121,15 @@ export function readConfig(injected: Partial<PluginConfig> | undefined, env: Nod
   if (fromEnv('DRC_HOST_LABEL')) merged.hostLabel = env.DRC_HOST_LABEL as string
   if (fromEnv('DRC_HOST_ID')) merged.hostId = env.DRC_HOST_ID as string
   if (fromEnv('DRC_PAIR_ON_START_SEC')) merged.pairOnStartSec = envSeconds(env.DRC_PAIR_ON_START_SEC)
-  if (fromEnv('DRC_QR_IMAGE') === '0') merged.qrImage = false
-  if (fromEnv('DRC_QR_OPEN') === '0') merged.qrOpen = false
+  // 这两个开关默认就是关的，所以环境变量只用于**打开**（`=1`）；
+  // 仍然接受 `=0` 显式关闭，覆盖 patch 里开的情况。
+  if (fromEnv('DRC_QR_IMAGE')) merged.qrImage = envFlag(env.DRC_QR_IMAGE, merged.qrImage)
+  if (fromEnv('DRC_QR_OPEN')) merged.qrOpen = envFlag(env.DRC_QR_OPEN, merged.qrOpen)
+  if (fromEnv('DRC_QR_ANSI')) merged.qrAnsi = envFlag(env.DRC_QR_ANSI, merged.qrAnsi)
   if (fromEnv('DRC_QR_STYLE')) {
     const style = env.DRC_QR_STYLE as PluginConfig['qrStyle']
-    merged.qrStyle = ['ascii', 'block', 'half'].includes(style) ? style : 'ascii'
+    // 不猜：值不认识就保留上层（patch 或默认）的值，并由 validateConfig 负责 warn。
+    if (['ascii', 'block', 'half'].includes(style)) merged.qrStyle = style
   }
   if (fromEnv('DRC_MOCK_BRIDGE') === '1') merged.mockBridge = true
   if (fromEnv('DRC_TAKE_OVER_QUESTIONS') === '1') merged.takeOverQuestions = true
@@ -143,6 +170,18 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
     // patch 文件里写 `pairOnStartSec: .inf` 也会走到这里：env 侧已经折掉了，注入侧不能漏。
     problems.push({ level: 'warn', field: 'pairOnStartSec', message: '必须是非负的有限秒数，已折回 0（关闭自动发码）' })
     config.pairOnStartSec = 0
+  }
+  if (config.qrOpen && !config.qrImage) {
+    problems.push({ level: 'warn', field: 'qrOpen', message: 'qrOpen 需要 qrImage=true 才会写图片文件；现在只出文本二维码（这是默认且推荐的路径）' })
+  }
+  if (!['ascii', 'block', 'half'].includes(config.qrStyle)) {
+    problems.push({ level: 'warn', field: 'qrStyle', message: `qrStyle 只认 ascii/block/half，收到 ${JSON.stringify(config.qrStyle)}，已退回 half` })
+    config.qrStyle = 'half'
+  }
+  if (!secondsSchema.safeParse(config.conversationIdleTtlSec).success || config.conversationIdleTtlSec <= 0) {
+    // 0 或非法值**不表示"永不剪枝"**：永不剪枝就是那条无界的密钥簿。夹回默认值并说明。
+    problems.push({ level: 'warn', field: 'conversationIdleTtlSec', message: '必须是正数秒；这里不接受"永不剪枝"（无界的 PSK 簿是复核 🟡8 的原始缺陷），已夹回 86400' })
+    config.conversationIdleTtlSec = 86_400
   }
   if (config.pairOnStartSec > 0) {
     problems.push({

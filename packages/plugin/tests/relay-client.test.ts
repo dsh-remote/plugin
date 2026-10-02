@@ -526,3 +526,52 @@ test('配对槽位簿记与传输层用的是同一张表：pair-ready 对未知
   assert.equal(slots.resolveFor('424242'), null, '夹具自检：本地根本没有这张码')
   assert.ok(logs.some((line) => line.includes('pair-ready for an unknown token')), '服务端为一张我们没发过的码发来了 TTL：这必须留痕，否则配对流程出现了第二份真相')
 })
+
+/**
+ * 配对通道剪枝。D3 让通道跨断连长存，而**中继侧的空闲 TTL 是 7 天**
+ * （`DRC_CONV_IDLE_TTL_MS`），所以"等中继先忘掉"等于永远不剪：
+ * 每天配一次对的主机两周就能攒两百多条 PSK，并且每次广播都对废弃通道逐个密封。
+ * 关键约束是：剪枝必须走 `voidConversation`（发 `session-leave` + 回调上层），
+ * 只删内存就等于复核 R1 那个静默黑洞换了个入口重来一次。
+ */
+test('空闲超时的通道被剪掉时必须发 session-leave 并通知上层（不能只删内存）', async () => {
+  const { client, clock, slots, feed, gone, outOf } = harness()
+  const first = slots.create(120_000)
+  feed({ t: 'peer-joined', sessionId: 'c_old000000001', clientId: 'k1', pairingToken: first.token })
+  // 第二条：刚活动过，不该被剪。
+  await clock.advance(10)
+  const second = slots.create(120_000)
+  feed({ t: 'peer-joined', sessionId: 'c_new000000002', clientId: 'k2', pairingToken: second.token })
+
+  await clock.advance(25 * 3600 * 1000) // 一天多没有任何收发
+  client.send('c_new000000002', { t: PAYLOAD_TYPES.evKeepAwakeState, enabled: true, active: false, platform: 'darwin', backend: 'caffeinate' } as EvPayload)
+  const pruned = client.pruneConversations()
+
+  assert.deepEqual(pruned, ['c_old000000001'], `剪掉的应该是那条一天没动静的，实际剪了 ${JSON.stringify(pruned)}`)
+  assert.equal(client.hasPeer('c_old000000001'), false, '剪了内存却没关通道')
+  assert.deepEqual(gone, ['c_old000000001'], '上层不知道：status.json 与自动补发都不会动')
+  const leave = outOf('session-leave')
+  assert.equal(leave.length, 1, '没发 session-leave：中继会继续把手机的密文转给一条已经没有钥匙的通道')
+  assert.equal((leave[0] as { sessionId: string }).sessionId, 'c_old000000001')
+  assert.equal(client.hasPeer('c_new000000002'), true, '刚有收发的通道被顺手剪了')
+})
+
+test('条数上界是真上界：超出后从最不活跃的开始剪，而不是拒绝新建', () => {
+  const { client, clock, slots, feed } = harness()
+  const policy = { idleTtlMs: 24 * 3600 * 1000, maxConversations: 3 }
+  ;(client as unknown as { options: { prunePolicy?: typeof policy } }).options.prunePolicy = policy
+  for (let index = 0; index < 5; index++) {
+    const slot = slots.create(120_000)
+    feed({ t: 'peer-joined', sessionId: `c_cap${index}`, clientId: `k${index}`, pairingToken: slot.token })
+    void clock.advance(1) // 保证活跃时刻有先后
+  }
+  assert.equal(client.conversationCount, 5, '夹具自检：还没剪之前是 5 条')
+  // 关键一步：让**创建最早**的那条重新活跃。不这样做的话"按最后活动剪"与
+  // "按创建序剪"两种实现给出的结果一模一样，这条断言就什么都没守（变异验证抓出来的）。
+  assert.equal(client.send('c_cap0', { t: PAYLOAD_TYPES.evKeepAwakeState, enabled: true, active: false, platform: 'darwin', backend: 'caffeinate' } as EvPayload), true, '夹具自检：c_cap0 要有收发记录')
+  const pruned = client.pruneConversations()
+  assert.equal(pruned.length, 2, `上界 3 却剪了 ${pruned.length} 条`)
+  assert.deepEqual(pruned, ['c_cap1', 'c_cap2'], `必须按"最后活动"从最不活跃开始剪（刚有收发的 c_cap0 必须留下），实际剪了 ${JSON.stringify(pruned)}`)
+  assert.equal(client.conversationCount, 3)
+  assert.equal(client.hasPeer('c_cap0'), true, '刚发过数据的通道被剪：手机会突然撞上"会话已失效"')
+})

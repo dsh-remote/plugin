@@ -69,6 +69,9 @@ export interface RuntimeHandle {
 
 const SERVICE_NAMES = ['sessions', 'sessionQuery', 'agents', 'agentDefaultModel', 'workspaceRegistry', 'userQuestions']
 
+/** 同时保持的配对通道硬上界：超出就从最不活跃的开始剪（空闲 TTL 之外的第二道闸）。 */
+const MAX_CONVERSATIONS = 64
+
 /** 取证：同一个进程里宿主调用了几次 `apply`（bundle 被重复挂载时能看到）。 */
 const APPLY_COUNT = { n: 0 }
 
@@ -233,6 +236,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
         lastRelayProblem = info.problem
         lastRelayGeneration = info.generation
       },
+      // 配对通道长存（D3）之后必须自己剪枝：中继那边的空闲 TTL 是 7 天，
+      // 不剪就是无界的 PSK 簿 + 每次广播对废弃通道逐个密封。
+      prunePolicy: { idleTtlMs: config.conversationIdleTtlSec * 1000, maxConversations: MAX_CONVERSATIONS },
     })
     runtime = new HostRuntime(port, transport, sleep, clock, {
       listingRefreshMs: config.listingRefreshSec * 1000,
@@ -248,6 +254,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     pairingWindow.tick()
     status.start(() => {
       pairingWindow.tick()
+      relay?.pruneConversations()
       return state()
     })
   }
@@ -685,15 +692,27 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       const argument = String(invocation.rawInput ?? '').trim().toLowerCase()
       if (argument.startsWith('pair')) {
         const pairing = createPairing()
-        if (!pairing) return { kind: 'text', text: '中继还没连上，暂时无法发布配对码。看 status.json 的 relayProblem。' }
-        writePairingImage(pairing.qr, config, log)
-        const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle })
+        if (!pairing) return { kind: 'text', text: '中继还没连上，暂时无法配对。看 status.json 的 relayProblem。' }
+        // **二维码就出在这条命令的文本里**：配对这件事不许把用户赶到另一个窗口去
+        // （写 PNG + `open` 就是把 DSH 里的问题拿到 DSH 外面回答）。文本渲染在
+        // 任何等宽渲染器下都能扫，默认用半块字符（`half`）——一个终端格子约等于
+        // "高 = 2×宽"，所以半块最接近正方形取景。
+        if (config.qrImage) writePairingImage(pairing.qr, config, log)
+        const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle, ansi: config.qrAnsi })
+        const ttlSec = Math.max(0, Math.round((pairing.expiresAt - clock.now()) / 1000))
         return {
           kind: 'text',
           text: [
-            `配对码 ${pairing.token}（${Math.max(0, Math.round((pairing.expiresAt - clock.now()) / 1000))} 秒内有效）`,
-            '在小程序里扫码或手输这 6 位数字。',
+            `配对码 ${pairing.token} · ${ttlSec} 秒内有效 · 一次性`,
+            '小程序里扫码，或手输这 6 位数字。',
+            '',
             terminal,
+            // 二维码扫不出来时（比例字体、吞字形的渲染器）这条路仍然成立：
+            // 小程序的配对页可以直接粘贴这一行。
+            '',
+            pairing.qr,
+            '',
+            config.qrImage ? `另已写出图片 ${pairingImagePath(config.statusFile)}` : '（如需图片版：把 patch 里的 qrImage 设为 true）',
           ].join('\n'),
         }
       }
@@ -751,9 +770,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
 }
 
 /**
- * PNG 优先：命令 API 只接受纯文本结果（没有图片/附件返回类型），
- * 所以把二维码写成文件并交给系统打开，比任何文本渲染都好扫。
- * 文本渲染保留作兜底（PNG 写不出来时仍能在终端里扫）。
+ * 图片版是**可选的旁路**，不是主路径：命令 API 只接受纯文本，所以主路径必须是文本二维码
+ * （把图写到临时目录再用系统查看器打开，等于让用户离开 DSH 去完成一个在 DSH 里的动作）。
+ * 只有 patch 里显式开了 `qrImage` 才写文件；`qrOpen` 再进一步才调用系统打开——
+ * 两个开关默认都关。
  */
 function writePairingImage(
   qrText: string,

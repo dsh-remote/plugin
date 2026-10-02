@@ -18,7 +18,7 @@
 import { WebSocket } from 'ws'
 import { randomBytes } from 'node:crypto'
 import { type CmdPayload, type EvPayload, base64Text, open, parseCmdPayload, parseRelayFrameText, seal } from '@dsh-rc/protocol'
-import { ConversationBook, type PairSlot } from '../core/keys.js'
+import { ConversationBook, DEFAULT_PRUNE_POLICY, type PairSlot, type PrunePolicy } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
 
 export interface RelayClientOptions {
@@ -55,6 +55,8 @@ export interface RelayClientOptions {
   onState: (state: RelayStateInfo) => void
   /** 重连后的第一批帧之前要不要等一会（手机端可能还在旧 convId 上发）。 */
   handshakeTimeoutMs?: number
+  /** 配对通道的剪枝策略（不传用默认：空闲 24h 或超过 64 条）。 */
+  prunePolicy?: PrunePolicy
 }
 
 export interface RelayStateInfo {
@@ -139,8 +141,7 @@ export class RelayClient {
     this.emitState('offline', 'stopped')
   }
 
-  /**
-   * 发布一张新的配对码（PSK 留在本地，中继只拿到 6 位码）。
+  /** 发布一张新的配对码（PSK 留在本地，中继只拿到 6 位码）。
    *
    * 返回 false = socket 不在 OPEN 状态、这条 `pair-begin` **根本没上过网**。
    * 调用方不能把这张码记成"有效"，否则 status.json 会展示一张中继没见过的码，
@@ -150,11 +151,26 @@ export class RelayClient {
     return this.raw({ t: 'pair-begin', pairingToken: slot.token })
   }
 
+  /**
+   * 按策略剪掉"再也不会被用"的配对通道（一天没收发，或超出条数上界）。
+   *
+   * 必须**同时**告诉中继与上层：只删本地内存的话，中继仍会把手机的密文转过来，
+   * 而手机看到的是一个不再有人应答的对端——正是复核 R1 那个静默黑洞的另一个入口。
+   * 所以这里走 `voidConversation`（发 `session-leave` + 回调 `onConversationGone`）。
+   */
+  pruneConversations(now = this.options.clock.now()): string[] {
+    const dropped = this.conversations.pruneStale(now, this.options.prunePolicy ?? DEFAULT_PRUNE_POLICY)
+    for (const id of dropped) this.voidConversation(id)
+    if (dropped.length > 0) this.options.log('pruned stale conversations', { count: dropped.length, remaining: this.conversations.size })
+    return dropped
+  }
+
   /** 向一条配对会话发一条载荷；返回 false = 这条会话已经没了或没人接。 */
   send(conversationId: string, payload: EvPayload): boolean {
     const conversation = this.conversations.get(conversationId)
     if (!conversation) return false
     const record = seal(conversation.kH2C, payload)
+    conversation.lastActivityAt = this.options.clock.now()
     return this.raw({ t: 'enc', sessionId: conversationId, seq: ++conversation.seqHost, ciphertext: record.ciphertext })
   }
 
@@ -311,6 +327,8 @@ export class RelayClient {
       decryptedAny = true
       this.options.onCommand(frame.sessionId, cmd, (frame as { clientId?: string }).clientId)
     }
+    // 有实际收发就不算"闲置"：剪枝看的是最后活动时刻，不是创建时刻。
+    if (decryptedAny) conversation.lastActivityAt = this.options.clock.now()
     if (decryptedAny) this.undecryptable.delete(frame.sessionId)
   }
 

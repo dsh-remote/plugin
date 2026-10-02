@@ -159,13 +159,18 @@ test('redact() 不许泄露 token：短 token 全打星，长 token 只留前 4 
   assert.equal(redact('fakefake'), '****', '边界值 8 个字符必须全打星')
 })
 
-test('qrStyle 非法值回落 ascii：手机上不关事，但终端里会打成乱码', () => {
+test('qrStyle 非法值不猜、保留上层值：把非法样式悄悄换成别的样式，等于运维写了没生效还不知道', () => {
   assert.equal(readConfig(undefined, { DRC_QR_STYLE: 'block' }).qrStyle, 'block', '合法值要透过去')
-  assert.equal(readConfig(undefined, { DRC_QR_STYLE: 'half' }).qrStyle, 'half', 'half 是合法的紧凑样式')
+  assert.equal(readConfig(undefined, { DRC_QR_STYLE: 'half' }).qrStyle, 'half', 'half 是默认的紧凑样式')
+  assert.equal(readConfig(undefined, {}).qrStyle, 'half', '什么都没设时是 half（文本二维码是主路径）')
   for (const garbage of ['svg', 'ASCII', 'unicode', 'svg,png']) {
     const config = readConfig({ qrStyle: 'block' }, { DRC_QR_STYLE: garbage })
-    assert.equal(config.qrStyle, 'ascii', `DRC_QR_STYLE=${JSON.stringify(garbage)} 没回落到默认 ascii：渲染层拿到不认识的样式会打成乱码`)
+    assert.equal(config.qrStyle, 'block', `DRC_QR_STYLE=${JSON.stringify(garbage)} 非法时必须保留上层值，而不是换成一个没人写过的样式`)
   }
+  // 非法值要有人说话：静默保留上层值 = 运维以为改了但其实没改。
+  const injected = base({ qrStyle: 'svg' as unknown as 'ascii' })
+  assert.ok(validateConfig(injected).some((problem) => problem.field === 'qrStyle'), '非法 qrStyle 必须 warn')
+  assert.equal(injected.qrStyle, 'half', 'warn 之后夹回默认样式，渲染层才不会拿到不认识的样式')
 })
 
 test('布尔型环境变量只认显式的 1/0：拼错的值不许把功能打开或关掉', () => {
@@ -228,4 +233,36 @@ test('一份典型配置在合法输入下不该有任何 error：否则插件�
   const problems = validateConfig(config)
   assert.equal(problems.filter((problem) => problem.level === 'error').length, 0, `合法配置报了 error：${JSON.stringify(problems.filter((p) => p.level === 'error'))}`)
   assert.equal(config.hostToken, FAKE_TOKEN, 'token 必须真的从环境变量读到')
+})
+
+/**
+ * 配对二维码的呈现默认值就是一条拍板：**不许把用户赶到 DSH 外面去扫码**。
+ * 命令 API 只接受纯文本，所以主路径必须是文本二维码（半块字符，23×45 左右，
+ * 一个终端格子约等于"高 = 2×宽"，所以半块最接近正方形取景）；
+ * 写 PNG 与调用系统查看器都是显式开启才有的旁路。
+ * 这条断言存在的意义是：哪天有人把默认值改回"写图 + open"，测试会拦住他。
+ */
+test('二维码默认只出文本：qrImage/qrOpen/qrAnsi 默认关，样式默认 half', () => {
+  assert.equal(DEFAULT_CONFIG.qrImage, false, '默认就写图片文件 = 默认走"离开 DSH 打开查看器"那条路')
+  assert.equal(DEFAULT_CONFIG.qrOpen, false, '默认调用系统打开图片：配对动作被搬到了宿主外面')
+  assert.equal(DEFAULT_CONFIG.qrAnsi, false, '默认套 ANSI：宿主按纯文本渲染时会把转义序列打成乱码')
+  assert.equal(DEFAULT_CONFIG.qrStyle, 'half', '默认样式该是最紧凑且不需要 ANSI 的半块')
+})
+
+test('qr* 三个开关的环境变量只认 1/0/true/false，其余值退回上层值（不猜）', () => {
+  assert.equal(readConfig(undefined, { DRC_QR_IMAGE: '1' }).qrImage, true, 'DRC_QR_IMAGE=1 要能打开图片旁路')
+  assert.equal(readConfig({ qrImage: true }, { DRC_QR_IMAGE: '0' }).qrImage, false, '=0 要能关掉 patch 里开的值')
+  assert.equal(readConfig({ qrAnsi: true }, { DRC_QR_ANSI: 'yes' }).qrAnsi, true, '无法识别的值必须退回上层值，而不是静默变成关')
+  assert.equal(readConfig({ qrStyle: 'block' }, { DRC_QR_STYLE: 'fancy' }).qrStyle, 'block', '非法样式在 readConfig 阶段不猜')
+  const injected = base({ qrStyle: 'fancy' as unknown as 'ascii' })
+  const problems = validateConfig(injected)
+  assert.equal(injected.qrStyle, 'half', '非法 qrStyle 要在 validateConfig 里夹回并留痕')
+  assert.ok(problems.some((problem) => problem.field === 'qrStyle'), '夹回必须 warn')
+})
+
+test('qrOpen 而 qrImage 关着是无效组合：要 warn（文本二维码才是主路径）', () => {
+  const problems = validateConfig(base({ qrImage: false, qrOpen: true }))
+  const warn = problems.find((problem) => problem.field === 'qrOpen')
+  assert.ok(warn && warn.level === 'warn', `这个组合什么都没打开，却没人告诉运维：${JSON.stringify(problems.map((problem) => problem.field))}`)
+  assert.equal(validateConfig(base({ qrImage: true, qrOpen: true })).some((problem) => problem.field === 'qrOpen'), false, '两个都开是合法组合，不该刷屏')
 })

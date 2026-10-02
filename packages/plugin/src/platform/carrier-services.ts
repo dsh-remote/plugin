@@ -471,7 +471,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       // 默认关：`ctx.userQuestions` 只允许一个活跃提供者，接管就意味着桌面 UI 不再问。
       questionsFace = 'not-taken-over'
     } else if (!questions || typeof questions.registerProvider !== 'function') {
-      questionsFace = 'no userQuestions provider'
+      // 把服务实际暴露的成员一起报出来：真机上这一代宿主没有 `registerProvider`，
+      // 只写"没有提供者"就分不清是"服务不在"还是"这一代的 API 换了名字"。
+      questionsFace = `no registerProvider (keys=${questions ? shapeOf(questions) : 'service absent'})`.slice(0, 120)
     }
     if (options.takeOverQuestions && questions && typeof questions.registerProvider === 'function') {
       const provider = {
