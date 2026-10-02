@@ -14,10 +14,15 @@ import { loadConfig, type ConfigProblem } from './config.js'
 import { Log } from './log.js'
 import { createRelay } from './server.js'
 
+/** 打包时由 `scripts/bundle-relay.mjs` 以 esbuild define 注入；未打包时这个标识符不存在。 */
+declare const __DRC_VERSION__: string | undefined
+
 function readVersion(): string {
-  // 两种形态都要能拿到版本号：tsc 产物在 dist/src/（往上两层才是包目录），
-  // 单文件 bundle 直接放在 dist/bundle/ 下。都拿不到就用 0.0.0 —— 但要在日志里
-  // 看得出来，否则 `/healthz` 的 version 字段会变成误导。
+  // 顺序很重要：**先读编译期注入的值**。生产部署就是 scp 一个 `main.js`，
+  // 文件旁边没有 package.json，两条相对路径探针都会落空，`/healthz` 的 version
+  // 会变成 `0.0.0`——而运维正是靠这个字段判断线上跑的是哪一版。
+  if (typeof __DRC_VERSION__ === 'string' && __DRC_VERSION__) return __DRC_VERSION__
+  // 开发态（tsc 产物 dist/src/）往上两层才是包目录，还能按文件读。
   for (const candidate of ['../../package.json', '../package.json']) {
     try {
       const pkg = JSON.parse(readFileSync(new URL(candidate, import.meta.url), 'utf8')) as { version?: string }

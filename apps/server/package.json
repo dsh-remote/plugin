@@ -9,9 +9,10 @@
   "main": "./dist/src/main.js",
   "scripts": {
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
-    "build": "pnpm clean && tsc -p tsconfig.json && esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/main.js --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire as __drcRequire } from 'node:module';const require = __drcRequire(import.meta.url);\"",
-    "start": "node dist/src/main.js",
+    "build": "tsc -p tsconfig.json && node ../../scripts/bundle-relay.mjs",
+    "start": "node dist/bundle/main.js",
     "start:bundle": "node dist/bundle/main.js",
+    "start:tsc": "node dist/src/main.js",
     "test": "pnpm build && node --test \"tests/*.test.mjs\""
   },
   "dependencies": {

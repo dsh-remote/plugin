@@ -139,9 +139,15 @@ export class RelayClient {
     this.emitState('offline', 'stopped')
   }
 
-  /** 发布一张新的配对码（PSK 留在本地，中继只拿到 6 位码）。 */
-  publishPairing(slot: PairSlot): void {
-    this.raw({ t: 'pair-begin', pairingToken: slot.token })
+  /**
+   * 发布一张新的配对码（PSK 留在本地，中继只拿到 6 位码）。
+   *
+   * 返回 false = socket 不在 OPEN 状态、这条 `pair-begin` **根本没上过网**。
+   * 调用方不能把这张码记成"有效"，否则 status.json 会展示一张中继没见过的码，
+   * 而手机扫它必然失败（取证 docs/legacy-spec/host-plugin-runtime.md §6.2）。
+   */
+  publishPairing(slot: PairSlot): boolean {
+    return this.raw({ t: 'pair-begin', pairingToken: slot.token })
   }
 
   /** 向一条配对会话发一条载荷；返回 false = 这条会话已经没了或没人接。 */

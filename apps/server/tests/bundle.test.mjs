@@ -75,7 +75,13 @@ test('单文件在没有 node_modules 的空目录里能启动、应答健康检
     const health = await fetch(`http://127.0.0.1:${port}/healthz`).then((r) => r.json())
     assert.equal(health.ok, true)
     assert.equal(health.hosts, 0)
+    // 断言**具体值**而不是"是个字符串"：单文件部署时旁边没有 package.json，
+    // 靠文件探针读版本的实现会静默退化成 `0.0.0`，而旧断言对此完全无感。
+    // `/healthz` 的 version 是运维判断"线上跑的是哪一版"的唯一入口。
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
     assert.equal(typeof health.version, 'string')
+    assert.equal(health.version, pkg.version, `产物报的版本是 ${String(health.version)}，包版本是 ${pkg.version}：版本号没在打包时注入`)
+    assert.match(readFileSync(BUNDLE, 'utf8'), new RegExp(`"${pkg.version}"`), 'define 没有真的落进产物')
 
     const exitCode = new Promise((resolve) => child.on('exit', resolve))
     child.kill('SIGTERM')

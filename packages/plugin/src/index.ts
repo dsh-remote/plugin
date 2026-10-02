@@ -20,6 +20,7 @@ import { type CmdPayload, type EvPayload, buildPairingUri } from '@dsh-rc/protoc
 import { HostRuntime, type RuntimeTransport } from './core/runtime.js'
 import { KeepAwake } from './core/sleep-policy.js'
 import { PairingSlots } from './core/keys.js'
+import { PairingWindow } from './core/pairing-window.js'
 import { RelayClient } from './transport/relay.js'
 import { SystemSleepBackend } from './platform/sleep-posix.js'
 import { createServicesKernel } from './platform/carrier-services.js'
@@ -32,8 +33,23 @@ import type { KernelPort, Clock } from './ports/index.js'
 /** 我们只用到 ctx 的几个成员，所以不硬依赖 @deepseek-ai/cordis 的类型。 */
 interface LooseContext {
   get?<T>(name: string, optional: true): T | undefined
-  inject?(names: string[], callback: (...services: unknown[]) => void): unknown
+  /**
+   * `inject(names, cb)` 的回调参数**不是服务实例，而是已作用域化的上下文**（`c.get(name, true)`
+   * 才拿到服务），并且这条回调 fiber 挂在我们这条 fiber 下面——我们的 fiber 一旦失败，
+   * 它会连带被 dispose，回调就永远不会触发了（真机取证见 `apply()` 末尾那条纪律）。
+   */
+  inject?(names: string[], callback: (scoped: LooseContext) => void): unknown
+  /** 事件注册口；作用域化上下文上才有，对 waterfall 是参与式监听（见 platform/guard.ts）。 */
+  on?(name: string, listener: (...args: unknown[]) => void): unknown
+  off?(name: string, listener: (...args: unknown[]) => void): unknown
   provide?(name: string, value: unknown): unknown
+  /**
+   * cordis 唯一的卸载钩子：`ctx.effect(() => disposer)`。
+   * **没有 `onDispose` 这个东西**——ctx 是 Proxy，读不存在的属性名是"抛错"而不是
+   * 返回 undefined，`?.` 挡不住（真机取证：`cannot get property "onDispose" without inject`
+   * 让 apply 整体失败 → fiber FAILED → 六个 inject 子 fiber 全被 dispose → carrier=none）。
+   */
+  effect?(execute: () => (() => unknown) | void): unknown
   commands?: {
     register?(definition: {
       name: string
@@ -42,7 +58,6 @@ interface LooseContext {
       handler?: (invocation: { commandId: string; rawInput: string }) => Promise<unknown> | unknown
     }): unknown
   }
-  onDispose?(fn: () => void): void
 }
 
 export interface RuntimeHandle {
@@ -53,6 +68,9 @@ export interface RuntimeHandle {
 }
 
 const SERVICE_NAMES = ['sessions', 'sessionQuery', 'agents', 'agentDefaultModel', 'workspaceRegistry', 'userQuestions']
+
+/** 取证：同一个进程里宿主调用了几次 `apply`（bundle 被重复挂载时能看到）。 */
+const APPLY_COUNT = { n: 0 }
 
 /** 默认时钟：真实定时器。测试注入假时钟（见 core/clock.ts）。 */
 export const systemClock: Clock = DEFAULT_SYSTEM_CLOCK
@@ -69,6 +87,16 @@ export function apply(ctx: LooseContext, injected: Partial<PluginConfig> = {}): 
       /* stderr 也可能不可用 */
     }
   }
+  // applyInner 之后碰 ctx 的每一句都必须各自包 try。
+  // 真机取证（status.json 的 probe.fiberStates）：原来这里写的是
+  //   ctx.onDispose?.(() => handle?.stop())
+  // 而 cordis 的 ctx 是 Proxy——读一个**它没有的**属性名不是返回 undefined，是抛错
+  // （reflect.ts 的 get trap：`cannot get property "onDispose" without inject`），
+  // 可选链 `?.` 只挡 null/undefined、挡不住抛错。这一句抛出被 Fiber._reload 捕获，
+  // 我们的 fiber 进 FAILED → _unload 把 applyInner 里登记的六个 ctx.inject 子 fiber
+  // 一起 dispose（probe.injectChildren 全在 @DISPOSED/uid=null）→ 回调永远不触发 →
+  // carrier=none，哪怕 `ctx.get('sessions', true)` 两秒后一直拿得到服务。
+  // 卸载钩子只能用 cordis 真存在的 `ctx.effect`（reflect.ts:220 mixin 了它）。
   try {
     ctx.provide?.('dshRemoteControl', {
       get state(): Record<string, unknown> {
@@ -79,7 +107,24 @@ export function apply(ctx: LooseContext, injected: Partial<PluginConfig> = {}): 
   } catch {
     /* 这一代宿主可能不支持 provide */
   }
-  ctx.onDispose?.(() => handle?.stop())
+  let disposeHooked = false
+  try {
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => () => void handle?.stop())
+      disposeHooked = true
+    }
+  } catch {
+    /* 没有 effect 口的代际 */
+  }
+  if (!disposeHooked && 'onDispose' in ctx) {
+    // `'x' in ctx` 走的是 Proxy 的 has trap，不抛错——这是在这个宿主上"探测一个属性
+    // 到底有没有"的唯一安全姿势；直接点属性就等着抛。测试替身/别的代际才提供 onDispose。
+    try {
+      ;(ctx as { onDispose?: (fn: () => void) => void }).onDispose?.(() => void handle?.stop())
+    } catch {
+      /* 同上 */
+    }
+  }
 }
 
 function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): RuntimeHandle | undefined {
@@ -129,6 +174,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
   // RelayClient 是唯一知道连接此刻怎么样的一方；状态快照读这两个值。
   let lastRelayState: 'online' | 'connecting' | 'offline' = 'connecting'
   let lastRelayProblem: string | undefined
+  let lastRelayGeneration = 0
 
   const transport: RuntimeTransport = {
     reply(conversationId: string, payload: EvPayload): boolean {
@@ -163,10 +209,18 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       onPairReady: (token, ttlMs) => {
         // 服务端权威 TTL：不改写就会提前清掉 PSK，造成"配对成功但全解不开"。
         if (!slots.applyServerTtl(token, ttlMs)) log('pair-ready for an unknown token', { token })
+        pairingWindow.applyServerTtl(token, ttlMs)
       },
-      onPeerJoined: (conversationId) => {
+      onPeerJoined: (conversationId, pairingToken) => {
         runtime?.start()
         void runtime?.pushSessions('peer-joined')
+        // 一次性码用掉了就当场换一张新的（而不是等半程刷新）：第二部手机要的是一张新码，
+        // 多轮真链路取证也靠这条才不用重启宿主。
+        if (pairingToken) {
+          pairingWindow.markConsumed(pairingToken)
+          // status.json 里也不能再挂着这张已经用掉的码：外部脚本只看年龄，不看是否被消费。
+          if (active.pairing?.token === pairingToken) active.pairing = null
+        }
         log('client paired', { conversationId })
       },
       onClientLeft: () => {
@@ -177,6 +231,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       onState: (info) => {
         lastRelayState = info.relay
         lastRelayProblem = info.problem
+        lastRelayGeneration = info.generation
       },
     })
     runtime = new HostRuntime(port, transport, sleep, clock, {
@@ -186,14 +241,26 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       log: (message, fields) => log(message, fields),
     })
     relay.connect()
-    if (config.pairOnStartSec > 0) publishPairing()
-    status.start(() => state())
+    // 自动发码走 pairingWindow，而不是启动时发一张就完事：
+    // 一张码是一次性的，用完/中继重启/过半程都得换一张（判据见 core/pairing-window.ts）。
+    // tick 挂在 status 的 3 秒节拍上（旧实现就是挂在这里），并且**先 tick 一次**，
+    // 让 `pairOnStartSec>0` 的实例一起来就能看到 status.json 里有码。
+    pairingWindow.tick()
+    status.start(() => {
+      pairingWindow.tick()
+      return state()
+    })
   }
 
-  const publishPairing = (): { qr: string; token: string; psk: string; expiresAt: number } | null => {
+  const publishPairing = (ttlMs = config.pairTtlMs): { qr: string; token: string; psk: string; expiresAt: number } | null => {
     if (!relay) return null
-    const slot = slots.create(config.pairTtlMs)
-    relay.publishPairing(slot)
+    const slot = slots.create(ttlMs)
+    // 发不出去就不算一张码：`raw()` 对非 OPEN 的 socket 是静默丢弃，
+    // 只记本地会留下"status.json 显示有效、中继那边根本没收到"的死码（取证 §6.2）。
+    if (!relay.publishPairing(slot)) {
+      log('pairing published to a socket that is not open', { token: slot.token })
+      return null
+    }
     const qr = buildPairingUri({ server: config.serverUrl, psk: slot.psk, hostLabel: config.hostLabel, token: slot.token })
     return { qr, token: slot.token, psk: slot.psk, expiresAt: slot.expiresAt }
   }
@@ -211,6 +278,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       pairing: describeActivePairing(),
       keepAwake: snapshot,
       kernel: kernel?.describe() ?? null,
+      probe,
       // token 永远不出现真值；这条有测试锁住。
       hostToken: undefined,
       hostTokenShape: config.hostToken ? redact(config.hostToken) : undefined,
@@ -221,14 +289,21 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
   }
 
   const active = { pairing: null as { qr: string; token: string; expiresAt: number } | null }
+  /**
+   * status.json 里的 `pairing` 必须是**窗口正在维护的那一张**（它的 QR 才在 active.pairing 里），
+   * 不是 `slots.latest()`：手工 /drc pair 之后自动刷新会发新的一张，两者一旦分叉，
+   * 外部脚本读到的是"一张没有二维码的码"。用 `resolveFor` 取密钥顺带把已过期的剔掉。
+   */
   function describeActivePairing(): Record<string, unknown> | null {
-    const slot = slots.latest()
+    const shown = active.pairing
+    if (!shown) return null
+    const slot = slots.resolveFor(shown.token)
     if (!slot) return null
     return {
       token: slot.token,
       psk: slot.psk,
       expiresAt: new Date(slot.expiresAt).toISOString(),
-      qr: active.pairing?.qr ?? '',
+      qr: shown.qr,
       ageSec: Math.max(0, Math.round((clock.now() - slot.createdAt) / 1000)),
     }
   }
@@ -240,23 +315,58 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     return lastRelayProblem
   }
 
-  const wrappedPublish = (): ReturnType<typeof publishPairing> => {
-    const created = publishPairing()
-    if (created) active.pairing = { qr: created.qr, token: created.token, expiresAt: created.expiresAt }
+  const wrappedPublish = (ttlMs = config.pairTtlMs): ReturnType<typeof publishPairing> => {
+    const created = publishPairing(ttlMs)
+    if (created) {
+      active.pairing = { qr: created.qr, token: created.token, expiresAt: created.expiresAt }
+      // 手工发的那张也要让窗口认领，否则窗口以为"没有活动码"又发一张。
+      pairingWindow.adopt({ token: created.token, createdAt: clock.now(), expiresAt: created.expiresAt })
+    }
     return created
   }
 
   const createPairing = (): ReturnType<typeof wrappedPublish> => wrappedPublish()
+
+  /**
+   * "让屏幕上永远有一张能用的码"这条策略（四条 stale 判据 + online 闸门，
+   * 逐条动机见 `core/pairing-window.ts` 文件头）。tick 挂在 status 的 3 秒节拍上。
+   */
+  const pairingWindow = new PairingWindow(
+    {
+      clock,
+      relayOnline: () => lastRelayState === 'online' && relay !== undefined,
+      generation: () => lastRelayGeneration,
+      publish: (ttlMs) => {
+        const created = wrappedPublish(ttlMs)
+        if (!created) return null
+        return { token: created.token, createdAt: clock.now(), expiresAt: created.expiresAt }
+      },
+      log,
+    },
+    config.pairOnStartSec,
+  )
 
   // ── 载体探测：services > apiproxy > (mock) ─────────────────────────
   const collected: Record<string, unknown> = {}
   const hasServices = (): boolean => typeof collected.sessions === 'object' && collected.sessions !== null
   const apiProxyOf = (): unknown => collected.apiProxy
 
+  const probe: Record<string, string> = {}
+  const injectFired: string[] = []
+  let hasGet = true
+  let hasInject = true
   let decided = false
+  /** 取证：`ctx.inject` 返回的子 fiber，用来区分"依赖没满足"和"子 fiber 已被拆掉"。 */
+  const injectChildren: [string, unknown][] = []
+  /** 取证：我们这条 fiber 的生命周期轨迹（含进入 UNLOADING/DISPOSED 时的调用栈）。 */
+  const states: string[] = []
   const tryStart = (): void => {
-    if (decided || runtime) return
+    if (runtime) return
     if (hasServices()) {
+      if (decided) {
+        // 服务热补丁进同一个对象：runtime 已经持有它的引用，不需要重启。
+        return
+      }
       decided = true
       start(createServicesKernel(collected as never, { log, takeOverQuestions: config.takeOverQuestions, clock }))
       return
@@ -270,23 +380,261 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     }
   }
 
-  for (const name of SERVICE_NAMES) {
+  /** 关键成员先验：收下不合法的对象比不收更糟（旧实现踩过的坑）。 */
+  const requiredMember: Record<string, string> = { sessions: 'list', sessionQuery: 'listSessions', agents: 'get' }
+  /** 把服务对象的前几个成员拼成可读指纹；这是取证，绝不许抛。 */
+  const keysOf = (value: unknown): string => {
     try {
-      const found = ctx.get?.(name, true)
-      if (found) collected[name.toLowerCase()] = found
-    } catch {
-      /* 这一代宿主没这个服务 */
+      return Object.keys(value as object).slice(0, 6).join('|')
+    } catch (error) {
+      return `keys threw: ${String((error as Error)?.message ?? error).slice(0, 60)}`
+    }
+  }
+  /** 一个候选来源里取出 `name`：先按"作用域上下文"读，读不到再按"直接就是服务"读。 */
+  const pickFrom = (source: unknown, name: string): unknown => {
+    if (!source || typeof source !== 'object') return undefined
+    const asContext = source as LooseContext
+    if (typeof asContext.get === 'function') {
+      try {
+        const got = asContext.get(name, true)
+        if (got) return got
+      } catch {
+        /* 这个候选没有该服务 */
+      }
     }
     try {
-      ctx.inject?.([name], ((...services: unknown[]) => {
-        const value = services[0]
-        if (!value) return
-        // 晚到的服务热补丁进同一个对象：runtime 已经持有它的引用，不需要重启。
-        Object.assign(collected, { [name.toLowerCase()]: value })
-        tryStart()
-      }) as never)
+      // 直接点属性在 cordis 上下文上只在"这个名字已注入本 fiber"时成立，否则 get trap
+      // 抛错（不是返回 undefined）——所以这里必须包 try。
+      return (source as Record<string, unknown>)[name]
     } catch {
-      /* inject 不可用就靠 get 的快照 */
+      return undefined
+    }
+  }
+  /**
+   * 收下探到的服务并尝试启动；`via` 只用于把"从哪条路拿到的"记进 probe。
+   * 晚到的服务热补丁进同一个对象：runtime 已经持有它的引用，不需要重启。
+   */
+  const accept = (name: string, value: unknown, source: unknown, via: string): boolean => {
+    if (!value || typeof value !== 'object') return false
+    const member = requiredMember[name]
+    if (member && typeof (value as Record<string, unknown>)[member] !== 'function') {
+      probe[name] = `object without ${member}()`
+      return false
+    }
+    collected[name] = value
+    const asContext = source as LooseContext | undefined
+    if (name === 'sessions' && typeof collected.on !== 'function' && typeof asContext?.on === 'function') {
+      collected.on = asContext.on.bind(asContext)
+      if (typeof asContext.off === 'function') collected.off = asContext.off.bind(asContext)
+    }
+    probe[name] = `${via}(${keysOf(value)})`
+    tryStart()
+    return true
+  }
+
+  for (const name of SERVICE_NAMES) {
+    try {
+      if (typeof ctx.get !== 'function') hasGet = false
+      const found = ctx.get?.(name, true)
+      probe[name] = found ? (typeof found === 'object' ? `object(${Object.keys(found as object).slice(0, 6).join('|')})` : typeof found) : 'none'
+      if (found) collected[name] = found
+    } catch (error) {
+      // 这一代宿主没这个服务
+      probe[name] = `get threw: ${String((error as Error)?.message ?? error).slice(0, 60)}`
+    }
+    try {
+      // 关键：`ctx.inject(names, cb)` 的回调参数**不是服务实例，而是已作用域化的上下文**，
+      // 要在回调里 `c.get(name, true)` 才拿得到东西（第一版按"回调参数=服务"写，
+      // 结果六个服务全 none、carrier=none —— 这个形状错了比抛错更难查）。
+      const child = ctx.inject?.([name], ((...cbArgs: unknown[]) => {
+        injectFired.push(`${name}(args=${cbArgs.length})`)
+        probe.injectFiredLive = injectFired.join('|')
+        // 回调整段包 try：这条子 fiber 的 apply 抛出会让 cordis 把它连同我们其它
+        // 五条探测一起 dispose 掉，代价是"服务明明在、carrier 却起不来"。
+        try {
+          // 取证：不同代际这里拿到的可能是"作用域上下文"，也可能直接就是服务。逐个试。
+          let value: unknown
+          let from: unknown
+          for (const candidate of [cbArgs[0], ...cbArgs, ctx]) {
+            value = pickFrom(candidate, name)
+            if (value) {
+              from = candidate
+              break
+            }
+          }
+          if (accept(name, value, from, 'via inject')) return
+          if (!value) probe[name] = `${probe[name] ?? 'none'} (inject fired, empty)`
+        } catch (error) {
+          probe[`injectThrew:${name}`] = String((error as Error)?.message ?? error).slice(0, 160)
+        }
+      }) as never)
+      if (child !== undefined) injectChildren.push([name, child])
+    } catch (error) {
+      hasInject = false
+      probe[name] = `${probe[name] ?? 'none'}; inject threw: ${String((error as Error)?.message ?? error).slice(0, 60)}`
+    }
+  }
+  probe.hasGet = String(hasGet)
+  probe.hasInject = String(hasInject)
+  // 一次性取证：这一代宿主到底给了 ctx 什么。猜"名字对不对"之前先看形状。
+  probe.ctxKeys = Object.keys(ctx).slice(0, 40).join('|')
+  probe.ctxProtoKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(ctx) ?? {}).slice(0, 40).join('|')
+  for (const candidate of ['sessions', 'agents']) {
+    try {
+      const strict = (ctx as { get?: (n: string) => unknown }).get?.(candidate)
+      probe[`strictGet:${candidate}`] = strict ? 'object' : 'undefined'
+    } catch (error) {
+      probe[`strictGet:${candidate}`] = `threw: ${String((error as Error)?.message ?? error).slice(0, 70)}`
+    }
+  }
+  // 有些代际要靠 effect/fiber 才看得到服务；有就登记一条"等一会再看"的复查。
+  // 注意 `injectFiredLive`（而不是任何在 apply 同步段里取的快照）才是"回调到底有没有
+  // 触发"的证据：inject 回调最快也要一个微任务之后才跑，同步取的那一笔永远是 never。
+  probe.hasEffect = String(typeof (ctx as { effect?: unknown }).effect === 'function')
+  probe.hasFiber = String(typeof (ctx as { fiber?: unknown }).fiber === 'function' || (ctx as { fiber?: unknown }).fiber !== undefined)
+
+  // ── 取证（只记录现场，不改变行为）────────────────────────────────
+  // 每一次猜错都要付一次"重启 Harness"的代价，所以把定根因需要的东西一次拿全：
+  // 这个 cordis root 到底注册了哪些服务、我们的 fiber 挂在哪棵树上、谁调用了 apply。
+  const asRecord = (value: unknown): Record<string | symbol, unknown> =>
+    value && typeof value === 'object' ? (value as Record<string | symbol, unknown>) : {}
+  const liveFiberChain = (): string[] => {
+    const chain: string[] = []
+    const seen = new Set<unknown>()
+    let fiber: unknown = asRecord(ctx).fiber
+    while (fiber && !seen.has(fiber) && chain.length < 12) {
+      seen.add(fiber)
+      const record = asRecord(fiber)
+      const entryId = asRecord(record.entry).id
+      // state 数字即 cordis FiberState：0 PENDING / 1 LOADING / 2 ACTIVE / 3 DISPOSED / 4 UNLOADING
+      chain.push(`${String(record.name ?? '?')}#${String(record.uid ?? 'null')}@${String(record.state ?? '?')}${entryId ? `[${String(entryId)}]` : ''}`)
+      fiber = asRecord(asRecord(record.parent).fiber === record.fiber ? null : asRecord(record.parent).fiber)
+    }
+    return chain
+  }
+  const liveStore = (): string[] => {
+    const store = asRecord(asRecord(ctx).reflect).store
+    const names: string[] = []
+    for (const key of Object.getOwnPropertySymbols(asRecord(store))) {
+      const impl = asRecord(asRecord(store)[key])
+      names.push(`${String(impl.name)}@${String(asRecord(impl.fiber).state ?? '?')}`)
+    }
+    return names
+  }
+  const liveIsolate = (): string[] => {
+    const map = asRecord(ctx)[Symbol.for('cordis.isolate')]
+    // isolate map 是 Object.create(null) 的**原型链**，每条 loader entry 自己那一层
+    // 往往是空的——只数 own key 会永远得到空串，必须用 for...in 连继承的一起看。
+    const names: string[] = []
+    for (const key in map as object) names.push(`${key}=${String(asRecord(map)[key])}`)
+    return names
+  }
+  const collectForensics = (prefix: string): void => {
+    try {
+      probe[`${prefix}store`] = liveStore().join('|').slice(0, 900)
+      probe[`${prefix}isolate`] = liveIsolate().join(',').slice(0, 900)
+      probe[`${prefix}props`] = Object.getOwnPropertyNames(asRecord(asRecord(asRecord(ctx).reflect).props)).slice(0, 160).join('|')
+      probe[`${prefix}fibers`] = liveFiberChain().join(' <- ').slice(0, 600)
+      for (const name of SERVICE_NAMES) {
+        const got = ctx.get?.(name, true)
+        probe[`${prefix}get:${name}`] = got ? `object(${Object.keys(got as object).slice(0, 5).join('|')})` : 'undefined'
+      }
+    } catch (error) {
+      probe[`${prefix}forensicsThrew`] = String((error as Error)?.message ?? error).slice(0, 120)
+    }
+  }
+  collectForensics('t0:')
+  probe.injectFiredLive = injectFired.join('|') || 'never'
+  // 生命周期取证：`internal/status` 是 emit-mode（cordis events.d.ts:219），订阅安全。
+  // 只记自己这条 fiber；进入 UNLOADING/DISPOSED 时抓一次栈，看清是谁把我们拆掉的。
+  APPLY_COUNT.n += 1
+  probe.applyCount = `${String(APPLY_COUNT.n)}@${clock.now()}`
+  try {
+    ctx.on?.('internal/status', ((fiber: unknown, oldState: unknown) => {
+      if (asRecord(fiber) !== asRecord(ctx).fiber) return
+      const record = asRecord(fiber)
+      const state = Number(record.state ?? -1)
+      const entry = asRecord(record.entry)
+      const error = record._error
+      const tail = `${error ? ` err=${String((error as Error)?.name ?? '')}:${String((error as Error)?.message ?? error).slice(0, 200)} @${String((error as Error)?.stack ?? '').split('\n').slice(1, 4).map((line) => line.trim().replace(/^at\s+/, '')).join(' <- ')}` : ''}${
+        state >= 4
+          ? ` stack=${String(new Error('drc-dispose').stack ?? '')
+              .split('\n')
+              .slice(1, 7)
+              .map((line) => line.trim().replace(/^at\s+/, ''))
+              .join(' <- ')
+              .slice(0, 400)}`
+          : ''
+      }`
+      states.push(`${clock.now()}:${String(oldState)}->${String(state)} entry=${String(entry.id ?? '?')}/disabled=${String(entry.disabled ?? '?')}${tail}`)
+      probe.fiberStates = states.join(' | ').slice(0, 1800)
+    }) as never)
+  } catch (error) {
+    probe.statusWatch = `threw: ${String((error as Error)?.message ?? error).slice(0, 80)}`
+  }
+  probe.processShape = [
+    String((process as unknown as { type?: string }).type ?? ''),
+    String((process.versions as unknown as { electron?: string }).electron ?? 'no-electron'),
+    String(process.argv[2] ?? '').split('/').pop() ?? '',
+    String(process.argv[3] ?? '').split('/').pop() ?? '',
+  ].join('|')
+  // 谁调用 apply：栈里能看出是 cordis-plugin-loader 还是别的包装层。
+  probe.applyStack = String(new Error('drc-probe').stack ?? '')
+    .split('\n')
+    .slice(1, 9)
+    .map((line) => line.trim().replace(/^at\s+/, ''))
+    .join(' <- ')
+    .slice(0, 900)
+  try {
+    const loader = ctx.get?.('loader', true) as { entries?: () => Iterable<unknown> } | undefined
+    if (typeof loader?.entries === 'function') {
+      const rows: string[] = []
+      for (const entry of loader.entries()) {
+        const options = asRecord(asRecord(entry).options)
+        rows.push(`${String(options.id ?? '?')}=${String(options.name ?? '?')}`)
+        if (rows.length >= 300) break
+      }
+      probe.loaderRows = rows.join(',').slice(0, 2600)
+    } else {
+      probe.loaderRows = 'no-loader-service'
+    }
+  } catch (error) {
+    probe.loaderRows = `threw: ${String((error as Error)?.message ?? error).slice(0, 80)}`
+  }
+  // 服务可能晚到：8s / 25s / 60s 各复查一次，把"根本没提供"和"提供得晚"分开。
+  for (const delayMs of [8_000, 25_000, 60_000]) {
+    try {
+      clock.setTimeout(() => {
+        probe.injectFiredLive = injectFired.join('|') || 'never'
+        probe.injectFired = probe.injectFiredLive
+        collectForensics(`t${delayMs}:`)
+        probe.injectChildren = injectChildren
+          .map(([childName, child]) => {
+            const record = asRecord(child)
+            const store = asRecord(record.store)
+            return `${childName}@${String(record.state ?? '?')}/uid${String(record.uid ?? 'null')}${store ? `[${Object.keys(store).join('|')}]` : ''}`
+          })
+          .join(' ')
+        probe.fiberStates = states.join(' | ').slice(0, 1800)
+        // 兜底：inject 子 fiber 若因任何原因没被唤醒，直接查 store——`ctx.get` 不要求
+        // inject，真机取证显示它在同一个 ctx 上一直是拿得到的。
+        for (const name of SERVICE_NAMES) {
+          if (collected[name]) {
+            // 已经收下了，但"从哪条路收的"那一笔可能没写进去（accept 里的取证写入是尽力而为）。
+            if (!String(probe[name] ?? '').startsWith('via')) probe[name] = `via held(${keysOf(collected[name])})`
+            continue
+          }
+          try {
+            accept(name, ctx.get?.(name, true), ctx, 'via get@poll')
+          } catch {
+            /* 还是没有这个服务 */
+          }
+        }
+        tryStart()
+        status.write({ ...state(), carrier: startedCarrier || 'none', probe })
+      }, delayMs)
+    } catch {
+      /* 时钟不可用就少一次复查，不影响主流程 */
     }
   }
   try {
@@ -296,9 +644,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     /* desktop 态通常没注册 apiProxy */
   }
   try {
-    ctx.inject?.(['apiProxy'], ((...services: unknown[]) => {
-      if (!services[0]) return
-      collected.apiProxy = services[0]
+    ctx.inject?.(['apiProxy'], ((scoped: LooseContext) => {
+      const value = scoped?.get?.('apiProxy', true)
+      if (!value) return
+      collected.apiProxy = value
       if (!decided) {
         // 先不抢跑：等宽限期，让 services 有机会先到。
         clock.setTimeout(tryStart, config.carrierGraceMs)
@@ -318,39 +667,70 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       .catch(() => {})
   }
   if (!runtime) {
-    status.write({ ...state(), carrier: 'none', reason: 'no-carrier' })
+    status.write({ ...state(), carrier: 'none', reason: 'no-carrier', probe })
     log('no kernel carrier available', { hint: '需要 sessions/apiProxy 服务，或把 mockBridge 打开做开发' })
   }
 
   // ── /drc 命令 ──────────────────────────────────────────────────────
+  // 拿 commands 的方式和拿内核服务完全一样：`ctx.commands` 这种"直接点属性"的读法在
+  // 真 cordis 上下文上是**抛错**的（属性名不在本 fiber 的 inject 集合里，见 reflect.ts
+  // 的 get trap），所以先试 `ctx.get('commands', true)`，再用 `ctx.inject` 等晚到。
+  const commandDefinition = {
+    name: 'drc',
+    description: 'DSH 远程控制：发布配对二维码、查看中继与内核接合状态',
+    input: { hint: 'pair | status | unpair' },
+    handler: async (invocation: { commandId: string; rawInput: string }) => {
+      const argument = String(invocation.rawInput ?? '').trim().toLowerCase()
+      if (argument.startsWith('pair')) {
+        const pairing = createPairing()
+        if (!pairing) return { kind: 'text', text: '中继还没连上，暂时无法发布配对码。看 status.json 的 relayProblem。' }
+        writePairingImage(pairing.qr, config, log)
+        const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle })
+        return {
+          kind: 'text',
+          text: [
+            `配对码 ${pairing.token}（${Math.max(0, Math.round((pairing.expiresAt - clock.now()) / 1000))} 秒内有效）`,
+            '在小程序里扫码或手输这 6 位数字。',
+            terminal,
+          ].join('\n'),
+        }
+      }
+      if (argument.startsWith('unpair')) {
+        for (const id of relay?.conversationIds() ?? []) relay?.voidConversation(id)
+        return { kind: 'text', text: '已解除所有配对；手机端会显示"主机已断开，请重新配对"。' }
+      }
+      return { kind: 'text', text: JSON.stringify(state(), null, 2) }
+    },
+  }
+  let commandsTaken = false
+  const takeCommands = (source: unknown): void => {
+    if (commandsTaken || !source || typeof source !== 'object') return
+    const holder = source as { register?: (definition: unknown) => unknown }
+    if (typeof holder.register !== 'function') return
+    holder.register(commandDefinition)
+    commandsTaken = true
+    probe.commands = 'registered'
+  }
   try {
-    ctx.commands?.register?.({
-      name: 'drc',
-      description: 'DSH 远程控制：发布配对二维码、查看中继与内核接合状态',
-      input: { hint: 'pair | status | unpair' },
-      handler: async (invocation) => {
-        const argument = String(invocation.rawInput ?? '').trim().toLowerCase()
-        if (argument.startsWith('pair')) {
-          const pairing = createPairing()
-          if (!pairing) return { kind: 'text', text: '中继还没连上，暂时无法发布配对码。看 status.json 的 relayProblem。' }
-          writePairingImage(pairing.qr, config, log)
-          const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle })
-          return {
-            kind: 'text',
-            text: [
-              `配对码 ${pairing.token}（${Math.max(0, Math.round((pairing.expiresAt - clock.now()) / 1000))} 秒内有效）`,
-              '在小程序里扫码或手输这 6 位数字。',
-              terminal,
-            ].join('\n'),
-          }
-        }
-        if (argument.startsWith('unpair')) {
-          for (const id of relay?.conversationIds() ?? []) relay?.voidConversation(id)
-          return { kind: 'text', text: '已解除所有配对；手机端会显示"主机已断开，请重新配对"。' }
-        }
-        return { kind: 'text', text: JSON.stringify(state(), null, 2) }
-      },
-    })
+    // 假的/非 cordis 上下文（单元测试）直接把 commands 挂在 ctx 上；真 cordis 上这一读
+    // 会抛，所以整段包 try——它不是主路径，只是兼容测试与更老一代的宿主形状。
+    takeCommands(ctx.commands)
+  } catch {
+    /* cordis 上下文上没有注入过的属性名读不得：走下面两条路 */
+  }
+  try {
+    takeCommands(ctx.get?.('commands', true))
+  } catch {
+    /* 这一代宿主没这个服务 */
+  }
+  try {
+    const child = ctx.inject?.(['commands'], ((...cbArgs: unknown[]) => {
+      for (const candidate of [cbArgs[0], ...cbArgs, ctx]) {
+        takeCommands(pickFrom(candidate, 'commands'))
+        if (commandsTaken) break
+      }
+    }) as never)
+    if (child !== undefined) injectChildren.push(['commands', child])
   } catch {
     /* 没有 commands 服务的代际：静默跳过，配对仍可由 pairOnStartSec 自动发布 */
   }
