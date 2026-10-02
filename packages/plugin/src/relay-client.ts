@@ -56,6 +56,8 @@ export class RelayClient {
   private pendingPairs = new Map<string, { psk: string; expiresAt: number }>()
   /** TTL the relay reported for the last pairing (authoritative). */
   lastPairTtlMs: number | null = null
+  /** Why the last peer-joined could not be served (null when healthy). */
+  lastPairProblem: string | null = null
   /**
    * Bumped on every successful (re)authentication. A relay restart wipes its
    * pending-pair table, so anything we published before is dead — callers use
@@ -163,10 +165,15 @@ export class RelayClient {
         this.say('relay auth failed — check DRC_HOST_TOKEN / serverUrl')
         return
       case 'pair-ready':
-        // The SERVER owns the expiry. Assuming our requested TTL is
-        // authoritative is how status.json ended up advertising a code that
-        // had already expired relay-side.
-        if (typeof f.ttlMs === 'number' && f.ttlMs > 0) this.lastPairTtlMs = f.ttlMs
+        // The SERVER owns the expiry. Recording our REQUESTED ttl is how a
+        // code got swept host-side while the relay still honoured it: the
+        // client then paired successfully and the host had already forgotten
+        // the PSK, so it dropped the peer and no payload ever came back.
+        if (typeof f.ttlMs === 'number' && f.ttlMs > 0) {
+          this.lastPairTtlMs = f.ttlMs
+          const rec = this.pendingPairs.get(f.pairingToken)
+          if (rec) rec.expiresAt = Date.now() + f.ttlMs
+        }
         this.say(`pairing token ${f.pairingToken} ready (server ttl ${f.ttlMs}ms)`)
         return
       case 'peer-joined': {
@@ -197,9 +204,15 @@ export class RelayClient {
           }
         }
         if (!psk) {
+          // Loud, not silent: this used to look like "paired but nothing works".
+          this.lastPairProblem =
+            `peer-joined for ${f.sessionId} had no matching PSK ` +
+            `(token=${usedToken ?? 'none'}, pending=${this.pendingPairs.size}). ` +
+            'The client will be unable to decrypt anything.'
           this.say('peer-joined without pending pair — dropping', f.sessionId)
           return
         }
+        this.lastPairProblem = null
         this.conversations.set(f.sessionId, {
           sessionId: f.sessionId,
           kC2H: derivePskKey(psk, 'c2h', f.sessionId),

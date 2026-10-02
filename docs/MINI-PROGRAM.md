@@ -111,3 +111,23 @@ node --test e2e/mp-client.test.mjs  # 8 项：真实 drc.js + wx shim 跑完整�
 - 多主机切换（现在是单配对，重新配对会覆盖）
 - 消息历史持久化（小程序只保留本次会话的内存流）
 - 无 WebSocket 的容器下没有替代传输（协议是 WS-only，不打算再造一套）
+
+## 真实链路端到端测试
+
+`e2e/live-e2e.mjs` 跑的是**三个真实**：真实的小程序客户端代码（`utils/drc.js` + wx shim）、
+真实的中继（默认 `wss://drc.provid.cc`）、真实的内核（本机 Harness 里的插件）。
+
+与 `scripts/verify-deployment.mjs` 的关键区别：**它绝不退化成 mock 主机** ——
+拿不到真实配对码就直接失败。假通过比失败更贵，之前正是"自建主机模式"掩盖了
+"配对成功但主机把 peer 丢了"这类真实故障。
+
+```sh
+node e2e/live-e2e.mjs                      # 完整闭环（含真实发一条指令）
+node e2e/live-e2e.mjs --no-prompt          # 只验证配对/列表/防休眠/零知识
+node e2e/live-e2e.mjs --rounds 3           # 连跑 3 轮
+node e2e/live-e2e.mjs --session <id>       # 指定会话（可测归档会话自动恢复）
+node e2e/live-e2e.mjs --pair <码> --qr '<dshr:…>'   # 手动给码（不依赖自动发布）
+```
+
+它会自动避开**已消费**的配对码（码是一次性的，status.json 按定时器刷新而非按消费刷新），
+并在失败时打印事件轨迹 —— 这是定位"服务端显示 paired、客户端却没反应"的关键。

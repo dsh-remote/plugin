@@ -66,6 +66,8 @@
         style="flex:1;margin-right:16rpx;"
         placeholder="输入指令…"
         value="{{inputText}}"
+        cursor-spacing="24"
+        hold-keyboard="{{true}}"
         confirm-type="send"
         bindinput="onInput"
         bindconfirm="onSend" />

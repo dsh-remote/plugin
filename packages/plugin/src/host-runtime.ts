@@ -323,6 +323,9 @@ export class HostRuntime {
         carrier: this.bridge.carrier,
         lastError: this.bridge.lastError ?? null,
       },
+      // A dropped peer looks exactly like "paired but dead" from the phone,
+      // so surface the reason here instead of only in stdout.
+      relayProblem: this.relay.lastPairProblem,
     }
   }
 }

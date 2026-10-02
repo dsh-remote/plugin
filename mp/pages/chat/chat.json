@@ -1,4 +1,5 @@
 {
   "navigationBarTitleText": "对话",
-  "usingComponents": {}
+  "usingComponents": {},
+  "disableScroll": true
 }

@@ -141,6 +141,8 @@ pnpm install -r
 pnpm -r build
 pnpm -r test      # 77 项 + relay e2e 9 步
 node e2e/run.mjs  # 单独跑：配对→指令→审批→提问→防休眠→中断→零知识审计
+node e2e/live-e2e.mjs        # 真实链路：真实小程序代码 + 线上中继 + 真实内核（不 mock）
+node e2e/live-e2e.mjs --rounds 3 --no-prompt   # 连跑 3 轮查稳定性
 node scripts/validate-qr.mjs  # 二维码：zxing-cpp 真实解码 28 组
 ```
 
