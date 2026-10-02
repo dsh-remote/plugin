@@ -607,9 +607,16 @@ export function auditZeroKnowledge({
     )
     for (const word of forbidden) {
       const asUtf8 = Buffer.from(word, 'utf8')
-      const asLatin1 = Buffer.from(word, 'latin1')
       assert.equal(bytes.indexOf(asUtf8), -1, `密文解出的字节里含"${word}"的 UTF-8 序列——它没被加密`)
-      assert.equal(bytes.indexOf(asLatin1), -1, `密文解出的字节里含"${word}"的 latin1 序列——它没被加密`)
+      // latin1 只对**足够长**的序列才有判定力。汉字经 latin1 编码会压成 2 字节
+      // （每码点取低 8 位："周报" → 68 A5），而 2 字节序列在几百字节的**随机**密文里
+      // 有约 N/65536 的概率被撞上 —— 18 帧累计 1~3%，实测撞过一次（偏移 30），
+      // 报出来却是"它没被加密"，纯假红。UTF-8 那条已覆盖中文词（每字 3 字节，
+      // 撞上概率 2^-48 量级），所以短序列跳过 latin1 不损失任何判定力。
+      const asLatin1 = Buffer.from(word, 'latin1')
+      if (asLatin1.length >= 4) {
+        assert.equal(bytes.indexOf(asLatin1), -1, `密文解出的字节里含"${word}"的 latin1 序列——它没被加密`)
+      }
     }
   }
   const observedText = JSON.stringify(observed)
