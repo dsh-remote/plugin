@@ -72,7 +72,7 @@ env -u NODE_OPTIONS pnpm -r test
 ./scripts/relay-start.sh --bundle          # 本地中继（token 复用 profile 里那份）
 ./scripts/install-to-profile.sh            # 构建 + 装两个 bundle（主插件 + 右栏呈现）；之后重启 Harness，改过浏览器面还要重新加载页面
 osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "DeepSeek Harness"
-node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须在跑）
+node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须在跑；且要先 /drc pair，见 §4.5）
 ```
 
 读码顺序（重写后的分层）：
@@ -148,6 +148,14 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
 "年龄 < 25s 且本轮未用过"的码（`live-e2e` 里 `usedTokens` 去重 + 失败重试一次）。
 现在这条由 `core/pairing-window.ts` 保证"永远有一张活码"：无码 / 中继代次变了 /
 过半程 / **已被消费** 四选一就换一张，且不在线绝不发布。
+
+**但活码只在 `pairOnStartSec > 0` 时才自动发**：`PairingWindow.tick()` 第一行就是
+`if (this.pairSec <= 0) return false`，而本机 profile 是 `0`（刻意不自发出码）。
+所以 **`node e2e/live-e2e.mjs` 裸跑会报"status.json 里没有 pairing.qr"**——不是坏了。
+正确姿势：先在 DSH 里执行一次 `/drc pair`，立刻用 `--pair <6位> --qr '<dshr:/p?...>'` 喂进去
+（`--pair` + `--qr` 走的是 manual 分支，**跳过**年龄与剩余寿命两项检查，只受码本身的 TTL 约束）。
+`status.json` 里 `pairing` 对象的形状是 `{token,psk,expiresAt,qr,ageSec}`
+（**没有 `createdAt`**——别按字段名猜时间基线）。
 
 ### 4.6 `agent.abort()` / `agent.interrupt()` 不存在
 正解是 `agent.cancel({kind:'user'}, {keepInbox:true})`。`permission/requested` /

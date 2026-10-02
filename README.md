@@ -107,6 +107,9 @@ DRC_LIVE_RELAY=ws://127.0.0.1:8787 node e2e/live-e2e.mjs   # 打本地中继
 node e2e/live-e2e.mjs --session <id>        # 指定会话（可验归档自动恢复）
 ```
 
+> `pairOnStartSec` 默认是 `0`（不自发出码），所以裸跑会报"没有 pairing.qr"——先在 DSH 里
+> 执行一次 `/drc pair`，再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
+
 CI：`.github/workflows/ci.yml`——主作业 Node 22（`pnpm -r typecheck` + `pnpm -r test` + 三层 e2e），
 另一个作业在 Node 20 上从**空目录**起单文件产物，验 `/healthz` 的 version、优雅停机 exit 0、
 以及"缺 token 必须拒绝启动"。
