@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in the protocol library behaves incorrectly.
+title: 'bug: '
+labels: ['bug', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **Do not report security vulnerabilities here** — see
+        [SECURITY.md](https://github.com/providcc/dsh-remote-protocol/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A code snippet or steps that reliably trigger the issue.
+      render: ts
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: e.g. 1.0.0 or a commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      placeholder: e.g. Node 22.23.3 / WeChat Mini Program / other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which side(s) are involved?
+      multiple: true
+      options:
+        - protocol library (this repo)
+        - relay server
+        - host plugin
+        - Mini Program client
+        - not sure
+    validations:
+      required: true
