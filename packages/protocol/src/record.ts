@@ -35,7 +35,14 @@ const MIN_RECORD_BYTES = NONCE_BYTES + MAC_BYTES
 export function seal(key: Uint8Array, payload: unknown, nonce: Uint8Array = randomNonce()): SealedRecord {
   if (key.length !== KEY_BYTES) throw new Error(`会话密钥必须是 ${KEY_BYTES} 字节`)
   if (nonce.length !== NONCE_BYTES) throw new Error(`nonce 必须是 ${NONCE_BYTES} 字节`)
-  const box = nacl.secretbox(utf8(JSON.stringify(payload)), nonce, key)
+  const text = JSON.stringify(payload)
+  if (text === undefined) {
+    // `JSON.stringify(undefined)` 得到的是 undefined，而 TextEncoder 会把它编成
+    // 字面量 "undefined"——发出去解得开、但内容是垃圾。这种"看起来成功了"的帧
+    // 比直接抛错难查得多，所以在出口就拦掉。
+    throw new Error('载荷无法 JSON 序列化（undefined / 函数 / Symbol）')
+  }
+  const box = nacl.secretbox(utf8(text), nonce, key)
   return { ciphertext: toBase64(concat([nonce, box])) }
 }
 

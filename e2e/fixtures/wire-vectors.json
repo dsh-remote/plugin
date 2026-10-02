@@ -1,0 +1,1829 @@
+{
+ "_meta": {
+  "note": "由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 mp/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。",
+  "oracle": "mp/core/codec.js",
+  "oracleSha256": "b50f325b13a52fd1fd12aa6d0f4754299af2492b048b7bbe4ff9a3fd1e85497b",
+  "generatedBy": "e2e/tools/gen-vectors.mjs",
+  "counts": {
+   "text": 8,
+   "base64": 42,
+   "kdfHash": 13,
+   "derivePskKey": 144,
+   "noncePrefix": 12,
+   "buildNonce": 12,
+   "seal": 12,
+   "qr": 33,
+   "normalizeToken": 8
+  }
+ },
+ "vectors": {
+  "text": [
+   {
+    "input": "",
+    "utf8Hex": "",
+    "b64OfUtf8": "",
+    "backAgain": ""
+   },
+   {
+    "input": "a",
+    "utf8Hex": "61",
+    "b64OfUtf8": "YQ==",
+    "backAgain": "a"
+   },
+   {
+    "input": "hello world",
+    "utf8Hex": "68656c6c6f20776f726c64",
+    "b64OfUtf8": "aGVsbG8gd29ybGQ=",
+    "backAgain": "hello world"
+   },
+   {
+    "input": "生成周报，中文与 emoji 都要原样回来",
+    "utf8Hex": "e7949fe68890e591a8e68aa5efbc8ce4b8ade69687e4b88e20656d6f6a6920e983bde8a681e58e9fe6a0b7e59b9ee69da5",
+    "b64OfUtf8": "55Sf5oiQ5ZGo5oql77yM5Lit5paH5LiOIGVtb2ppIOmDveimgeWOn+agt+WbnuadpQ==",
+    "backAgain": "生成周报，中文与 emoji 都要原样回来"
+   },
+   {
+    "input": "😀🇦🇧 mixed 😀😀 and 中文",
+    "utf8Hex": "f09f9880f09f87a6f09f87a7206d6978656420f09f9880f09f988020616e6420e4b8ade69687",
+    "b64OfUtf8": "8J+YgPCfh6bwn4enIG1peGVkIPCfmIDwn5iAIGFuZCDkuK3mloc=",
+    "backAgain": "😀🇦🇧 mixed 😀😀 and 中文"
+   },
+   {
+    "input": "tab\tand\nnewline\r\n nbsp",
+    "utf8Hex": "74616209616e640a6e65776c696e650d0ac2a06e627370",
+    "b64OfUtf8": "dGFiCWFuZApuZXdsaW5lDQrCoG5ic3A=",
+    "backAgain": "tab\tand\nnewline\r\n nbsp"
+   },
+   {
+    "input": "ß€你好🙂",
+    "utf8Hex": "c39fe282ace4bda0e5a5bdf09f9982",
+    "b64OfUtf8": "w5/igqzkvaDlpb3wn5mC",
+    "backAgain": "ß€你好🙂"
+   },
+   {
+    "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "utf8Hex": "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "b64OfUtf8": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+    "backAgain": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   }
+  ],
+  "base64": [
+   {
+    "input": "",
+    "decodedHex": "",
+    "errorKind": null
+   },
+   {
+    "input": "2g==",
+    "decodedHex": "da",
+    "errorKind": null
+   },
+   {
+    "input": "TbU=",
+    "decodedHex": "4db5",
+    "errorKind": null
+   },
+   {
+    "input": "Hn9Z",
+    "decodedHex": "1e7f59",
+    "errorKind": null
+   },
+   {
+    "input": "8fAKZw==",
+    "decodedHex": "f1f00a67",
+    "errorKind": null
+   },
+   {
+    "input": "3gWx3Bk=",
+    "decodedHex": "de05b1dc19",
+    "errorKind": null
+   },
+   {
+    "input": "3vh8ueC9",
+    "decodedHex": "def87cb9e0bd",
+    "errorKind": null
+   },
+   {
+    "input": "rDIMCugaGQ==",
+    "decodedHex": "ac320c0ae81a19",
+    "errorKind": null
+   },
+   {
+    "input": "+rVAy3HYnYc=",
+    "decodedHex": "fab540cb71d89d87",
+    "errorKind": null
+   },
+   {
+    "input": "lmbzuPlzjTgV",
+    "decodedHex": "9666f3b8f9738d3815",
+    "errorKind": null
+   },
+   {
+    "input": "0jr6bOagD7hjfg==",
+    "decodedHex": "d23afa6ce6a00fb8637e",
+    "errorKind": null
+   },
+   {
+    "input": "tqhhLb4gXvVCTDI=",
+    "decodedHex": "b6a8612dbe205ef5424c32",
+    "errorKind": null
+   },
+   {
+    "input": "BSuV3LhdTohpA7t5",
+    "decodedHex": "052b95dcb85d4e886903bb79",
+    "errorKind": null
+   },
+   {
+    "input": "dK/ULDEMz65s+hNtkQ==",
+    "decodedHex": "74afd42c310ccfae6cfa136d91",
+    "errorKind": null
+   },
+   {
+    "input": "zws5bjgD3jMTv/nWV5o=",
+    "decodedHex": "cf0b396e3803de3313bff9d6579a",
+    "errorKind": null
+   },
+   {
+    "input": "F4m8yHxLaMMhXnLh1fFF",
+    "decodedHex": "1789bcc87c4b68c3215e72e1d5f145",
+    "errorKind": null
+   },
+   {
+    "input": "9DJX96evIL9fXu6msuNXhQ==",
+    "decodedHex": "f43257f7a7af20bf5f5eeea6b2e35785",
+    "errorKind": null
+   },
+   {
+    "input": "ZcMgvmBp7IZRJmwgQiM+yOE=",
+    "decodedHex": "65c320be6069ec8651266c2042233ec8e1",
+    "errorKind": null
+   },
+   {
+    "input": "DJX3vZPKfj/f97eCdepdvcS1",
+    "decodedHex": "0c95f7bd93ca7e3fdff7b78275ea5dbdc4b5",
+    "errorKind": null
+   },
+   {
+    "input": "CnpwrFJ5rM0dbsKkpb55K5HBcQ==",
+    "decodedHex": "0a7a70ac5279accd1d6ec2a4a5be792b91c171",
+    "errorKind": null
+   },
+   {
+    "input": "ZZyZVtts0LBK1SnemYGfMVpfgOI=",
+    "decodedHex": "659c9956db6cd0b04ad529de99819f315a5f80e2",
+    "errorKind": null
+   },
+   {
+    "input": "ilDLtQsOtVaFZ1J9/fkemGa1RO8D",
+    "decodedHex": "8a50cbb50b0eb5568567527dfdf91e9866b544ef03",
+    "errorKind": null
+   },
+   {
+    "input": "Kk0qlvGepoF55mr9Zx8WWFJz2ABZlA==",
+    "decodedHex": "2a4d2a96f19ea68179e66afd671f16585273d8005994",
+    "errorKind": null
+   },
+   {
+    "input": "jlHcxll3OBdjSKpkCdf0MgBGLjGfx4U=",
+    "decodedHex": "8e51dcc6597738176348aa6409d7f43200462e319fc785",
+    "errorKind": null
+   },
+   {
+    "input": "42pcggQTl4VrrOZvIiU0GovHmemADijR",
+    "decodedHex": "e36a5c82041397856bace66f2225341a8bc799e9800e28d1",
+    "errorKind": null
+   },
+   {
+    "input": "UxmHgPEAi9LdAQcBoNqSl8MRt/lHpdECUA==",
+    "decodedHex": "53198780f1008bd2dd010701a0da9297c311b7f947a5d10250",
+    "errorKind": null
+   },
+   {
+    "input": "8XASf7fVWlDW0fRYdbqRBBsu18bE2ic7nHw=",
+    "decodedHex": "f170127fb7d55a50d6d1f45875ba91041b2ed7c6c4da273b9c7c",
+    "errorKind": null
+   },
+   {
+    "input": "+EVkbHQWndbeKq6StVH5c9lB9DPE+OvLB8aG",
+    "decodedHex": "f845646c74169dd6de2aae92b551f973d941f433c4f8ebcb07c686",
+    "errorKind": null
+   },
+   {
+    "input": "lyKRo51/I8JOlx+Q63L+UB9knvBOYtOxrv5r5Q==",
+    "decodedHex": "972291a39d7f23c24e971f90eb72fe501f649ef04e62d3b1aefe6be5",
+    "errorKind": null
+   },
+   {
+    "input": "JpA1fI8AWA8mrzvWeZpWfXrpF4zCNXg0ZXUUbzQ=",
+    "decodedHex": "2690357c8f00580f26af3bd6799a567d7ae9178cc23578346575146f34",
+    "errorKind": null
+   },
+   {
+    "input": "vW1+dmbZM5yybi9a8F0/f3WqTXMTmqQcLqxZaxkb",
+    "decodedHex": "bd6d7e7666d9339cb26e2f5af05d3f7f75aa4d73139aa41c2eac596b191b",
+    "errorKind": null
+   },
+   {
+    "input": "GUGP5jjQfh8R7qN7D0T0EdgcEyna5+8r1w62ae1iRw==",
+    "decodedHex": "19418fe638d07e1f11eea37b0f44f411d81c1329dae7ef2bd70eb669ed6247",
+    "errorKind": null
+   },
+   {
+    "input": "t/nWPCs5NqqnwzVskL7cEni1c/wfuWfiHDqiPGzxhu8=",
+    "decodedHex": "b7f9d63c2b3936aaa7c3356c90bedc1278b573fc1fb967e21c3aa23c6cf186ef",
+    "errorKind": null
+   },
+   {
+    "input": "hY3loS3o7ub1QWTbQsrByiYepHg6SYhsBrHQAn8/JLkv",
+    "decodedHex": "858de5a12de8eee6f54164db42cac1ca261ea4783a49886c06b1d0027f3f24b92f",
+    "errorKind": null
+   },
+   {
+    "input": "",
+    "decodedHex": "",
+    "errorKind": null
+   },
+   {
+    "input": "AAAA",
+    "decodedHex": "000000",
+    "errorKind": null
+   },
+   {
+    "input": "AA==",
+    "decodedHex": "00",
+    "errorKind": null
+   },
+   {
+    "input": "AAA=",
+    "decodedHex": "0000",
+    "errorKind": null
+   },
+   {
+    "input": "A/+/",
+    "decodedHex": "03ffbf",
+    "errorKind": null
+   },
+   {
+    "input": "aaAA11++//==",
+    "decodedHex": "69a000d75fbeff",
+    "errorKind": null
+   },
+   {
+    "input": "  AAAA  ",
+    "decodedHex": "000000",
+    "errorKind": null
+   },
+   {
+    "input": "AAAA\nBBBB",
+    "decodedHex": "000000041041",
+    "errorKind": null
+   }
+  ],
+  "kdfHash": [
+   {
+    "parts": [
+     "dsh-rc/v1"
+    ],
+    "keyHex": "a467b3f0e42e19f9d36fcb4a545c2e78b7dae97dc6519db3201f7e50b48179bd"
+   },
+   {
+    "parts": [
+     "a",
+     "b"
+    ],
+    "keyHex": "11f269c9a7bfa20f1c3ebd28fc0bacd2c58b60f499cc0a66adbfeb3707c91ee5"
+   },
+   {
+    "parts": [
+     "ab"
+    ],
+    "keyHex": "a9e5935d3e7454a23a4ed7521e72d87cc816edb627d46eb30503805cd76f9aa1"
+   },
+   {
+    "parts": [
+     "",
+     "x"
+    ],
+    "keyHex": "d91aa88196b4335f1e648d13ff0e78c8dd06fc543f81017b46656a69057bafd8"
+   },
+   {
+    "parts": [
+     "dsh-rc/v1",
+     "c2h",
+     "c_0123456789ab"
+    ],
+    "keyHex": "efe16fc9f7df75ab360984f70d761436a9171649a87f9890dab9c6c30cbbd12e"
+   },
+   {
+    "partsBytesHex": [
+     "5YtfkeAfLGk7lu7z9SyZJA=="
+    ],
+    "keyHex": "eb3371f582b31567c5c538f95ffd707c860e72e13c259658dd57531fecce514b"
+   },
+   {
+    "partsBytesHex": [
+     "L4H7XUpv5gyyG6hTlXXYCA=="
+    ],
+    "keyHex": "c91c3b8469cad2ba3d924d76b90aa4f2767cd5951464f5422f5ca23504076d5f"
+   },
+   {
+    "partsBytesHex": [
+     "AFnEdnDXHm2poBr9KMxhWw=="
+    ],
+    "keyHex": "0c6153b2b410ce0c8f95644c92800d74910912bb25b965acd9684df930a3b91f"
+   },
+   {
+    "partsBytesHex": [
+     "Gt8iThtrXOXsluOGSucEqQ=="
+    ],
+    "keyHex": "5f9d65785564c606b6ad27160e5dc367366ca3629446deb2b64ea3cec295b72a"
+   },
+   {
+    "partsBytesHex": [
+     "JHBlhQLSZNCokXeM6R9pZg=="
+    ],
+    "keyHex": "ae3b3017caaab6c600dac49f1f799c9b4819394d4d0a9ef846cc75bdf63f2afe"
+   },
+   {
+    "partsBytesHex": [
+     "+1XMWNVl7ezwigmctv6N+Q=="
+    ],
+    "keyHex": "3dca8bc4b9b27304f3a3e8e540892bb8c8d16d2ca731a0222948f4e575289fea"
+   },
+   {
+    "partsBytesHex": [
+     "eAz4m4qeOneopexTyLfjlQ=="
+    ],
+    "keyHex": "23d69c69c9d43d67c873e5a3aeb7a8134bbbd66c1bac7c558cd127133e6b5b9c"
+   },
+   {
+    "partsBytesHex": [
+     "GLmb7ChPYImNjmGeTCVmBg=="
+    ],
+    "keyHex": "a54ae6ca1b9b440c8a7cb507c66afce89f819ef086dcc6bf6edebe55cb465878"
+   }
+  ],
+  "derivePskKey": [
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "7dbd4abbc22ad0c8c496a3dcb47229efe664c010eafb1b56f40712f5862a9d26"
+   },
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "9d4fee9a41e10ff2908c2bd3df81d9074f743b690b7351fd6e18d7d63060266d"
+   },
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "513d3ac13abd9504977374710d70ca18858086e6e083635aac50c3bb9462a185"
+   },
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "b7ab94a868449ffeceb36ab907b502966fca0c1d0845586889b2e14163e4d64a"
+   },
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "59577d8cad5c0c9e78cd31781e54d12d83a38971d93c7eba519d7b48575bdc28"
+   },
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "efaa8cdd61cf5e8bf5e2dd2577f5b5cccb395a72c5c66bab4f5b2ad279468722"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "73f56234b371761d00e3a7d350546da02c4d5387f0a1aebff6bacaea15d764a5"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "67c8cd2d72caecef93ce27e3802173b66e2454a762be083fb9bd10a5493e1bc8"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "58f31eb74b84e1c4e83b5661569ea49908bdd4289884cb55f605d41a4615361e"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "1e2af16c66710cd00a71e7b9a51bae0df9d65178336e3c385584909f47bca562"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "4ba9afde0c9b2f9001f417f36770469e969a40b6b3859df025f240735f931cb3"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "5b022fc339d1089230020fe0954585f3932103521f11968d54fba152f8d0fba6"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "e96d5fff4ac3422284b78105c6f9e35a56501edbc648ffb4b10481e17a070647"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "99a478bfb856f918d2da21814bc175aecc9d78d8e21d0b33c9f094f89da7fc0f"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "0d31054cadbd0b9385271518741109a4a4facaaf5dfa8e71e509f1fa68934021"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "2af0db90da902c7e15cf53ac264dca8397264caa077c57f3137ba2409aea038d"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "ba3f96c9ab8e0c52f89da85e9378be298f9793f98f1f1f1c532b19dada13cff1"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "4fc10355243dd73faf14aa1b8669e276665b05d8a2d0f61fa05a29c48964552c"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "b626e8e4e61823f947b124e7ece96d0efd573bc2e9ec8bbb6dc82618648f444b"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "eea69a806b341498e4f1dbcc21084eea509360cd96a6117fbb3444d0f745988a"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "e42d4852554b4c233b3ea29039e151b272fbd49205ef3fa524f621d370660e1d"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "8c3c466887367dc4d394aeab4cce492b8b63dd514ae130b202d9889fb6328889"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "808c855a43693322801b4cbecd172551a6eb1acdbd48169def84c47bad304246"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "751e89c8751ceeeb1ab9766dd3008cca9bae89879a0b5e31708e4132d77316c3"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "e57f03965f0834c25587b323a98307fbc84189a79852991aceeb5fe9b7eafa66"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "c268f97b3690ce3cc96995339beccfc00a46216896ec316c2825197352c0445f"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "efba670fb20d88c52c516fdd7d00ae3528009a570b8932bc22fa10487deed5f6"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "095e5f7cb3c78f123478319eae3448867b713eedd9b039de6d217f336ce43ae2"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "d7e5695b0ae88fe0144d5d830b5a3aad431919d3c8d178aafb579e6f1e8b5cca"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "ffdb1a886451fb686bce6ea75d0f96835a795794476548d62693f0175d1f3299"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "10855dd7ff92653249437d20933c454c51b49be4291d389afb92b03c56576e7a"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "eb64784228ad3a300590d92e2fac93ff7d042963ed92c73c9fb1e1193336d74c"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "b53a0480cf8e9445815468acc18ac6dfff86317e57e841f16c6ce7afbb039a63"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "9eec64434d9c01c127a96643a1531ff42335b4fe8089c1a25219564e6e338356"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "9cc74348e2275e05ea2d0354e742e497a28f2361142325ec90a7ae4f90a133e1"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "38593e1b7d6775d38704dd8fe47b40492f21b84e5df67bd4094084236c39bf55"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "21a575ab042cf979dea9791db40148227daf12e3a1cd9bf77af2a18070e0ffc7"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "e7259f1af1a65c8875a3f3bd6b95281b67a02b01b533ff161e6b943e39ee8db8"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "67bc982df5d8798a4816593144f878bb4f08375c98e6dcbb56a1cd41178137e7"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "e43894233578b72dd482e295cc61a60ebeb65c0851af2b598edf4da7b6fd7e98"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "70f1fbb48c522355dde89ba59794d6b2c6fe34b515eedf758829ad90d6935d32"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "342436fda5ce5ff841236ffba5e2cfc0d25cda1f6503d8fa50a9d647af0550cd"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "d1fb73f0e0a13c3cef92d205ee1efd34256abcc1f8b3511d53499d0044be7406"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "7a9da86d29429f82b41d3421b7b4b94d1039dbb400c61eb673005ac9c18e340e"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "51e7eb35cc73224510cb6a4a3d41e1558086ebcb1dc4c77174eeacfadb273755"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "586c5168bc688b8f90073701d9321bee7c6643d822421555c3da234bc1b11d7e"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "85b230669f3579656c4bf7def736a39569bb3ed2e584bbe15509435fb12d5c73"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "43f6130ab63f99316dee4f315ed6e4f2930db359049783a6fbd9726022fe1f65"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "491963231e9a7fe03fec7f1009bbc4d5f35f82d0fef13a79b78e91191a7a95e7"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "7a00d65ca121b6113095625da37a6a9a88171b41f0f7a6ac2e7fef60ce00564a"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "0531195951be393c5284facdf4865501a747e2ad49b6c0baf00c20602dc301dc"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "02a7717d99a45a9cd3e1cbb1dc7e419f50b746a61f9f39ffc56fd86121500880"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "1ac05d24f50b1a908d328e5c396f9be505da8c2c61b1366e929bf42890772462"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "d6621d01a5c1d9d7ba70cccf6a97d93f5eaa69fc8cdfd74ba431edc8f910686b"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "27e9ee3a269f2bece4a5ce9358b8de896d454dc582253ba54cbb5bd898f066c1"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "5685824e2d038eff03e57a1a839b95298ed90f2ff0d4a7c29fdb8cd4dd8dc407"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "3254218a8559917aad73b18a5d339a686512a4dc017f764dc7b9a534d645a665"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "a5a657b56fc99e7e222e8fe0c52a8f09ec6ba9016e693d8fe1a938e9d7914a6c"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "08239fd94218d5f717cba320c5eefca1cbd287fc4ddd7700446a459ed81db594"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "c5d0c8d2f8f8bc0d0c2386a5ec796a331952804c8e1a43d1633fa1d3e4577ddb"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "2b7eb692e95361d0e2cc5f859b4a3f92b59d0abb7744faf739b18f10f2ea15c8"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "a0ba2bbd7cd28abe76e1c02ff15ec50a7f6416ae247d4ba32418ce5fae7c55c3"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "a95cd1b8c845f52dcf5058e498796c50ad578975cac363f2010bbe5f0f7eaf4a"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "bb71d84ddeb8a949559a747818a8c2a2fbef88d5fb2c94d03c9bed5db7a80642"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "deee8507a6025d265eef3a658992be3f202e635af7c350d14660174e150308aa"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "ffbd2af163724eb9d9bfc6f1db76c790b22f8c79714f5c501f152213353b454e"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "d0fc3c6b0f4f83a71e0895107f72c21a66d154d7817d2993d47d1593b84caff3"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "65d032851406c7b0a013a976fbf03199af4b024066454b82b17a68e50a32940f"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "5a2e76a0d90b20a8c3a6aa4cadf1bc224596cf59d8abfb9f0d0479fb03d566e8"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "6441c083425f62ebdbc28fcd991813221298bfcecf7d5bb1ea0efdd474534b97"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "cac09203d02adb66361cdbc1ab50d04ae42fd70bd00b0e5dae0b87872cfa6589"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "e2bf9f592f80d1764c93516cab2e2eedc3108eddb58173f0e02a503749a67fb5"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "bd838589e8048bd8207cb9c6a9dcfd83cbdb1aed5586568d4d018c9bec55bf34"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "ee96e25863a412e7dea3cd701d93883a87282cc55fa942550ee08adb42614b63"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "a24126e80e8e26fe4d8f9fbb966c85d773053b435013fec99bbca68fdec682ed"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "2f53abf15c3e7b1ff82fd1b20f7c6bb6c6161f1e7e47162150946f164c4d6155"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "b8dd4776f55bc28f932290fe85464a18e474aaa2236b5cba93ff94004623e033"
+   },
+   {
+    "psk": "pNpF5FWZ86OGVAYkksb8eQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "ac8bea6ed1114fd83598cf0a73384a0e292ab4551effb169aa90c0ee34967d59"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "936f63d6c17cfdc6b445f417d185649237d3eb6f745e0f2adc2cffb90a929a9d"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "63c78c7e4a4c908fc9a0ace06e1b0a3f8407b99b9619e277ce091b58cdea3c35"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "082d82b47ac7cc14a2c4d23a570219cb539c0aa842a886ef2169fa948c2c81ae"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "efd7a7e37c298cedd4cb2b8fea9ca72617f0a7e123969e2248575585130d8525"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "8c12ab9e539e879c2fec8803514fc23b66e61ca6883c79ec2101b90639178bd4"
+   },
+   {
+    "psk": "0EXdLGr0aMpwjwr7GsjgNQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "fed284004cc7fb7fda4112f7f44ede1ba78b5f83688a8cef832c678800e4f8b3"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "8f0a25ae88fbdc193b406e27bc27365bcfd08555220f5b827e5ded4f462c6088"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "485abc286da430e632e0b0e6b2453682a5cfde411c3c45a4845a1fd8676066c9"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "be8f329c74465fc8c385518b2ad44fd6af4dbc094e2c7e8361bd952088b8e3fb"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "cbcc14f92997599ca684eeb93d6795dfd738c9d2e024f58b68bd0a145de1a917"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "7043ccd051a6cc0da6d74f4843fad98a3030ba57311af3856fe535435509beb0"
+   },
+   {
+    "psk": "YFj3YR1475B6LOHOW57NUw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "aa1cd268188df3b3c7ee3266acf7b700ec2e04b598a0c9bee2bda4bd379fbe62"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "1f3ef128da22ce9324b2a6eb368afa789d9049070e24e725336d52379b98b316"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "19ab1acb63bed8a074d7640e50aad90d4e29bfea2c0c88c2c120609df1adce62"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "5c7307b620b349afa3fc4fbeda2d01f8ff87e7ac8611f145c0ae0bce1f3d9895"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "d50a4fff289a5645886dc064794a1e28b2131b773c64efd8b45caaa948cc5ffe"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "674089936c4dab270763683e34238597253c414bfc99bc53ea4dc1f349372483"
+   },
+   {
+    "psk": "Q+PGw26Jp6LB45dd6Fvosw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "ffdaf65c5398567f838bd80cfb8323f871e6028833cbc676595c843ec43b156c"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "1db9fb7adcaa88c9793e1fa46aa01d25446fdfded8c244c8bea41c57f7495025"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "643c4eb641245dedac5c7cbbe3c489fa31c28ca4cc8a3694e661ac8ea4371031"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "80bdadb169b62c2da45bad7f9b8dfcfde4d1548427aaf6aacb33ead71be9ee3d"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "f8193a14278b47efc8a60d2bde527ab5ac18b4dd6b6112abafd214d6d5bced1f"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "3ec4b1b1f0c7751419a00135a70db000731370f9cdbac89e668f01c1cd2e6773"
+   },
+   {
+    "psk": "MEbaTz1QGpN1ZF7XIlmKFA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "a243ead6c5e289b2e2a1ddd018bb2616cb133d494964d30a3dc53b4bce22cd53"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "44aebea1c9ddce0ad58e789e905bd98e72cdeaf93cbe60d8633361c32e896273"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "8c63dc178b2b0dbc80d146bae405ddcc411b2bce5a51f6697a7aeef956254a42"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "64b8f1b880da9ed11527bbf353be98ef952c8788734502009f51e193aa722bab"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "f98545b9f7fc31bc977f67f384282d39df559c5d5b2d05845d83b52bf12716b3"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "648d086a50d2c04f9269b96b91d756adb2066eba19a3c58079dcf41195e8dbe1"
+   },
+   {
+    "psk": "p+wd4KiNqFudTtejhN4X1Q==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "5f0fefba076539fd414b405b387ed86b5e02ba515950801a3409433c871e634d"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "29a84ba5715c318ad5c550a10c094b84a772328b1f5049ddc4bc83dd1fc427de"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "9c5f31a87bf5af158a405c99478b89053065e6c0d94865f90cb727e5f9848e0c"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "001e7a68afe17641dafd9d3655a5a3d8f8314f510f557e311c58c38a5dff7fad"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "ef9a9460ab42071fd19384f495473fb448522c971db7bd48e6a680f9d9bc7c83"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "2e5b347dbaf41864ad2f7427356a07febffdb32a9a7da59c7d88f5cde147a950"
+   },
+   {
+    "psk": "sbveeg9wYQYPPBXjuXeeqA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "5e90b01b3ba2d1f96dc131748ff22f6ec6d2fed228a7355cd7ab6c14b6da4a8a"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "1949c81858b53f4dba2010ce10e6d9392a6c2f9b511b19926df974e83db170e7"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "be47fa722acf9fb21f71cb44f47cf0599d310d5df7870e58e1e9f9620887d012"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "075de2c337f6d17ee56ba82392483246b6ec1a95f4a57362810a418dd8e1c71c"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "3bf137995061e6093edda5f1ec13a4758babc3bb3ef35100a3238ffdb5e02b32"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "dd87345c9d01017a8d1e155418cef6b1960b1251a471b042dadf0fe99f37b4a9"
+   },
+   {
+    "psk": "Y9SscvFHv+QkFFugF+hXlA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "65048f32f5ec968aa945d73670102e3240859645367da0195d1f77c5b3f9cdfd"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "040b4f8cd69b7b23208e16753415bcea081bfc22e2012b90057ff7eabc086320"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "5f2f265b65b16f0d64ddb967d26837f3613a64a186dfda77ad4f968d3958925f"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "84b017278fbf12b3560a39e9b153950c14a01f36c64018911f2dd086f0d7b355"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "7eae066999e8e0ba392b52ff2e3c6a6fb0040e6ee5a960a51867af32429e9770"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "948af3fe9b1a5e4e39d2678f6509b8b399a7b7abf08e51774bd3dab343d371e7"
+   },
+   {
+    "psk": "binvWKuIU33N2bjVgpkeSQ==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "3138c40354089c598b5a45b8574d5644767bbcb1d7e7ab2a460a48cd2af7a408"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "6cc036e13eaaf61af87f8164b186e469c80dc428349b5fdf7296bb9645502b35"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "e39b28dc5fed412e8b2bda393943fc5b8fb029a83816afe06689c6d13ecb4024"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "9ee08386a9b7a1c24ca661b7d8b0cf1fa552b55ac7c99b1870c9546214eca42a"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "7b23eec1c99aa4c93691cd3e38d7220eee1b921b07aada5b37adf9de21923880"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "96c9ac4b2237b1d5bad9beb84c6ce40e2fd209af3d664607c24353f7bbf52917"
+   },
+   {
+    "psk": "Zu4qUDcJJBFS6wGBUddgFA==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "de09b24c7d7cbe10ced75293033a6d314c41fcd1f7aa9282c541ebdcc42420ff"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "76a07764615367e78c208b72280696a0d78cc1d5256d706dccff6299166843bb"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "c31d3e2052425b7595877f43474a98f2a9559b01c8bf48657d1871f52b847b5e"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "1fa8e69bcce01bf1fd251ba04b729dd98e35cf1d7d5060b9b36fd0d33565bf15"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "9b810d2889acf9cd6dda75b591a900f0f7916b3f55c39d0429bb725645ee30fa"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "b7ae9199f28025fe60f6e137d3280f707cacbf0e06d48d7ad9ebb9b3cea360cf"
+   },
+   {
+    "psk": "eH3oZ4N6dDmd0kcLdYF/Yw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "532fddcb753de6e3e26ae6105365001b895ebe78b28d67b75ab34db0b3a5e0b3"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "c2h",
+    "convId": "c_0123456789ab",
+    "keyHex": "632dcad220001e2addfbec17948cd2c6dd80eaa4648bd75d26c1cb5d03096fba"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "c2h",
+    "convId": "c_deadbeefdead",
+    "keyHex": "9c5deb2bd033dc613f40974f8d46ba03b258d8038beeb44589be29895c801381"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "c2h",
+    "convId": "",
+    "keyHex": "221b66dd5fa3fab9a10cd207627700cfedc10bb50a44d30decae84288e45f215"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "h2c",
+    "convId": "c_0123456789ab",
+    "keyHex": "dc4e5b5721aae45c1481b239a731b902d426d31016ee69d3fc17b33fa8609994"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "h2c",
+    "convId": "c_deadbeefdead",
+    "keyHex": "782345a94f6975a658cc57318c693d51f401891eb0e18aa0afb77131aaabf072"
+   },
+   {
+    "psk": "+rlJFNSXSauA0xFz9Z/+Vw==",
+    "dir": "h2c",
+    "convId": "",
+    "keyHex": "94c55d1e01e43947c8378b57654bad176db893151263e231a8473efbc2858996"
+   }
+  ],
+  "noncePrefix": [
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "installId": "install-76c2be",
+    "convId": "c_3672fb301799",
+    "prefixHex": "6f683a523cdc554ea723708d6ec10a00"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "installId": "install-fe9206",
+    "convId": "c_fdcc9ca93288",
+    "prefixHex": "1b5e2e2f1f40fa252fa7c93d6f6f9ca3"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "installId": "install-6774c4",
+    "convId": "c_9594af8c1033",
+    "prefixHex": "299ed8f14bacfde59fd04a88742f4756"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "installId": "install-5fe214",
+    "convId": "c_cc5e7cc80174",
+    "prefixHex": "11b8d9cfde765f20570fc33cb3e4a6c8"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "installId": "install-b19889",
+    "convId": "c_16a363cc489d",
+    "prefixHex": "ff1344f0331e608eba4b63c55e1abbcf"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "installId": "install-426876",
+    "convId": "c_3d6661d4001f",
+    "prefixHex": "e931b6d1a4f0c177fa581bca5e3a6909"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "installId": "install-fcf76d",
+    "convId": "c_b47a7cccd276",
+    "prefixHex": "b024edcebd87da43c52a6d853340c6f5"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "installId": "install-bd9208",
+    "convId": "c_2a6768738ab6",
+    "prefixHex": "715258141ea3597fe417a1129d39292b"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "installId": "install-360120",
+    "convId": "c_143bfd578f1d",
+    "prefixHex": "c681e11dd23615372e103694898c2c1e"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "installId": "install-4fdb5b",
+    "convId": "c_fa34934bc575",
+    "prefixHex": "2af78afd70cb96ff015beb0b7cb303ce"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "installId": "install-a32aeb",
+    "convId": "c_fac3683d3767",
+    "prefixHex": "c9e537ee160cbb08f586499e34002e93"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "installId": "install-07ada1",
+    "convId": "c_da4199f8f5fb",
+    "prefixHex": "590984d4e281035b3c7ac73f0d3e7d18"
+   }
+  ],
+  "buildNonce": [
+   {
+    "prefixHex": "232554f67df147edcd401f69ee5901bd",
+    "counter": 0,
+    "nonceHex": "232554f67df147edcd401f69ee5901bd0000000000000000"
+   },
+   {
+    "prefixHex": "e1e0fcb76ccca73bf72d3bbf357f77b9",
+    "counter": 1,
+    "nonceHex": "e1e0fcb76ccca73bf72d3bbf357f77b90000000000000001"
+   },
+   {
+    "prefixHex": "31768e935f5e509284868a9fb6abf140",
+    "counter": 2,
+    "nonceHex": "31768e935f5e509284868a9fb6abf1400000000000000002"
+   },
+   {
+    "prefixHex": "78f80bae4d84d41914d939a5e99e86e4",
+    "counter": 255,
+    "nonceHex": "78f80bae4d84d41914d939a5e99e86e400000000000000ff"
+   },
+   {
+    "prefixHex": "ce5f2b62ae5656e4a6c5a30de6fb59b9",
+    "counter": 256,
+    "nonceHex": "ce5f2b62ae5656e4a6c5a30de6fb59b90000000000000100"
+   },
+   {
+    "prefixHex": "f177279ee45ec65c36beeaccb911b006",
+    "counter": 65535,
+    "nonceHex": "f177279ee45ec65c36beeaccb911b006000000000000ffff"
+   },
+   {
+    "prefixHex": "daeda09b550ef77bcc11ae2168bd401e",
+    "counter": 2147483647,
+    "nonceHex": "daeda09b550ef77bcc11ae2168bd401e000000007fffffff"
+   },
+   {
+    "prefixHex": "1aa82f54a9e6b630f9d6544e3ea11280",
+    "counter": 2147483648,
+    "nonceHex": "1aa82f54a9e6b630f9d6544e3ea112800000000080000000"
+   },
+   {
+    "prefixHex": "e2e9dfcf9862567e51908cbb46125dc2",
+    "counter": 4294967295,
+    "nonceHex": "e2e9dfcf9862567e51908cbb46125dc200000000ffffffff"
+   },
+   {
+    "prefixHex": "4680f5ac47352bfa00cca5d0e907b514",
+    "counter": 4294967296,
+    "nonceHex": "4680f5ac47352bfa00cca5d0e907b5140000000100000000"
+   },
+   {
+    "prefixHex": "6ee665926854dc8dbe46e83145657e87",
+    "counter": 4886718345,
+    "nonceHex": "6ee665926854dc8dbe46e83145657e870000000123456789"
+   },
+   {
+    "prefixHex": "a3c2c4d0185c2ce6f96080e991a5d72a",
+    "counter": 4503599627370495,
+    "nonceHex": "a3c2c4d0185c2ce6f96080e991a5d72a000fffffffffffff"
+   }
+  ],
+  "seal": [
+   {
+    "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+    "dir": "c2h",
+    "convId": "c_37b325f48676",
+    "nonceHex": "78693aa9b58c329dabc0428c2a38ffbdf812c728060e042f",
+    "ciphertext": "eGk6qbWMMp2rwEKMKjj/vfgSxygGDgQv9RVhvmfu7IXZoC4FRCoU0lBy8Viqhs72gkPtZ67jthVjJA6TDV5Qk8SE1fvfWnZzzKqF0nQI",
+    "payload": {
+     "t": "cmd.list_sessions",
+     "cmdId": "c1"
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "L4H7XUpv5gyyG6hTlXXYCA==",
+    "dir": "h2c",
+    "convId": "c_04ccacce4269",
+    "nonceHex": "9bc44ab6cadcdf9b18d03df576394d4e0a48f68989ef6d97",
+    "ciphertext": "m8RKtsrc35sY0D31djlNTgpI9omJ722XDlO+z6bebAwxw4YTLqjlHeOyKpdKnw2qW8hR5QfRskoaOzWTx5YQ+a1FwTFgBdWe4ICEFCA9Dbb1jM9Crfa0glHUvZM7vxw7U1WIBJKU+o9dnGxEOImoL6fsZckXEK3CQXPPNqs818WyhThHEpHi9lC/iBU3Lx7yeXFIDfsrUI8B6O0=",
+    "payload": {
+     "t": "cmd.send_prompt",
+     "cmdId": "c2",
+     "sessionId": "ses_1",
+     "text": "只回复 ok 两个字，不要调用任何工具"
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "AFnEdnDXHm2poBr9KMxhWw==",
+    "dir": "c2h",
+    "convId": "c_1d871dbf26cb",
+    "nonceHex": "423ba769665f9934a722fb696dc502f983f66fe64591a65f",
+    "ciphertext": "QjunaWZfmTSnIvtpbcUC+YP2b+ZFkaZf/WfWHIC+xqJIhv9sZeNk+4IWqp+nfW4iY5ZY6Sx774rpY54OFjbwfdt+TDsxWLNd6PhPgIGCOQBoBaprWcskdWJniSjPuVU45yGJLNGWpLZKet/2QX0r/DP02A==",
+    "payload": {
+     "t": "ev.message_delta",
+     "messageId": "m1",
+     "delta": "你好 😀",
+     "done": true
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "Gt8iThtrXOXsluOGSucEqQ==",
+    "dir": "h2c",
+    "convId": "c_44d46eec5fd7",
+    "nonceHex": "95c2a14ec0f912e4f4e98286ae0e36a186a5b938415dd5bd",
+    "ciphertext": "lcKhTsD5EuT06YKGrg42oYaluThBXdW9GsxcfBv+cWDv/NW/ME7TbtkpKNts0vvIruvBod4DX/V5j9EbHGCNqcwzFjG7+CBfFGsgjPfJ9ap78/fw7q1b1BKYA51N6V+hbFR5GYHVtWY=",
+    "payload": {
+     "t": "ev.message_delta",
+     "messageId": "m2",
+     "delta": "",
+     "done": true
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "JHBlhQLSZNCokXeM6R9pZg==",
+    "dir": "c2h",
+    "convId": "c_7f857c27a2e8",
+    "nonceHex": "b176c333630867a26200dbd66fd9960c2ddcbc087e2a0d07",
+    "ciphertext": "sXbDM2MIZ6JiANvWb9mWDC3cvAh+Kg0HNBbdVVUMihCWihWKrrTUecjQhV4ahIvQgsIJYJlPBUI84ehrhfv/c75dLZb17Ow2UDYoBaR4x6xqqjcnACmr8qJflluiGg+Ysvxx7bGL8NH1luDvz8DpC40HBDj7lYd3NV9nvkCcbI9uo7+ZOZQZrDcavmK2OfPVfI0+ePrLG0N8nvylr0ab+Z2HnEP/p9CfPg==",
+    "payload": {
+     "t": "ev.session_changed",
+     "sessions": [
+      {
+       "id": "ses_1",
+       "state": "archived",
+       "title": "周报",
+       "updatedAt": "2026-10-02T03:04:05.000Z"
+      }
+     ]
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "+1XMWNVl7ezwigmctv6N+Q==",
+    "dir": "h2c",
+    "convId": "c_60b2e1c3cea2",
+    "nonceHex": "18e890235a51644e671c7f22531ef7ac6f840cc5ca2d1948",
+    "ciphertext": "GOiQI1pRZE5nHH8iUx73rG+EDMXKLRlIFKmgNhwBDOIUOSnoVmdRJytxJP7JYED2RYegx0eevTwShzycukGrw32JuDjwdKiCxyaV2rLe/qPxrgdziC3A8Ys7zCyDrRQxKuTZB/pw4a6+bXxoJiGikb7DEmV8u2xAts6fORiGIabSv4LZVrmNQMrqYmI=",
+    "payload": {
+     "t": "ev.keep_awake_state",
+     "enabled": true,
+     "active": false,
+     "platform": "darwin",
+     "backend": "caffeinate"
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "eAz4m4qeOneopexTyLfjlQ==",
+    "dir": "c2h",
+    "convId": "c_87e3d6bd2815",
+    "nonceHex": "6740bbcd0ab3f8e2977b71341e8a90bdbde565c4370784bd",
+    "ciphertext": "Z0C7zQqz+OKXe3E0HoqQvb3lZcQ3B4S9UC7NO2m3d9zmdqv4TWavI/E1OgKPWccZCsPirjyGslQGadV6uFJCalqbTds0hKdRNJAmceENOproia+EI8A5CEsQ06/ngr2qxAk4rsuAXkJdAvfdNGc=",
+    "payload": {
+     "t": "ev.result",
+     "cmdId": "",
+     "ok": false,
+     "message": "载荷处理失败"
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "GLmb7ChPYImNjmGeTCVmBg==",
+    "dir": "h2c",
+    "convId": "c_1c11f70a7132",
+    "nonceHex": "29a7e74681000efa4e389d78a5fc8f97374eca4ca932c640",
+    "ciphertext": "KafnRoEADvpOOJ14pfyPlzdOykypMsZAx/79ukKRoemKhe+yw05b5gYg4BrXBr5Bx9rBRQ==",
+    "payload": {
+     "empty": {}
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "ZT04UTxCqoaF9IAe8BNSCQ==",
+    "dir": "c2h",
+    "convId": "c_ba715ff0b214",
+    "nonceHex": "b65a7bf5da464c86f9010ed01aa725d54155b233ff034e05",
+    "ciphertext": "tlp79dpGTIb5AQ7QGqcl1UFVsjP/A04Fj277W7FHQMLZkFSPBGY56sYDN32v/KeQu4luQBjp/K06Kp6DFGAv5qDc9w==",
+    "payload": {
+     "arr": [
+      1,
+      "两",
+      true,
+      null
+     ]
+    },
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "EdB7Lp/Swa20ozVN79i7yQ==",
+    "dir": "h2c",
+    "convId": "c_e4f16252ce64",
+    "nonceHex": "a68af3d280ce8d1247936e6a766f63ec8c7cc8c5e3dc5c98",
+    "ciphertext": "porz0oDOjRJHk25qdm9j7Ix8yMXj3FyYLVO/Sja0EgPUYX9InDynhRn654vMg3kqa4KfZW4=",
+    "payload": "bare string",
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "ZXe/BZiZuJZRIs7TKBMCTw==",
+    "dir": "c2h",
+    "convId": "c_3882dac4c240",
+    "nonceHex": "5fca98d1d36092140a4dfee47318b7f8a34483e7cc96846f",
+    "ciphertext": "X8qY0dNgkhQKTf7kcxi3+KNEg+fMloRvTyFWx6O0CKjwjjW7DIWXHtyL",
+    "payload": 42,
+    "openedByOracle": "ok"
+   },
+   {
+    "psk": "oJKwiJnHCZNob6eAfzb7yw==",
+    "dir": "h2c",
+    "convId": "c_172afedbea09",
+    "nonceHex": "2485ca64be2252d43b87ba4044b831adef18a938e645b75c",
+    "ciphertext": "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",
+    "payload": {
+     "big": "数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数数"
+    },
+    "openedByOracle": "ok"
+   }
+  ],
+  "qr": [
+   {
+    "input": "dshr:/p?v=1&s=wss://drc.provid.cc&n=bins-macbook&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=123456",
+    "output": {
+     "v": 1,
+     "server": "wss://drc.provid.cc",
+     "hostLabel": "bins-macbook",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": "123456"
+    }
+   },
+   {
+    "input": "dshr:/p?v=1&s=ws%3A%2F%2F127.0.0.1%3A8787&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D",
+    "output": {
+     "v": 1,
+     "server": "ws://127.0.0.1:8787",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=654321&n=%E4%B8%BB%E6%9C%BA&s=wss://a.example/ws",
+    "output": {
+     "v": 1,
+     "server": "wss://a.example/ws",
+     "hostLabel": "主机",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": "654321"
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=ab+cd+ef+gh+ij+kl==",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "ab+cd+ef+gh+ij+kl==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=ab%2Bcd%2Bef%2Bgh%2Bij%2Bkl%3D%3D",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "ab+cd+ef+gh+ij+kl==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=AbCdEfGhIjKlMnOpQrSt//==",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "AbCdEfGhIjKlMnOpQrSt//==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=AbCdEfGhIjKlMnOpQrSt%2F%2F%3D%3D",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "AbCdEfGhIjKlMnOpQrSt//==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=https://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D",
+    "output": {
+     "v": 1,
+     "server": "https://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=12",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=abcdef",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=1234567",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&n=",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D",
+    "output": null
+   },
+   {
+    "input": "dshr:/p?psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D",
+    "output": null
+   },
+   {
+    "input": "dshr:/p?s=wss://x",
+    "output": null
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&n=a&n=b",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "b",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&whatever=1",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&n=%zz",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "%zz",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D#frag",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==#frag",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&extra=a b",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&tail=",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&psk=ab%2Bcd%2Bef%2Bgh%2Bij%2Bkl%3D%3D",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "ab+cd+ef+gh+ij+kl==",
+     "token": ""
+    }
+   },
+   {
+    "input": "dshr:/p",
+    "output": null
+   },
+   {
+    "input": "dshr:",
+    "output": null
+   },
+   {
+    "input": "DSHR:/p?s=wss://x&psk=y",
+    "output": null
+   },
+   {
+    "input": " dshr:/p?s=wss://x&psk=y",
+    "output": null
+   },
+   {
+    "input": "https://x/p?s=wss://y&psk=z",
+    "output": null
+   },
+   {
+    "input": "dshr://host/p?s=wss://x&psk=y",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "dsh",
+     "psk": "y",
+     "token": ""
+    }
+   },
+   {
+    "input": "",
+    "output": null
+   },
+   {
+    "input": "   ",
+    "output": null
+   },
+   {
+    "input": "{\"psk\":\"x\"}",
+    "output": null
+   },
+   {
+    "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&n=名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名",
+    "output": {
+     "v": 1,
+     "server": "wss://x",
+     "hostLabel": "名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名",
+     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
+     "token": ""
+    }
+   }
+  ],
+  "normalizeToken": [
+   {
+    "input": " 12-3 4-56 ",
+    "output": "123456"
+   },
+   {
+    "input": "123456",
+    "output": "123456"
+   },
+   {
+    "input": "12 34 56",
+    "output": "123456"
+   },
+   {
+    "input": "---",
+    "output": ""
+   },
+   {
+    "input": "a1b2c3",
+    "output": "a1b2c3"
+   },
+   {
+    "input": "",
+    "output": ""
+   },
+   {
+    "input": null,
+    "output": ""
+   },
+   {
+    "input": null,
+    "output": ""
+   }
+  ]
+ }
+}

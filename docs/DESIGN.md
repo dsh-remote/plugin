@@ -245,7 +245,7 @@ live-e2e.mjs                 三个真实：真实 mp 代码 + 线上中继 + �
 | WebSocket 服务端/客户端 | `ws` | 中继、插件 | 旧实现已验证够用；中继部署是 `scp + npm install --omit=dev`，依赖越少越稳 |
 | 密码学原语 | `tweetnacl`（+ `tweetnacl-util`） | 协议层（进插件 bundle） | 与小程序 vendored 版**同库同算法**；`nacl.hash` 就是 SHA-512，跨运行时一致。前提：§7.0 的逐字节对拍实测通过 |
 | 二维码编码 + PNG | `qrcode`（node-qrcode） | 插件 bundle 内 | 旧实现试过自写编码器，被 zxing-cpp 对拍抓出系统性差异后否决（取证：`qr.ts:5-9`）；PNG 容器也无需再自写 |
-| 载荷/帧校验 | 手写 narrow 函数（约 60 行） | 协议层 | 中继不解密，要校验的只有 17 个控制帧的少数标识字段；插件侧载荷是**已解密且已认证**（secretbox MAC）的对端数据。引 `zod` 换来的是类型体操，代价是给 bundle 加一棵依赖树——**这条是判断，不是事实**，若 §7.0 之后仍觉得薄，随时可以换 |
+| 载荷/帧校验 | **`zod@^4.6`** | 协议层（进插件 bundle） | 这条原本是"判断而非事实"（我倾向手写 60 行 narrow 函数，理由是别为十几个字段引依赖树），**被实测推翻**：zod 闭包只有 1 个包、0 运行时依赖、2.2M ops/s——是中继 500 帧/秒上限的约 4400 倍，性能与体积两条反对理由都不成立，而手写要维护两份契约并丢掉"类型从 schema 推导"。取证 `legacy-spec/open-source-options.md` §A.5.1、§C |
 | 构建 | `typescript` + `tsup` | dev | 替掉自研 `bundle-protocol.mjs`；产物自包含 |
 | 测试 | `node:test`（内置） | dev | 旧实现如此；避免把测试框架变成生产依赖 |
 | 日志 | `log.ts`（约 20 行 `JSON.stringify` 行） | 中继 | 一行一 JSON 就是全部需求；`pino` 在这里是净增运维面（多一个依赖、多一层 flush/序列化语义） |
@@ -313,5 +313,35 @@ node scripts/validate-qr.mjs              # 28 组 zxing-cpp 真实解码（含 
 | Windows 防休眠 / 附件 / 多主机 | **不带** | 见 §7.2 |
 | 生产切换 | **本地全绿后直接切** | D1 改了 `pair-begin` 字段 → 旧 host 插件与新中继不兼容，**切换与插件重装必须同一次完成**；回滚 = 换回上一版产物目录 + restart |
 | 本机 Harness 重启 | **授权按需重启** | 阶段 C/D 我需要重启使插件生效，重启后从 `status.json` 取证 `carrier=services` |
+
+## 9. 执行日志（按日期追加，只记实测结果，不记计划）
+
+### 2026-10-02 · 阶段 A 完成
+
+`packages/protocol` 从零写完（`bytes` / `keys` / `record` / `pairing` / `frames` / `payloads` /
+`sleep` / `ids` / `index`，8 个模块 + 284 条 golden 向量）。实测：
+
+- `pnpm --filter @dsh-rc/protocol test` → **68 项全绿**；
+- `node --test e2e/protocol.test.mjs` → **17 项全绿**，含
+  ① 284 条向量逐字节复现（UTF-8/base64 8+42、KDF 13、会话密钥 144、nonce 前缀 12、
+  计数器 nonce 12、密封记录 12、配对 URI 33、配对码归一化 8）；
+  ② 60 组随机向量两侧**双向互解**且同钥同 nonce 密文逐字节相同；
+  ③ 篡改 7 个不同位置，两侧**结论一致**地拒；
+  ④ 原语层三方一致：npm `tweetnacl`、小程序 vendored `nacl-fast`、`node:crypto` 的 SHA-512；
+  ⑤ 反证测试：把 KDF 末尾分隔符去掉后向量立刻不匹配（证明这套断言真的在守东西，不是空判定）。
+
+顺带证实/修正的三件事：
+
+1. **小程序的 `seal()` 强制要求显式 nonce**（`mp/core/codec.js:90-93` 抛错），
+   所以"小程序加密 → 我们解密"这一方向的对拍必须显式喂 nonce；这是 B6"无 CSPRNG"约束的直接体现。
+2. **入站 base64 的严格度差**不只含空白，还含空串：`js-base64` 会先剔空白再解，
+   `Buffer.from(s,'base64')` 对非法字符静默丢弃，而协议层的 `frames.base64Text` 两者都拒。
+   测试把"我们只能更严、且严在哪"写成了断言，而不是留成口头结论。
+3. **D5（新增一条偏离）**：`auth`/`auth-ok`/`auth-fail` 三帧并入 `hello`/`hello-ok` 一条注册路径，
+   失败统一 `error{code:'bad_token'}`。理由与影响见 `packages/protocol/src/frames.ts` 文件头——
+   小程序从不发 `auth`，因此这条改动**对手机端零影响**，省掉一整套重复的握手分支。
+   同时删掉两个从未被使用的声明：`session-list` 帧与 `cmd.subscribe` 载荷。
+4. **zod 取代手写校验**（§6 那条"判断而非事实"被实测推翻，见 §6 表格更新）。
+
 
 

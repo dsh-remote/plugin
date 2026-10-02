@@ -12,11 +12,12 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "pnpm build && node --test dist/tests/keys.test.js dist/tests/record.test.js dist/tests/pairing.test.js dist/tests/frames.test.js dist/tests/payloads.test.js dist/tests/sleep.test.js dist/tests/ids.test.js"
   },
   "dependencies": {
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
