@@ -26,6 +26,7 @@
 mp/
   app.js / app.json / app.wxss      全局：持有 DrcClient 单例 + TDesign 主题变量
   project.config.json / package.json
+  theme/fixed-light.wxss            固定浅色变量（生成物，见「固定白色主题」）
   miniprogram_npm/tdesign-miniprogram/   裁剪版 TDesign（开源 UI 组件库）
   core/
     vendor/
@@ -40,8 +41,159 @@ mp/
   pages/
     sessions/  入口页：主机状态 + 防休眠开关 + 会话列表（含已归档徽标）
     pair/      配对：扫码/粘贴二维码 + 6 位配对码 + 高级设置 + 环境自检
-    chat/      对话：流式输出、审批卡、提问卡、中断
+    chat/      对话：文档流（步骤组可折叠）+ 流式正文 + 审批卡、提问卡、中断
 ```
+
+## 固定白色主题
+
+**不跟随系统深色**，永远是白底深字。
+
+`app.json` 里 `"darkmode": false`（也是默认值，写出来是为了表态），真正起作用的是
+`app.wxss` 的 import 顺序：
+
+```css
+@import './miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss';
+@import './theme/fixed-light.wxss';   /* 必须在后面 */
+```
+
+TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)` 里**。上面第二行
+是一份"剥掉了 `@media` 外壳"的浅色变量表，选择器和前者一样是 `.page,page`（特异性相同），
+于是靠「同特异性下源码顺序靠后的胜出」把深色分支压掉 —— 系统开着深色也一样。
+
+- **`theme/fixed-light.wxss` 是生成物，不要手改**。它由 `node scripts/gen-mp-theme.mjs`
+  从 TDesign 的 `_index.wxss` 里抽出浅色那几段生成（136 个变量）。
+  TDesign 升级后重跑一次；`--check` 用来发现"忘了重新生成"（`pnpm mp:theme`）。
+- 手抄不行：那是几 KB 的单行 CSS，漏一个变量就会退回深色值。
+
+验证手法（换个 TDesign 版本或改 import 顺序后值得再跑一次）：把生成物里某个变量的值
+临时改成 `#ff0000` 再截图，页面底色**必须**跟着变红 —— 变了才证明覆盖真的赢过了
+`_index.wxss`。改完记得重新生成。
+
+## 代码注入优化（按需注入 / 用时注入）
+
+小程序启动时的耗时大头有两块：**代码包下载**和**代码注入执行**。下面这两个配置
+只治后一块，**对包体积零影响** —— 所以别拿 `pnpm mp:upload` 的体积数字判断
+"开了没生效"，它永远不变。要看得用 `pnpm mp:lazyload`。
+
+**按需注入**（`app.json`）：
+
+```json
+{ "lazyCodeLoading": "requiredComponents" }
+```
+
+不开的话，主包里**所有** JS 会在启动时合并注入并立刻执行 —— 包括还没访问的
+页面、当前页根本没声明的自定义组件。本项目原本 TDesign 那 112 个组件 JS
+（132 KB）全都要跑一遍，而 sessions 页其实只用得到 6 个。
+
+配套要求（已经满足，别破坏）：`app.json` 不声明全局 `usingComponents`；
+每页 `usingComponents` 只写这一页真正用到的组件。
+
+**用时注入**（`pages/sessions/sessions.json`）：
+
+```json
+{ "componentPlaceholder": { "t-empty": "view" } }
+```
+
+在开了按需注入的前提下，给组件配占位组件的效果是：**第一次真正渲染它之前不注入**。
+`t-empty` 只在「已配对但零会话」时出现，首页常态路径（有会话）下它永不注入；
+真要显示时先渲染成占位的内置 `view`，注入完成后自动替换回组件。
+
+**为什么只配 `t-empty`**：占位是异步替换的，配在首屏就渲染的控件上（`t-switch`、
+`t-button`）只会让控件晚一拍出现，用户看得见抖动。目前只有 `t-empty` 满足
+"条件渲染 + 不在首屏主路径 + 非交互控件" 这三个条件。
+
+生效后的注入面（`pnpm mp:lazyload`）：
+
+| | 注入 JS |
+|---|---|
+| 关闭按需注入 | 281.2 KB / 123 个 |
+| 开启后进入 sessions | 116.1 KB（首屏 111.9 KB） |
+| 开启后进入 chat | 132.4 KB |
+
+**改完必须验证**：官方明确要求"修改配置后务必确认小程序表现正常"。
+`pnpm mp:shots` 现在会顺带捕获运行时 `exception` 和 `console.error`
+（占位组件替换失败、组件未声明这类错误截图看不出来），有错就以非零码退出。
+`scripts/mp-shots.mjs` 里的 `sessions-empty-early` 用例就是专门盯占位替换的。
+
+## chat 页：文档流，不是气泡流
+
+五种块：`turn` 轮次分隔 / `user` 你的指令 / `steps` 步骤组 / `text` 回复正文 / `note` 系统提示。
+
+**步骤组是这一页的核心抽象**。一轮里模型「想 → 调工具 → 再想 → 再调」的过程被聚成**一条**，
+界面上就是「已完成 3 个步骤」一行，点开才看得到每条细节。不聚合的话，一轮调 6 次工具
+就是 12 个块，用户要翻 6 屏才读到那句结论。
+
+- 组内条目按时间序排，两种：`think`（只有阶段与耗时）和 `tool`（可展开看参数与完整结果）。
+- **组的开合**（`onToggleSteps`）与**某一步的开合**（`onToggleTool`）是两个层级；顶栏的
+  「展开过程」是全局开关，之后新开的组会继承它。
+- **封口**：一旦有正文 / 轮次 / 指令出现，这一组就 `closed`，之后新的工具调用必须另起一组
+  （`_sealSteps`）。漏了这条会把新调用插进上一段已经读完的过程里 —— 有测试锁着。
+- 组的展示字段（`label` / `tools` / `live`）在 `_commit` 里由 `decorateSteps()` 统一派生，
+  渲染层只管取，不在 wxml 里现算。**「还在跑」只看组内有没有未完成的条目**，不看全局
+  `running`，否则前面那些早已封口的老组也会跟着显示"正在执行"。
+- 空块流时**不补**「思考中」：那一轮还没开始，状态由顶栏表达，凭空冒出一条反而落单。
+
+「思考」的时长是**推断**出来的 —— 它从出现到下一条内容之间的间隔。协议里没有"思考开始了"
+这种事件，「思考」正文更是按 M28 红线根本不出站（见上）。
+
+`e2e/mp-chat-blocks.test.mjs`（18 项）锁着这些时序，改块流一定要跑。
+
+## 打开会话时读到主机上的历史
+
+点进一条会话，**主机上已有的内容会被读进来**（不是只有本地内存里从这一刻起的事件）。
+链路是三段：
+
+```
+mp: client.loadHistory(sessionId, {beforeSeq?})   →  cmd.session_history
+     ↑ 按 cmdId 配一个 waiter（不是广播：只有发起的那一次请求会收到回执）
+plugin: runtime.handleCommand → kernel.readHistory(sessionId, {beforeSeq, limit:40})
+     ↑ sessionQuery.readSession() 拿**整份**日志，切片在内存里做
+     ↑ historyPageFromLog()：内核事件 → 线格式条目（按 seq 升序）
+mp: chat._replayPage() → 走**与实时流同一套**落块函数
+```
+
+几个刻意的选择，每一条都对应一种"历史看起来怪"的缺陷：
+
+- **一页里条目的 `t` 与实时流同构**（`ev.message_delta` / `ev.tool_event`），
+  所以回放复用的是 `_applyText` / `_applyTool`，不写第二套渲染规则。
+  两份实现分叉的表现是"实时看着对、历史看着怪"，靠肉眼很难发现。
+- **只有游标，没有 `hasMore`**：`nextBeforeSeq` 在 = 还有更早的一页，不在 = 到底了。
+  用两个字段表达同一件事就会造出"说还有、却没给游标"这种自相矛盾的载荷，
+  而它的表现是——手机上「加载更早」点了没反应，且没有任何报错。一个字段没有这个状态。
+- **游标由主机给**：一条内核事件可能折成 0/1/2 条线格式条目（`assistant/message`
+  常常只有 `reasoning`，正文是空的 → 折成 0 条），小程序既不知道折叠规则也不该知道，
+  按条数自己推算迟早会跳过或重发一段。
+- **回放不带 `ev.run_state`**：运行态是"此刻"的事，回放历史不该去改顶栏。
+- **回放不补「思考中」段**：历史里每一步都已经结束了，往回插一条还在走秒的思考段，
+  屏幕上会出现一排永远走不完的秒数。落块函数多一个 `allowThink` 开关就是为这件事。
+- **去重要分清两种重复**：同一页里同一次工具调用本来就有「参数」「收尾」两条事件、
+  同一条消息也可能有多条 delta，把它们当成重复丢掉的表现是"工具永远停在正在执行、
+  结果预览是空的"。去重只该针对**实时已经渲染过、历史里又来一遍**。
+  文本/工具按 id 对齐（协议保证两条路径算出的 `messageId` 逐字相同），
+  用户消息没有可对齐的 id（本地回显是即时造的块），退化成按文本**多重集消耗**——
+  判相等会把更早那一页里重复的那句「继续」也一起吞掉。
+- **结算点只有一个**：`loadHistory` 里的 `done()` 既是"收到回帧"的出口、也是"超时"的出口，
+  它靠 `if (!self._historyWaiters[cmdId]) return` 做幂等。因此**谁都不许抢先把登记删掉**——
+  收帧那边顺手 `delete` 一下，或者断线结算时"先把表换成空的、再挨个回调"，都会让这道守卫
+  永远命中：promise 既不 resolve 也不 reject，**连 15s 超时那条路也一起被吃掉**，
+  并且没有任何报错。表现就是「正在读取主机上的历史…」一直转、或「加载更早」点了没反应。
+  这个 bug 真发生过一次，而且两头的测试都看不见它（页面测试用的是桩 client，
+  闭环测试当时一条历史用例都没有）—— 现在由 `e2e/mp-client.test.mjs` 第 11/12 条按住。
+- **往前插内容不许自动跟底**：用锚点把用户刚读到的那一块滚回视口，否则页面会原地跳动。
+
+界面上「历史读取」有四种状态，必须长得不一样：`loading`（转圈）/ `ok`（外加一句
+"以上是主机上已有的历史"；还有更早时给一个可点的「加载更早的内容」）/ `error`
+（可点重试）。**把"读不到"渲染成"这个会话没内容"是在给用户一个假事实** —— 他会以为
+主机上真的没有东西，转而去查别的方向。空状态那两句话就是按这个分岔写的：
+只有 `historyState === 'ok'` 才说"这个会话还没有内容"。
+
+主机那一代内核没有 `readSession` 时，插件**明确拒绝**（"主机这一代不支持读取历史"），
+不返回空页 —— 同上，空页会让用户以为会话是空的。
+
+四种状态都有截图留档（`pnpm mp:shots --pages chat` 里的 `chat-history*`）：
+`chat-history` 是"读到了且还有更早"，`chat-history-error` / `chat-history-empty` /
+`chat-history-loading` 各占一张。这三种说法**长得不一样**是可以用眼睛验的，
+而这件事只有截图能验。
 
 ## 握手流程（与 e2e 完全一致）
 
@@ -72,8 +224,12 @@ kH2C = derivePskKey(psk,'h2c',sessionId)   // 主机 → 小程序
 ```sh
 pnpm -r test                          # 含下面几项
 node --test e2e/mp-crypto.test.mjs    # 11 项：base64/UTF-8/密钥派生/seal-open/篡改检测
-node --test e2e/mp-client.test.mjs    # 8 项：真实 client.js + wx shim 跑完整闭环
+node --test e2e/mp-client.test.mjs    # 13 项：真实 client.js + wx shim 跑完整闭环（含取历史的结算语义）
 node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
+node --test e2e/mp-chat-blocks.test.mjs   # 19 项：chat 页块流时序 + 历史回放
+node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
+pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义
+pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
 
 `e2e/mp-sim.mjs` 提供了一个最小 `wx` shim（storage + `connectSocket` 走 `ws` 包），
@@ -122,7 +278,8 @@ node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
 
 - 图片/文件附件（`cmd.send_prompt.attachments` 协议里有字段，UI 没做）
 - 多主机切换（现在是单配对，重新配对会覆盖）
-- 消息历史持久化（小程序只保留本次会话的内存流）
+- 消息历史的**本地**持久化：小程序自己的存储里不留消息，每次打开会话都从主机读一页。
+  离线看历史、或主机上那条会话被删掉之后回看，都还做不到
 - 无 WebSocket 的容器下没有替代传输（协议是 WS-only，不打算再造一套）
 
 ## 真实链路端到端测试

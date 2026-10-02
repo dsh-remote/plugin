@@ -117,7 +117,7 @@
 把该 client 从所有会话移出，会话空了就删除（`apps/server/src/main.mjs:378-388`，第 385 行
 `if (conv.clients.size === 0) conversations.delete(cid)`），host 侧收到 `peer-left` 后同样删掉自己那份
 （`packages/plugin/src/relay-client.ts:225-226`）。而小程序明确写了续用路径——重连后拿旧 convId
-直接 `cmd.list_sessions`，状态文案「已连接，正在恢复会话」（`mp/core/client.js:258-261`）。
+直接 `cmd.list_sessions`，状态文案「已连接，正在同步会话列表」，列表到达后转为「已连接到主机」（`mp/core/client.js`）。
 后果：**手机每次回前台都要重新扫码**，旧实现只能靠 host 定时重发新码（`pairOnStartSec`，默认 0=关）来绕，
 那是"逼用户重新配"而不是"续上"。
 改法：中继侧 `conversations` 在**客户端**断连时保留（带 TTL，如 7 天无活动则回收），

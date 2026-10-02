@@ -20,16 +20,22 @@
 | 层 | 状态 | 怎么验 |
 |---|---|---|
 | 类型 | 三包全绿 | `env -u NODE_OPTIONS pnpm -r typecheck` |
-| 协议层 | **76 项全绿** | `pnpm --filter @dsh-rc/protocol test` |
+| 协议层 | **81 项全绿** | `pnpm --filter @dsh-rc/protocol test` |
 | 与小程序逐字节对拍 | **18 项全绿**（284 条向量 + 随机新向量 + 篡改 + 反证 + F6 契约） | `node --test e2e/protocol.test.mjs` |
-| 中继 | **62 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账） | `pnpm --filter @dsh-rc/server test` |
-| host 插件 | **173 项全绿** | `pnpm --filter dsh-remote-control test` |
-| 本地全链路 | **13 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock） | `node e2e/run.mjs` |
-| 生命周期取证 | **50 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存） | `node --test e2e/*.test.mjs` |
+| 中继 | **63 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账） | `pnpm --filter @dsh-rc/server test` |
+| host 插件 | **204 项全绿** | `pnpm --filter dsh-remote-control test` |
+| 本地全链路 | **14 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
+| 生命周期取证 | **74 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
+| 小程序页面逻辑 | **19 + 3 项全绿**（chat 块流时序与历史回放 / 会话列表归档过滤） | `pnpm -C e2e test:mp-pages` |
 | 真实链路 | **18 项/轮全绿**：生产入口 1 轮、本地中继 3 轮；助手正文 114/162 字与 2 条工具行确实到了手机 | `node e2e/live-e2e.mjs` |
 | 二维码 | zxing-cpp 真实解码 28/28 | `node scripts/validate-qr.mjs` |
 | 生产 | 跑的是 `relay.mjs`（单文件，`/healthz` 报 `version: 2.0.0`），journalctl 无 warning | `curl https://drc.provid.cc/healthz` |
 | **未取证** | 真机上的**审批卡与提问卡**：见 §1.1 | — |
+
+> 上面这些数字**跑出来是多少就写多少**，别照抄（这一栏换过好几轮了）。
+> 一条经验：`apps/server` 与 `packages/*` 的测试引的是 **`dist/` 里的产物**，
+> 所以必须走包自己的 `test` 脚本（它先 build）；直接 `node --test tests/*.mjs`
+> 会在 dist 陈旧时红给你看，而那是假红 —— 排查前先 build。
 
 ### 1.1 唯一没能在真机上取证的两条（诚实记账，不许当成已通过）
 
@@ -39,7 +45,7 @@
   **23 个会话全是 `never`**（部分是 `source:"delegation"`），而
   `@deepseek-ai/dsh-user-approval` 的 README 写着 `'never' rejects before interactive dispatch`
   ——即在参与者被问到之前就决定了。所以"卡片推给手机 → 手机点批准 → 内核继续"这一整条
-  只在**本地全链路**里验过（`e2e/mp-client.test.mjs` 第 5 条 + `e2e/run.mjs` 第 7 步）。
+  只在**本地全链路**里验过（`e2e/mp-client.test.mjs` 第 5 条 + `e2e/run.mjs` 第 8 步）。
   要补真机取证：把某个会话的策略设成 `ask`（桌面 UI 里做，或用服务的 `setApprovalPolicy()`），
   再跑 `node e2e/live-e2e.mjs --session <那个会话 id> --prompt <需要审批的指令>`。
   重扫命令：`node /tmp/…`——照 §6 的方式读 `request/header`/`approval/policy` 事件即可。
@@ -47,7 +53,7 @@
   `no registerProvider (keys=name|typertRemote|waits|queuedReplies|…)`——这一代宿主的
   `ctx.userQuestions` 不是 `@deepseek-ai/dsh-user-questions` 那份带 `registerProvider` 的
   服务定义，所以**接管路径在本机不可能跑起来**（不是代码问题，但也不能写作已验证）。
-  本地闭环有测试：`e2e/mp-client.test.mjs` 第 6 条 + `e2e/run.mjs` 第 9 步。
+  本地闭环有测试：`e2e/mp-client.test.mjs` 第 6 条 + `e2e/run.mjs` 第 10 步。
 
 ## 2. 快速恢复环境
 
