@@ -1,5 +1,19 @@
 name: CI
 
+# 为什么长这样（与旧版的差别都写在行内）：
+#
+# - **只有一个 `pnpm -r test` 主作业**：三个包的 test 脚本各自先 build（tsc 类型检查
+#   带 noEmitOnError，"build 绿"不再等于"类型对"），再看各包自己的产物，
+#   比在这里手写六条命令少一处会漂移的事实源。
+# - **`relay-smoke` 跑的是单文件产物**，不再是 `src/main.mjs` 那种"顺手起个脚本"。
+#   生产部署只有一个入口：`dist/bundle/main.js`（自包含，无 node_modules），
+#   所以烟测必须起那个东西；起开发态的多文件产物等于没测过线上跑的东西（复核 R5）。
+# - **Node 22 是唯一的运行基线**（设计拍板），但产物 target 是 node20，
+#   所以用 20 起一次产物烟测：这两件事都要成立，各自有作业守着。
+# - pnpm 版本必须是 11：`pnpm-workspace.yaml` 里的 `allowBuilds`/`onlyBuiltDependencies`
+#   是 pnpm 11 的机制，用 9 装依赖时 esbuild 的安装脚本会被跳过，
+#   表现是"CI 里没有 esbuild 二进制"而不是明确的错误。
+
 on:
   push:
     branches: [main, master]
@@ -11,13 +25,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        node: ['22']
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - uses: actions/setup-node@v4
         with:
@@ -27,35 +41,79 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm -r build
+      - name: Typecheck (all packages)
+        run: pnpm -r typecheck
 
-      - name: Unit + integration tests
+      - name: Build + unit/integration tests (protocol, relay, plugin)
         run: pnpm -r test
 
-      - name: Relay end-to-end
+      - name: Wire-format differential against the Mini Program's own codec
+        run: node --test e2e/protocol.test.mjs
+
+      - name: Local full chain (real relay + real plugin entry + real mp client)
         run: node e2e/run.mjs
 
-  # The relay ships as a standalone script with no build step; make sure it
-  # still boots and answers under the minimum supported Node.
+      - name: Lifecycle forensics (client reconnect / relay restart / host restart)
+        run: node --test e2e/restart-resume.test.mjs
+
+  # 中继的唯一受支持产物：一个自包含单文件。空目录里必须能起、能应答 /healthz、
+  # SIGTERM 必须优雅退出 0，且**缺 host token 时必须拒绝启动**（不能"活着但坏了"）。
+  # 这一份作业刻意跑在 **Node 20**：产物的 target 是 node20，就得有人在 20 上真起一次；
+  # 主作业在 22，两边都要成立。
   relay-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install ws
-        run: npm install --prefix apps/server ws
-      - name: Boot relay and hit healthz
+          cache: pnpm
+
+      - name: Install and build the bundle
+        run: pnpm install --frozen-lockfile && pnpm --filter @dsh-rc/server build
+
+      - name: Boot the single file in an empty directory
         run: |
-          DRC_HOST_TOKEN=ci-token DRC_PORT=8787 node apps/server/src/main.mjs &
-          for i in $(seq 1 50); do
-            if curl -sf http://127.0.0.1:8787/healthz; then echo "relay up"; exit 0; fi
-            sleep 0.1
-          done
-          echo "relay failed to boot"; exit 1
-      - name: Reject a missing token
+          set -e
+          mkdir -p /tmp/drc-smoke && cp apps/server/dist/bundle/main.js /tmp/drc-smoke/relay.mjs
+          cat > /tmp/drc-smoke/check.mjs <<'EOF'
+          import { spawn } from 'node:child_process'
+          import { readFileSync } from 'node:fs'
+          const child = spawn(process.execPath, ['/tmp/drc-smoke/relay.mjs'], {
+            env: { ...process.env, DRC_HOST_TOKEN: 'ci-smoke-token-0123456789abcdef', DRC_PORT: '8787', DRC_BIND: '127.0.0.1', NODE_OPTIONS: '' },
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          let out = ''
+          child.stdout.on('data', (d) => (out += d))
+          child.stderr.on('data', (d) => (out += d))
+          let ok = null
+          for (let i = 0; i < 100 && !ok; i++) {
+            await new Promise((r) => setTimeout(r, 100))
+            try { ok = await (await fetch('http://127.0.0.1:8787/healthz')).json() } catch { /* 还没起来 */ }
+          }
+          if (!ok) { console.error('产物起不来：' + out); process.exit(1) }
+          if (ok.ok !== true) { console.error('/healthz 不 ok：' + JSON.stringify(ok)); process.exit(1) }
+          // version 必须是真实包版本：单文件旁边没有 package.json，
+          // 靠文件探针读版本的实现会静默退化成 0.0.0（这条以前没人守）。
+          const pkg = JSON.parse(readFileSync('apps/server/package.json', 'utf8'))
+          if (ok.version !== pkg.version) { console.error(`version 对不上：产物 ${ok.version} != 包 ${pkg.version}`); process.exit(1) }
+          const code = await new Promise((resolve) => {
+            child.on('exit', resolve)
+            child.kill('SIGTERM')
+            setTimeout(() => { child.kill('SIGKILL'); resolve('timeout') }, 5000)
+          })
+          if (code !== 0) { console.error(`优雅停机没有 exit 0：${String(code)}`); process.exit(1) }
+          console.log('smoke ok：version=' + ok.version + ' 停机 exit=0')
+          EOF
+          node --version
+          node /tmp/drc-smoke/check.mjs
+
+      - name: Reject a missing host token (never "alive but broken")
         run: |
-          if node apps/server/src/main.mjs; then echo "should have failed"; exit 1; fi
-          echo "missing DRC_HOST_TOKEN correctly rejected"
+          if env -u DRC_HOST_TOKEN node apps/server/dist/bundle/main.js; then echo "应该拒绝启动却起来了"; exit 1; fi
+          echo "缺 DRC_HOST_TOKEN 时正确拒绝"

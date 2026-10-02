@@ -5,6 +5,14 @@
 #
 # The relay binds 127.0.0.1 by default — nginx terminates TLS and proxies wss
 # to it. (Override with DRC_BIND in the env file if it must be the edge.)
+#
+# What actually runs is ONE self-contained file. `pnpm --filter @dsh-rc/server build`
+# emits apps/server/dist/bundle/main.js with `ws` and the protocol layer inlined, so the
+# deployment is "copy that file" — no node_modules, no `npm install --omit=dev`, and
+# therefore no way for the server's dependency tree to drift from CI's.
+# The old unit ran `src/main.mjs`; that entry point is gone, and `dist/src/main.js`
+# (the unbuilt-tree form) needs devDependencies to resolve @dsh-rc/protocol —
+# the bundle is the only supported production entry.
 
 [Unit]
 Description=DSH Remote Control relay (zero-knowledge WebSocket relay)
@@ -17,7 +25,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/dsh-remote-control/server
 EnvironmentFile=/etc/dsh-remote-control.env
-ExecStart=/usr/bin/node src/main.mjs
+ExecStart=/usr/bin/node /opt/dsh-remote-control/server/relay.mjs
 Restart=always
 RestartSec=3
 

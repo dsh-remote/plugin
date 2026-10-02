@@ -2,13 +2,13 @@
 
 本目录是**实际生产部署**的配置，不是示例。
 
-## 当前部署（2026-10-01）
+## 当前部署（2026-10-02）
 
 | 项 | 值 |
 |---|---|
 | 公网入口 | `wss://drc.provid.cc` |
 | ECS | 阿里云 cn-shanghai / `i-uf62gq3vjcvqzi8f9ozj` / `47.100.82.15` / Alibaba Cloud Linux 4 |
-| 中继 | `/opt/dsh-remote-control/server`，systemd 单元 `dsh-remote-control.service` |
+| 中继 | `/opt/dsh-remote-control/server/relay.mjs`（**一个自包含单文件**），systemd 单元 `dsh-remote-control.service` |
 | 反向代理 | nginx 1.30，`/etc/nginx/conf.d/drc.conf` |
 | 证书 | Let's Encrypt（acme.sh + 阿里云 DNS-01），ECC，自动续期 |
 | 绑定 | 中继只监听 `127.0.0.1:8787`，公网只暴露 80/443 |
@@ -16,22 +16,31 @@
 
 DNS 用的是既有的 `*.provid.cc` 泛解析，所以**没有新增解析记录**。
 
+**产物形态这一条是这次重写改的**：中继现在部署的是
+`pnpm --filter @dsh-rc/server build` 打出来的 `apps/server/dist/bundle/main.js`
+（`ws` 与协议层都内联进去了，`bufferutil`/`utf-8-validate` 是可选原生加速、缺了照常跑）。
+于是生产只有"拷一个文件 + 一个 env 文件"，没有 `npm install`，也就没有
+"服务器上的依赖树和 CI 不一样"这一类故障。旧文档里的 `scp apps/server/src/main.mjs`
+与 `npm install --omit=dev` 都作废了；`ExecStart` 也已改指这个单文件
+（旧的 `node src/main.mjs` 指向的是已经不存在的文件）。
+
 ## 从零复现
 
 ### 1. 服务器准备
 
 ```sh
-dnf install -y nodejs npm nginx          # Alibaba Cloud Linux 4 自带 node 22
-mkdir -p /opt/dsh-remote-control/server/src /etc/nginx/ssl
+dnf install -y nodejs nginx           # Alibaba Cloud Linux 4 自带 node 22
+mkdir -p /opt/dsh-remote-control/server /etc/nginx/ssl
 ```
 
 ### 2. 部署中继
 
 ```sh
-scp apps/server/src/main.mjs   root@HOST:/opt/dsh-remote-control/server/src/
-scp apps/server/package.json   root@HOST:/opt/dsh-remote-control/server/
-scp deploy/systemd/*.service   root@HOST:/etc/systemd/system/
-ssh root@HOST 'cd /opt/dsh-remote-control/server && npm install --omit=dev'
+# 本地先构建产物
+pnpm install && pnpm --filter @dsh-rc/server build
+
+scp apps/server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
+scp deploy/systemd/*.service        root@HOST:/etc/systemd/system/
 
 # token：两端必须一致
 cat > /etc/dsh-remote-control.env <<'EOF'
@@ -44,6 +53,7 @@ EOF
 chmod 600 /etc/dsh-remote-control.env
 
 systemctl daemon-reload && systemctl enable --now dsh-remote-control
+curl -s http://127.0.0.1:8787/healthz      # version 必须是包的 version，不是 0.0.0
 ```
 
 ### 3. DNS 证书（DNS-01，不需要占用 80 端口）
@@ -75,29 +85,50 @@ ssh root@HOST 'nginx -t && systemctl enable --now nginx'
 # ~/.dsh/profiles/desktop/cordis.patch.yml 里
 #   serverUrl: wss://drc.provid.cc
 #   hostToken: <同一个 token>
-./scripts/install-to-profile.sh        # 构建 + 重装 + 注册 bundle
-# 然后重启 DSH Harness
+./scripts/install-to-profile.sh        # 构建单文件 + 装进 profile + 注册 bundle
+# 然后重启 DSH Harness（新代码不会被热加载）
 ```
+
+安装脚本会**顺手删掉 profile 里旧的 `file:` 依赖**：那条是上一代安装方式留下的，
+只要还在，`pnpm install` 就会把插件再物化一份进 profile，于是宿主里同时跑**两个实例**
+——两个 hostId、中继里两份会话、手机连到哪个全凭运气（真机排查时被它误导过整整几轮）。
 
 ### 6. 验证
 
 ```sh
-node scripts/verify-deployment.mjs                        # 自建主机，跑完整闭环
-node scripts/verify-deployment.mjs --pair 123456 --qr 'dshr:/p?…'   # 连正在运行的主机
+# 本地全链路（真中继进程 + 真 apply() 入口 + 真小程序代码，内核面是 mock）
+node e2e/run.mjs
+
+# 真实链路：本机真 Harness + 指定中继（三个真实：真 mp 代码 / 真中继 / 真内核）
+DRC_LIVE_RELAY=wss://drc.provid.cc node e2e/live-e2e.mjs
+DRC_LIVE_RELAY=wss://drc.provid.cc node e2e/live-e2e.mjs --rounds 3   # 稳定性，每轮一张新码
 ```
+
+`live-e2e` **拿不到真实配对码就直接失败，绝不退化成 mock 主机**——旧的那个"自建主机"模式
+掩盖过一次真故障，所以这条不留后门。配对码来源是插件写在
+`~/.dsh/dsh-remote-control/status.json` 的 `pairing`（需要 profile 开 `pairOnStartSec`）。
 
 ## 运维
 
 ```sh
 systemctl status dsh-remote-control
 journalctl -u dsh-remote-control -f          # 一行一个 JSON
-journalctl -u dsh-remote-control -p warning  # 只看告警（暴力破解、心跳超时等）
+journalctl -u dsh-remote-control -p warning  # 只看告警（暴力破解、心跳超时、配对配额用尽等）
 curl -s https://drc.provid.cc/healthz
 tail -f /var/log/nginx/drc.access.log
 ```
 
-改中继代码后：`scp apps/server/src/main.mjs ... && systemctl restart dsh-remote-control`。
-中继是纯内存的，重启会丢掉配对关系（客户端会提示重新配对），这是有意为之。
+改中继代码后：
+
+```sh
+pnpm --filter @dsh-rc/server build
+scp apps/server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
+ssh root@HOST 'systemctl restart dsh-remote-control'
+```
+
+中继是纯内存的，重启会丢掉配对关系：客户端拿旧 convId 发帧会撞上
+`error{unknown_session}`，手机上就是中文的"会话已失效，请重新配对"。
+这条行为有 `e2e/restart-resume.test.mjs` 的 (b) 用例锁住，不是文档里的口头承诺。
 
 ## 安全组
 

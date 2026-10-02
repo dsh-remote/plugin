@@ -138,11 +138,14 @@ test('中继来帧：paired 必须带 sessionId，peer-joined 可以带 pairingT
   )
 })
 
-test('四个 pair-fail reason 逐字可用（小程序有中文映射表，F6）', () => {
-  for (const reason of ['invalid_or_expired', 'already_used', 'host_offline', 'bad_token', 'rate_limited']) {
+test('pair-fail 的 reason 只能是小程序有中文映射的那四个（F6）', () => {
+  for (const reason of ['invalid_or_expired', 'already_used', 'host_offline', 'bad_token']) {
     assert.equal(parseRelayFrame({ t: 'pair-fail', reason })?.t, 'pair-fail')
   }
   assert.equal(parseRelayFrame({ t: 'pair-fail', reason: 'expired' }), null)
+  // `rate_limited` 是**服务端内部**原因：小程序的 translatePairFail 没有这个键，
+  // 发出去就是一条英文字面量弹给用户。中继要限速就记日志，线上写 invalid_or_expired。
+  assert.equal(parseRelayFrame({ t: 'pair-fail', reason: 'rate_limited' }), null, 'rate_limited 又回到线上了')
 })
 
 test('文本解析：非法 JSON、数组、标量、缺 t 全部返回 null 而不抛', () => {

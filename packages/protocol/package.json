@@ -51,7 +51,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm build && node --test \"dist/tests/*.test.js\""
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "tweetnacl": "^1.0.3",
