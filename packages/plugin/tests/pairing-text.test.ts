@@ -12,12 +12,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pairingPairText, PAIR_UNAVAILABLE_TEXT } from '../src/shell/pairing-text.js'
 
-const QR = 'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142'
+const QR = 'dshr:/p?v=1&s=wss%3A%2F%2Frelay.example.invalid&n=demo-host&psk=ZmFrZS1wc2srZmFrZQ%2BZmFrZQ%3D%3D&t=424242'
 const TERMINAL = '█▀▀▀▀▀█ ...\n▀ ▀ ▀ ▀▀'
 
 function view(overrides: Partial<Parameters<typeof pairingPairText>[0]> = {}) {
   return {
-    token: '173142',
+    token: '424242',
     qr: QR,
     expiresAt: 1_000_000,
     now: 940_000,
@@ -30,7 +30,7 @@ function view(overrides: Partial<Parameters<typeof pairingPairText>[0]> = {}) {
 
 test('文本输出自带二维码、可粘贴的 URI、TTL 与一次性提示', () => {
   const text = pairingPairText(view())
-  assert.match(text, /配对码 173142/, '6 位码必须在第一行：手输是扫码之外的唯一退路')
+  assert.match(text, /配对码 424242/, '6 位码必须在第一行：手输是扫码之外的唯一退路')
   assert.match(text, /60 秒内有效/, '剩余寿命要说清（服务端权威 TTL 改写后本地值就是它）')
   assert.match(text, /一次性/, '不写"一次性"，用户会以为同一张码能配两部手机')
   assert.ok(text.includes(TERMINAL), '二维码本体必须在文本里')

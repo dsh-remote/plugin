@@ -1,14 +1,14 @@
 # HANDOFF — dsh-remote-control
 
 > 交接给下一位开发 agent。**先读本文，再读代码。**
-> 最后更新：2026-10-02（重写后的代码全部落地，生产已切换并验证）。
+> 最后更新：2026-10-02（重写后的代码全部落地，生产已切换并验证；右栏自动弹码已真机验收）。
 
 ## 0. 一句话状态
 
-这次是**从零重写之后的状态**：小程序 `mp/` 一行未改；协议层 / 中继 / host 插件 / e2e /
-脚本 / 设计文档全部重写，旧代码已删除（旧实现只剩 `docs/legacy-spec/` 里的事实档案，
-需要看旧代码用 `git show b026d63:<path>`）。生产入口 `wss://drc.provid.cc` 已经跑上
-重写后的单文件中继，并用真链路取证验证通过。
+这次是**从零重写之后的状态**：小程序 `mp/` 一行未改；协议层 / 中继 / host 插件 /
+右栏呈现（`packages/presentation`）/ e2e / 脚本 / 设计文档全部重写，旧代码已删除
+（旧实现只剩 `docs/legacy-spec/` 里的事实档案，需要看旧代码用 `git show b026d63:<path>`）。
+生产入口 `wss://drc.provid.cc` 已经跑上重写后的单文件中继，并用真链路取证验证通过。
 
 设计、拍板与偏离记录在 [`docs/DESIGN.md`](docs/DESIGN.md)（冻结契约表 §2、偏离 D1-D9 §4、
 阶段门禁 §7、拍板 §8、执行日志 §9）。对这份设计的独立复核在
@@ -24,6 +24,7 @@
 | 与小程序逐字节对拍 | **18 项全绿**（284 条向量 + 随机新向量 + 篡改 + 反证 + F6 契约） | `node --test e2e/protocol.test.mjs` |
 | 中继 | **73 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账、诊断计数） | `pnpm --filter @dsh-rc/server test` |
 | host 插件 | **218 项全绿** | `pnpm -C packages/plugin test`（根包与插件包**同名**，按名字 filter 会命中两个） |
+| 右栏呈现 | **44 项全绿**（码没落盘 / 已过期一律不 `ready`、`expiresAt` 的 ISO 与毫秒两种形状、路由防环回与防跨作用域、浏览器面产物形状） | `pnpm -C packages/presentation test` |
 | 本地全链路 | **14 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
 | 生命周期取证 | **86 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页 / chat 块流 / **浅深主题**） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
 | 小程序页面逻辑 | **22 + 3 项全绿**（chat 块流时序与历史回放 / 过程窗口 / 会话列表归档过滤） | `pnpm -C e2e test:mp-pages` |
@@ -43,13 +44,18 @@
 - **审批**：`kernel.approvalFace` 在真宿主上是 `"registered"`——插件确实**登记成了
   `approval/request` waterfall 的参与者**。但这条路径本机现在**按宿主设计就不可能触发**：
   扫 `~/.dsh/sessions/*/*/session.v4.jsonl.zstd` 里每个会话的 `approval/policy` 事件，
-  **23 个会话全是 `never`**（部分是 `source:"delegation"`），而
+  **截至 2026-10-02 共 26 个会话全是 `never`**（部分是 `source:"delegation"`，且这是
+  **部署配置**而非缺会话——见 §5.1），而
   `@deepseek-ai/dsh-user-approval` 的 README 写着 `'never' rejects before interactive dispatch`
   ——即在参与者被问到之前就决定了。所以"卡片推给手机 → 手机点批准 → 内核继续"这一整条
   只在**本地全链路**里验过（`e2e/mp-client.test.mjs` 第 5 条 + `e2e/run.mjs` 第 8 步）。
   要补真机取证：把某个会话的策略设成 `ask`（桌面 UI 里做，或用服务的 `setApprovalPolicy()`），
   再跑 `node e2e/live-e2e.mjs --session <那个会话 id> --prompt <需要审批的指令>`。
-  重扫命令：`node /tmp/…`——照 §6 的方式读 `request/header`/`approval/policy` 事件即可。
+  重扫命令（**只读**，直接用 homebrew 的 `zstd`；`scripts/read-session-log.mjs` 是单会话版）：
+  ```sh
+  cd ~/.dsh/sessions && for f in $(find . -name 'session.v4.jsonl.zstd'); do \
+    echo "$(zstdcat "$f" | grep -o '"approval/policy"[^}]*}' | tail -1) | $f"; done
+  ```
 - **提问**：`kernel.questionsFace` 现在会把服务实际暴露的成员一起报出来，真机上是
   `no registerProvider (keys=name|typertRemote|waits|queuedReplies|…)`——这一代宿主的
   `ctx.userQuestions` 不是 `@deepseek-ai/dsh-user-questions` 那份带 `registerProvider` 的
@@ -64,7 +70,7 @@ env -u NODE_OPTIONS pnpm install          # §4.1：必须 env -u NODE_OPTIONS
 env -u NODE_OPTIONS pnpm -r typecheck
 env -u NODE_OPTIONS pnpm -r test
 ./scripts/relay-start.sh --bundle          # 本地中继（token 复用 profile 里那份）
-./scripts/install-to-profile.sh            # 构建 + 装插件；之后必须重启 Harness
+./scripts/install-to-profile.sh            # 构建 + 装两个 bundle（主插件 + 右栏呈现）；之后重启 Harness，改过浏览器面还要重新加载页面
 osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "DeepSeek Harness"
 node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须在跑）
 ```
@@ -101,6 +107,14 @@ node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须�
 - **F6：`pair-fail.reason` 只能是小程序能翻译的四个**。中继的全局限速原因
   （`rate_limited`）只进日志，线上写 `invalid_or_expired`——弹英文给用户是不允许的。
 - **配对二维码默认出图片**（2026-10-02 翻转原拍板）：真机取证发现 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白把半块文本码横切成条（用真机输出做受控实验：行距 1.0 时 zxing 解得出来、≥1.15 就扫不出来），文本码在这个宿主上根本扫不了。于是 `qrImage` 默认 **true**（写 `pairing-qr.png` 并把路径给用户）、`qrOpen` 仍默认 **false**（写图 ≠ 替你打开查看器）、`qrAnsi` 默认 false、`qrStyle` 默认 `half`（只在关掉 `qrImage` 时当退路）。命令 API 只接受纯文本，所以图片以"文件路径"的形式进卡片，卡片同时给可粘贴的 `dshr:/p?…` 一行。
+- **二维码自动进右栏**（2026-10-02，新增 `packages/presentation`）：`/drc pair` 之后
+  右栏**自己弹出**当前配对码，用户不必再去点侧边栏。做法是一个 `dsh.client` 双面包——
+  宿主侧把码落成 `~/.dsh/dsh-remote-control/sidebar-qr.png` 并给一条同域只读路由
+  `/plugins/dsh-remote-control-presentation/pairing`；浏览器侧每 2s 轮询它，
+  `state==='ready'` 且 `epoch` 变了才 `ctx.sidebarRight.openResource(address)`。
+  不切工作区、不写用户项目目录。**为什么拆成独立的包**：`openResource` 要用 `webServer`
+  服务（`clientModules` + 路由），而主插件刻意不写 inject 闸门；拆开后缺 `webServer`
+  的宿主只影响这一行，配对/中继不受牵连。安装脚本与产物见 §2/§4.9。
 - 环境变量：中继的默认值逐项继承旧值，但**三个变量名改了**
   （`DRC_MAX_AUTH_ATTEMPTS`→`DRC_HOST_AUTH_MAX_ATTEMPTS`、
   `DRC_MAX_PAIR_ATTEMPTS`→`DRC_PAIR_ATTEMPTS_PER_CONN`、
@@ -150,20 +164,39 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
 `apps/server` 的 build 以前先 `pnpm clean`（`rm -rf dist`），而 `dist/` 同时是
 四套测试的读取目标——并行时会把别人正读的东西抽走。现在 `bundle-relay.mjs` 只删自己的产物。
 
+### 4.9 「右栏没自动弹」先看有没有活动会话
+`ctx.sidebarRight.require()` **只在挂载了会话列时才返回 `{sessionId, actions}`**；
+应用停在设置页 / 插件页时它拿不到 sessionId，浏览器面就**在发起任何 fetch 之前**静默 return——
+表现为**零请求、零报错**，很容易误判成"入口没激活 / 注入失败"。先在应用里「新建会话」，
+轮询会立刻开始打 `…/pairing?session=session-…`。静默跳过是**刻意**的（无会话页不该刷错误日志），
+别改成报错。另一个坑：浏览器面改了要**重新加载页面**才重新拉 `client.cjs`，
+只重启 Harness 不够（§2 的安装脚本会提示）。
+
 ## 5. 已知缺陷 / 下一步
 
 1. **真机审批与提问取证**（§1.1）。需要一个会真的弹审批的会话，以及一个暴露
-   `userQuestions` 提供者的宿主版本。
+   `userQuestions` 提供者的宿主版本。**2026-10-02 重扫结论（比 §1.1 更新）**：
+   `~/.dsh/sessions/**/session.v4.jsonl.zstd` 共 **26 个会话，`approval/policy` 全是
+   `never`**（含 `source:"delegation"` 的子 agent 会话），**一个 `ask` 都没有**——
+   所以不是"缺一个会弹审批的会话"，而是**这个部署把默认策略配成了 `never`**。
+   `dsh-user-approval` 的 README 明说 `ask` 才是服务默认（`never` 是"CI 与无人值守运行的严格
+   无头模式"），`setApprovalPolicy(session, policy)` 是持久写入路径。**要取证必须先改
+   审批策略，那是用户的安权姿态（`never` → `ask` 会放行原本被确定性拒绝的操作），
+   这件事没有用户点头不许替他们做。** 提问那条则**在本机无解**：这一代宿主的
+   `ctx.userQuestions` 就不带 `registerProvider`（§1.1），换会话也没用。
 2. **host 侧通道上界已补**（原 DESIGN-REVIEW 🟡8）：`ConversationBook.pruneStale` 按"最后活动"剪
    （`conversationIdleTtlSec`，默认 24h）并保留 64 条硬上界，剪枝一定走 `voidConversation`
    （发 `session-leave` + 通知上层），由 status 的 3s 节拍驱动。四条变异验证锁住：只删内存不发
    `session-leave`、按创建序剪、没有硬上界、KeepAwake 停机闸门被删——全部被指名的断言杀掉。
-3. **e2e 收尾句柄**：`node e2e/run.mjs` 1.2s 就打完全绿，但进程约 60s 后才退出。
-   KeepAwake 的停机闸门已经补上并有测试（`stop()` 之后到达的 `releaseHold` 不再装节拍），
-   但那 60s 的尾巴还在——**首要嫌疑已排除，剩下的是 e2e 装置里某个 ~60s 的一次性定时器**
-   （`Timeout` 句柄，不是 `PipeWrap`）。不影响判定，只让 CI 多等一分钟。
-4. `docs/SECURITY.md` / `SELF-HOSTING.md` / `MINI-PROGRAM.md` 仍描述旧实现的具体路径与
-   帧名，需要按 §3 的偏离重写（`deploy/README.md` 已经改过）。
+3. ~~**e2e 收尾句柄**：`node e2e/run.mjs` 打完全绿后进程约 60s 才退出~~——**2026-10-02 实测已不复现**：
+   `s=$(date +%s); node e2e/run.mjs; …` 量到**整进程 wall = 2s**（脚本自报"耗时 1.2s"）。
+   那条 60s 尾巴（KeepAwake 停机闸门）已经收掉了。**再看到"CI 多等一分钟"的说法，先按下面
+   的命令自己量一次**，别照抄这段。
+4. ~~`docs/SECURITY.md` / `SELF-HOSTING.md` / `MINI-PROGRAM.md` 仍描述旧实现~~——**已核实为过时条目**：
+   这次实际读过三份，`SECURITY.md` / `SELF-HOSTING.md` 里的 `pair-begin` / `auth-ok` /
+   `apiProxy` 等旧名只出现在**改名表与"旧 vs 新"偏离表**里（那是刻意留的迁移说明），
+   正文讲的是重写后的实现；`MINI-PROGRAM.md` 里的 `pair-begin-client` 是小程序**现在仍在发**的帧名。
+   这条可以划掉。
 5. 慢消费者 1008 与小程序 12s 超时/30s 退避可能形成循环（阈值的取值来自参考实现，
    不是实测；DESIGN-REVIEW 🟡11）。
 
@@ -171,6 +204,7 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
 
 ```sh
 env -u NODE_OPTIONS pnpm -r typecheck && env -u NODE_OPTIONS pnpm -r test
+env -u NODE_OPTIONS pnpm -C packages/presentation test   # 右栏呈现：落盘判据 + 路由防环回
 env -u NODE_OPTIONS node e2e/run.mjs
 env -u NODE_OPTIONS node --test e2e/restart-resume.test.mjs
 env -u NODE_OPTIONS node e2e/live-e2e.mjs --rounds 3
