@@ -20,13 +20,14 @@
 | 层 | 状态 | 怎么验 |
 |---|---|---|
 | 类型 | 三包全绿 | `env -u NODE_OPTIONS pnpm -r typecheck` |
-| 协议层 | **81 项全绿** | `pnpm --filter @dsh-rc/protocol test` |
+| 协议层 | **82 项全绿** | `pnpm --filter @dsh-rc/protocol test` |
 | 与小程序逐字节对拍 | **18 项全绿**（284 条向量 + 随机新向量 + 篡改 + 反证 + F6 契约） | `node --test e2e/protocol.test.mjs` |
 | 中继 | **73 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账、诊断计数） | `pnpm --filter @dsh-rc/server test` |
-| host 插件 | **209 项全绿** | `pnpm -C packages/plugin test`（根包与插件包**同名**，按名字 filter 会命中两个） |
+| host 插件 | **218 项全绿** | `pnpm -C packages/plugin test`（根包与插件包**同名**，按名字 filter 会命中两个） |
 | 本地全链路 | **14 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
-| 生命周期取证 | **77 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页 / chat 块流） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
+| 生命周期取证 | **86 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页 / chat 块流 / **浅深主题**） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
 | 小程序页面逻辑 | **22 + 3 项全绿**（chat 块流时序与历史回放 / 过程窗口 / 会话列表归档过滤） | `pnpm -C e2e test:mp-pages` |
+| 小程序主题 | **9 项全绿**（默认浅色 / 双向可切 / 跨启动保留 / 切了要同时改导航栏与回弹区 / 存不下要如实报） | `pnpm -C e2e test:mp-theme` |
 | 真实链路 | **18 项/轮全绿**：生产入口 1 轮、本地中继 3 轮；助手正文 114/162 字与 2 条工具行确实到了手机 | `node e2e/live-e2e.mjs` |
 | 二维码 | zxing-cpp 真实解码 28/28 | `node scripts/validate-qr.mjs` |
 | 生产 | 跑的是 `relay.mjs`（单文件，`/healthz` 报 `version: 2.0.0`），journalctl 无 warning | `curl https://drc.provid.cc/healthz` |

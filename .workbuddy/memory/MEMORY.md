@@ -182,15 +182,32 @@ env -u NODE_OPTIONS pnpm -C e2e test  # mp/协议/多配对/重启恢复 + run.m
   千万别给 input 加 `hold-keyboard`（那正是「点页面不收键盘」的开关）。
 - `sessions` 页**不显示归档会话**（主机对它们每一步都拒绝），底部留「已隐藏 N 个」。
 
-## 主题：固定白色（2026-10-02）
+## 主题：浅色（默认）+ 深色，手动切（2026-10-02）
 
-- `mp/theme/fixed-light.wxss` 是**生成物**（`pnpm mp:theme`，来自 `scripts/gen-mp-theme.mjs`）：
-  把 TDesign `_index.wxss` 里的浅色段抽出来、剥掉 `@media (prefers-color-scheme)` 外壳。
-- `app.wxss` 必须在 `_index.wxss` **之后** import 它 —— 两份选择器都是 `.page,page`
-  （同特异性），靠源码顺序压掉深色分支。`app.json` 另有 `"darkmode": false` 表态。
-- 微信文档没说清 `darkmode:false` 时 media query 到底生不生效，所以**不赌默认行为**，
-  显式覆盖。验证法：把生成物里某个变量临时改成 `#ff0000` 截图，底色必须变红。
-- 新写样式仍用 `var(--td-xxx, 浅色兜底)`。
+- **`mp/core/theme.js`** 是唯一入口：`current()` / `applyTo(page)` / `toggle(page)`。
+  入口 UI 在 **sessions 页底部**（与「重新配对」同一排），深色时按钮显示「浅色」。
+- **深色挂 class、不挂 `page`**：`theme/light.wxss` 选择器是 `.page,page`（默认态），
+  `theme/dark.wxss` 被脚本改写成 `.theme-dark`，由 `applyTo` 挂到**根 view** 的 class 上
+  （三页：`page-pad`×2 / `chat-wrap`）。**必须挂根 view** —— 挂子树深处只染一小片。
+  **为什么不能两套都写 `page`**：那只能靠源码顺序决胜，而**单向** —— 压得住深色、切不回
+  浅色。class 才让"用不用深色"由用户的选择决定（`prefers-color-scheme` 是系统的意思）。
+- **切换必须同时改三处**（`theme.js` 的 `toggle` 都做了，缺一件就是"切了没切干净"）：
+  ① 根容器 class；② `wx.setNavigationBarColor`（原生组件不吃 CSS 变量，否则留白顶栏）；
+  ③ `wx.setBackgroundColor`（iOS 下拉回弹区，否则露白）。`app.js onLaunch` 也要调一次
+  ——等页面 `onLoad` 会有白顶栏闪一下。
+- `.page-pad` 必须自带 `background` + `min-height:100%`：`page` 元素自己永远是浅色，
+  根容器不透光的话深色下会从下边缘透出浅色带。
+- **两份 wxss 都是生成物**（`pnpm mp:theme` / `--check`）。脚本会做**变量覆盖对账**：
+  浅色有而深色没有的变量直接报错。已知 `--td-shadow-4`、`--td-scrollbar-hover-color`
+  只在 TDesign 浅色分支里（136 vs 140），靠脚本的 `DARK_ONLY_FIXUPS` 补齐 ——
+  不补则深色下**继承浅色值**，表现为"深色里一块浅色阴影"。**升级 TDesign 后先跑 `--check`**。
+- 验证：`node scripts/mp-probe.mjs --case theme`（8 条，真点按钮读渲染层亮度
+  0.95 → 0.09 → 0.95）。**读计算样式用 `el.style(...)`，不是 `el.property(...)`**
+  ——后者读 data/props，对 CSS 属性抛 `not exists`。
+- `check-mp-ui.mjs` 第 ⑥ 项盯这条链（import 顺序 / 生成物选择器 / 每页 `{{themeClass}}` /
+  每页 `theme.applyTo(this)` / 默认 light）。**写 import 顺序断言别用 `indexOf`** ——
+  会命中注释里的文件名，断言成了永远为假的死代码（反证时才发现：顺序颠倒竟然通过）。
+- 新写样式仍用 `var(--td-xxx, 浅色兜底)`，**不要硬编码 `#fff`**（深色下是白斑）。
 
 ## 页面逻辑的自动化护栏
 

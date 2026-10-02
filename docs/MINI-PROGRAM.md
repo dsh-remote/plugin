@@ -26,7 +26,8 @@
 mp/
   app.js / app.json / app.wxss      全局：持有 DrcClient 单例 + TDesign 主题变量
   project.config.json / package.json
-  theme/fixed-light.wxss            固定浅色变量（生成物，见「固定白色主题」）
+  theme/light.wxss                 浅色变量（默认，生成物）
+  theme/dark.wxss                  深色变量（挂在 .theme-dark class 上，生成物）
   miniprogram_npm/tdesign-miniprogram/   裁剪版 TDesign（开源 UI 组件库）
   core/
     vendor/
@@ -36,6 +37,7 @@ mp/
     env.js              运行环境能力探测 + 一行可复制的环境自检
     socket.js           wx.connectSocket 封装：双路径 + 超时 + 指数退避重连
     session-store.js    wx.setStorageSync 持久化（PSK / 会话 id / nonce 计数器）
+    theme.js            主题：读存储、切 class、改导航栏与回弹区配色
     client.js           客户端核心：握手、配对、指令、事件分发（DrcClient）
     package.json        仅用于把该目录标记为 CommonJS（Node 侧测试用）
   pages/
@@ -44,30 +46,67 @@ mp/
     chat/      对话：文档流（步骤组可折叠）+ 流式正文 + 审批卡、提问卡、中断
 ```
 
-## 固定白色主题
+## 主题：浅色（默认）/ 深色
 
-**不跟随系统深色**，永远是白底深字。
+**默认浅色**，在会话列表页底部可手动切到深色。**不跟随系统** —— 系统是深色时默认仍是浅色，
+用户切过之后即使系统变了也保持他选的那个。
 
-`app.json` 里 `"darkmode": false`（也是默认值，写出来是为了表态），真正起作用的是
-`app.wxss` 的 import 顺序：
+### 三份样式表的分工与顺序
 
 ```css
+/* app.wxss —— 顺序是语义的一部分，不能换 */
 @import './miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss';
-@import './theme/fixed-light.wxss';   /* 必须在后面 */
+@import './theme/light.wxss';   /* 浅色（默认），无条件生效 */
+@import './theme/dark.wxss';    /* 深色，挂在 .theme-dark 上；必须在 light 之后 */
 ```
 
-TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)` 里**。上面第二行
-是一份"剥掉了 `@media` 外壳"的浅色变量表，选择器和前者一样是 `.page,page`（特异性相同），
-于是靠「同特异性下源码顺序靠后的胜出」把深色分支压掉 —— 系统开着深色也一样。
+TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)` 里**，跟随系统。
+本项目要手动切，所以两套都得能脱离 `@media` 独立生效：
 
-- **`theme/fixed-light.wxss` 是生成物，不要手改**。它由 `node scripts/gen-mp-theme.mjs`
-  从 TDesign 的 `_index.wxss` 里抽出浅色那几段生成（136 个变量）。
-  TDesign 升级后重跑一次；`--check` 用来发现"忘了重新生成"（`pnpm mp:theme`）。
-- 手抄不行：那是几 KB 的单行 CSS，漏一个变量就会退回深色值。
+| 表 | 选择器 | 何时生效 |
+|---|---|---|
+| `light.wxss` | `.page,page`（与 TDesign 相同） | **始终**。同时靠「同特异性下源码顺序靠后的胜出」压掉 `_index.wxss` 里的深色分支 |
+| `dark.wxss` | `.theme-dark,.theme-dark page` | 页面根容器带 `theme-dark` class 时 |
 
-验证手法（换个 TDesign 版本或改 import 顺序后值得再跑一次）：把生成物里某个变量的值
-临时改成 `#ff0000` 再截图，页面底色**必须**跟着变红 —— 变了才证明覆盖真的赢过了
-`_index.wxss`。改完记得重新生成。
+**为什么深色必须挂 class、不能继续用 `page`**：之前"固定浅色"就是靠 import 顺序压掉深色，
+但那是**单向**的 —— 压得住深色、切不回浅色。两套都写 `page` 就只能靠源码顺序决胜。
+挂 class 之后"用不用深色"由根容器的 class 说了算，与系统深色无关（这才是"用户手动切"）。
+
+### 切换时必须一并改的三个地方
+
+`core/theme.js` 的 `toggle()` 三件事都做，缺一件就是"切了但没切干净"：
+
+1. **页面根容器加 `theme-dark` class** —— 变量挂在这个 class 上，靠继承铺满整页。
+   必须挂在**根 view**（`sessions`/`pair` 的 `.page-pad`、`chat` 的 `.chat-wrap`）上：
+   挂在子树深处只能染到那一小片。
+2. **导航栏** `wx.setNavigationBarColor` —— 原生组件，不吃 CSS 变量，也不受 `page` 上的
+   变量影响。不改的话深色页面上方留一条白顶栏。
+3. **下拉回弹区** `wx.setBackgroundColor` —— iOS 往下拉会露出来，深色下是刺眼的白。
+
+另外 `.page-pad` 必须自带 `background` + `min-height: 100%`：`page` 元素自己永远是浅色
+（浅色表写在 `.page,page` 上，那是默认态），根容器不铺满、不画底色的话，深色下会从下边缘
+透出一条浅色带。
+
+### 生成物
+
+`theme/light.wxss` 与 `theme/dark.wxss` **都是 `node scripts/gen-mp-theme.mjs` 的生成物，
+不要手改**（`pnpm mp:theme`，`--check` 在 CI 里发现"忘了重新生成"）。
+
+脚本会做**变量覆盖对账**：浅色定义过、而深色没有的变量会直接报错退出。已知有两处 ——
+`--td-shadow-4` 与 `--td-scrollbar-hover-color` 只在浅色分支里有（136 vs 140），
+脚本用 `DARK_ONLY_FIXUPS` 补齐。不补的话深色下会继承到浅色值，表现为"深色里有一块浅色阴影"。
+
+验证手法（改 import 顺序后值得再跑）：把生成物里某个变量临时改成 `#ff0000` 再截图，
+页面底色**必须**跟着变红 —— 变了才证明覆盖真的赢过了 `_index.wxss`。改完记得重新生成。
+
+### 护栏
+
+- `e2e/mp-theme.test.mjs`（`pnpm -C e2e test:mp-theme`）：默认浅色、双向可切、跨启动保留、
+  不认识的值归浅色、切了要同时改导航栏与回弹区、老基础库缺 API 不炸、存不下要如实报。
+- `scripts/check-mp-ui.mjs` 的第 ⑥ 项：import 顺序、生成物选择器、**每页根容器都有
+  `{{themeClass}}`**、每页 `onLoad` 都调 `theme.applyTo(this)`、默认值为 `light`。
+  这些都是"接错一环就整页失效"且**全静默**的地方（深色没生效时页面照样渲染，
+  只露着浅色，小屏上很容易看漏）。
 
 ## 代码注入优化（按需注入 / 用时注入）
 
@@ -246,7 +285,9 @@ node --test e2e/mp-client.test.mjs    # 13 项：真实 client.js + wx shim 跑�
 node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
 node --test e2e/mp-chat-blocks.test.mjs   # 22 项：chat 页块流时序 + 历史回放 + 过程窗口
 node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
-pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义
+node --test e2e/mp-theme.test.mjs         # 9 项：浅/深主题（默认、双向、跨启动、导航栏、存不下）
+pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义 + 主题三段接线
+pnpm mp:theme --check                 # 两份变量表是否还与 TDesign 同步（含深浅覆盖对账）
 pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
 
@@ -254,12 +295,13 @@ pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（�
 
 ```sh
 pnpm mp:shots                         # 截模拟器渲染（改完界面自己看得见结果）
-pnpm mp:probe                         # 交互探针：点一下到底有没有用（读 scrollTop 等真实状态）
+pnpm mp:probe                         # 交互探针：点一下到底有没有用（读 scrollTop、算出的底色等真实状态）
 ```
 
 `mp:probe` 补的是另外两者都覆盖不到的一层：`mp:shots` 只证明"长得对"，
 `mp-chat-blocks` 只证明"逻辑算得对"，而「点了没反应」发生在渲染层 ——
-`scroll-into-view` 找不到目标节点时不报错、不重试，只是不滚。改滚动或交互之后跑它。
+`scroll-into-view` 找不到目标节点时不报错、不重试，只是不滚。
+改滚动、交互或**主题**之后跑它（`--case jump|fold|theme` 可单跑）。
 
 `e2e/mp-sim.mjs` 提供了一个最小 `wx` shim（storage + `connectSocket` 走 `ws` 包），
 所以**小程序客户端代码可以在 Node 里被真实驱动**。改了 `core/client.js` 一定要跑它。
