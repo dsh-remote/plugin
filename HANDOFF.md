@@ -25,7 +25,7 @@
 | 中继 | **73 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账、诊断计数） | `pnpm --filter @dsh-rc/server test` |
 | host 插件 | **218 项全绿** | `pnpm -C packages/plugin test`（根包与插件包**同名**，按名字 filter 会命中两个） |
 | 右栏呈现 | **44 项全绿**（码没落盘 / 已过期一律不 `ready`、`expiresAt` 的 ISO 与毫秒两种形状、路由防环回与防跨作用域、浏览器面产物形状） | `pnpm -C packages/presentation test` |
-| 本地全链路 | **14 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
+| 本地全链路 | **15 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
 | 生命周期取证 | **86 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页 / chat 块流 / **浅深主题**） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
 | 小程序页面逻辑 | **22 + 3 项全绿**（chat 块流时序与历史回放 / 过程窗口 / 会话列表归档过滤） | `pnpm -C e2e test:mp-pages` |
 | 小程序主题 | **9 项全绿**（默认浅色 / 双向可切 / 跨启动保留 / 切了要同时改导航栏与回弹区 / 存不下要如实报） | `pnpm -C e2e test:mp-theme` |
@@ -205,16 +205,21 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
    `apiProxy` 等旧名只出现在**改名表与"旧 vs 新"偏离表**里（那是刻意留的迁移说明），
    正文讲的是重写后的实现；`MINI-PROGRAM.md` 里的 `pair-begin-client` 是小程序**现在仍在发**的帧名。
    这条可以划掉。
-5. **慢消费者 1008 与小程序退避可能形成循环**（DESIGN-REVIEW 🟡11）——**机制已核清，缺的是实测**：
-   中继按角色给窗口（`apps/server/src/limits.ts:96,109`：host `10s`、client `45s`；阈值
-   `DRC_MAX_BUFFERED_BYTES` 默认 1 MiB）。client 侧给到 **45s** 是刻意的：mp 的退避是
-   1s→30s 指数且 `onOpen` 清零（`mp/core/socket.js:19,20,267`），窗口短于它的重连周期就会
-   变成永不升级的抖动。重连后 `bufferedAmount` 归零、窗口重算，所以**只有当手机在连续
-   45s 窗口里都排不空积压时才会循环**——那意味着这台手机真的持续跟不上。
-   **结论**：这不是已知缺陷，是"阈值来自参考实现、没在生产上量过"。要收口只能拿真实慢消费者
-   观测：看 `journalctl -u dsh-relay` 的 `slow consumer disconnected` 与 `/healthz` 的
-   `slowConsumers` 计数是否在**同一台设备上反复**出现。别凭猜改这 45s——它同时是
-   "手机在后台被系统冻结时不误杀"的唯一余量。
+5. ~~**慢消费者 1008 与小程序退避可能形成循环**（DESIGN-REVIEW 🟡11）：机制已核清，缺的是实测~~
+   ——**2026-10-02 补上生产实测：没复现。** `curl -s https://drc.provid.cc/healthz` 报
+   `slowConsumers: 0`（中继 19:56 重启，`uptimeSec` ≈ 3.2h），`journalctl -u
+   dsh-remote-control --since "26 hours ago" | grep -c "slow consumer"` = **0**；同一窗口
+   `client online` **56** 次、`paired` **42** 次（其中 3 条 `platform:"wechat-mp"` 真机）。也就是说
+   45s 窗口在这轮真实使用里**一次都没触发过**。
+   （别照抄上面的数字，它们随 uptime 变；命令是权威。另外这台的单元名是
+   `dsh-remote-control`，**不是 `dsh-relay`**——本文早前那处写法是错的。）
+   机制留档（将来要动阈值前必读）：中继按角色给窗口（`apps/server/src/limits.ts:96,109`：
+   host `10s`、client `45s`；阈值 `DRC_MAX_BUFFERED_BYTES` 默认 1 MiB）。client 侧给到 **45s**
+   是刻意的：mp 的退避是 1s→30s 指数且 `onOpen` 清零（`mp/core/socket.js:19,20,267`），窗口短于
+   它的重连周期就会变成永不升级的抖动。重连后 `bufferedAmount` 归零、窗口重算，所以**只有当手机
+   在连续 45s 窗口里都排不空积压时才会循环**——那意味着这台手机真的持续跟不上。
+   **结论**：不是已知缺陷，45s 不动。真出现时的判据是"**同一个 clientId 上反复**"出现
+   `slow consumer disconnected`，而不是单次。
 
 6. **真机「连接被拒」≠ 中继故障**（2026-10-02 排错结论，下次别再从头查）。症状：手机小程序
    状态行显示 `wss://drc.provid.cc`（地址没错），弹窗是 `connection refused /
@@ -231,6 +236,10 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
    DNS 缓存指向别的 IP。**10 秒判定**：用**手机浏览器**打开 `https://drc.provid.cc/healthz`
    —— 能出 JSON 就是 (a)，打不开就是 (b)。这条只涉及手机/微信后台配置，**仓库里没有可改的
    代码**（`mp/` 归并行会话）。
+   **同日 23:0x 复测结论**：手机侧修好后，`client online`(platform=`wechat-mp`) 与 `paired`
+   成对出现（23:03:40、23:07:17 各一条；后者的 clientId 正是 22:09 记过 `pair failed` 的那台）
+   ——**链路通的判据就是这一对**：先有 `client online`，才可能有 `pair failed`/`paired`；
+   两个都没有才是"包根本没到中继"。所以这次是手机侧一时连不上，中继没有持续故障。
 
 ## 6. 命令速查
 
