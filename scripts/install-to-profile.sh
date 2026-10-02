@@ -75,7 +75,7 @@ cat > "$TARGET/package.json" <<JSON
 JSON
 cp "$PLUGIN/cordis.patch.yml" "$TARGET/cordis.patch.yml"
 
-echo "→ 注册 bundle 到 $BUNDLE_ID（幂等），并清掉旧的 file: 依赖…"
+echo "→ 注册 bundle 到 ${BUNDLE_ID}（幂等），并清掉旧的 file: 依赖…"
 node --input-type=module -e "
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 const file = '$PROFILE/package.json'
@@ -88,7 +88,7 @@ pkg.dsh.profile = pkg.dsh.profile || {}
 const list = pkg.dsh.profile.bundles || []
 if (!list.includes('$BUNDLE_ID')) list.push('$BUNDLE_ID')
 pkg.dsh.profile.bundles = list
-// 旧机制退役：`file:` 依赖会让 pnpm 再物化一份插件进 profile，
+// 旧机制退役：'file:' 依赖会让 pnpm 再物化一份插件进 profile，
 // 两个实例同时挂在中继上（两个 hostId、两份会话），手机连到谁全凭运气。
 // 现在的安装方式只有这一条：本目录下的单文件 bundle + bundles 列表里的名字。
 let removed = false

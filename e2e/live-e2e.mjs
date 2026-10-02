@@ -262,6 +262,17 @@ async function runRound(round) {
     }
     console.log(`     · 下行密文自解 ${kinds.length} 帧（conv=${conv ?? '无'}）：${kinds.join(' | ')}`)
   }
+  // 数下行帧之前必须先等到"这一轮的下行帧到齐"。手机配对后会立刻发两条命令
+  // （`cmd.list_sessions` 由 `_onPaired` 触发、`cmd.keep_awake` 由本脚本触发），
+  // 主机对每条回一张 `ev.result`，而**回执是最后到的帧**（主机先推列表、再回执）。
+  // 不等就开始数，等于把"还没到"记成"丢了下行"：这条断言在 `--no-prompt` 模式下
+  // 曾稳定假红（实测当时只数到配对那一刻的 1 次推送 = 2 帧，而随后还有第 2 次推送
+  // 与两张回执共 5 帧在路上）。判据要落在内容上，不是"尽早数一眼"。
+  await until(() => (seen.results >= 2 ? true : null), {
+    trail,
+    label: '两条命令的回执都到齐（下行帧的尾巴）',
+    timeoutMs: 12_000,
+  }).catch(() => null)
   const downEnc = recorder.frames.filter((frame) => frame.direction === 'out' && /"t":"enc"/.test(frame.raw))
   check(
     '⑩c 下行密文帧数有下界（中继→手机；与主机 outbound 计数对账）',
