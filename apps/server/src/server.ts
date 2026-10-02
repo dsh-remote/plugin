@@ -88,6 +88,21 @@ export function createRelay(config: RelayConfig): RelayHandle {
   let sweepTimer: NodeJS.Timeout | undefined
   let lastPingAt = 0
 
+  /**
+   * 诊断计数（复核 A8）。`/healthz` 是运维唯一的观测面，而"帧被丢了""谁把谁踢了"
+   * 以前只进日志——线上排"为什么手机不更新"时只能翻 journalctl。
+   *
+   * 三条都**只增不减**：它们是"自本次启动以来发生过多少次"，不是状态快照，
+   * 所以不复用 `state.counts()`（那是瞬时值，会随连接进出上下浮动）。
+   * 归零只发生在进程重启，这本身就是有意义的判据（"重启后计数没动"证明症状是存量问题）。
+   *
+   * - `droppedFrames`：中继**收下却没送出去**的帧（收件人不在），即 R1 那个静默黑洞的可见面。
+   *   注意它不含路由被拒（`unknown_session`/`not_member`）——那些会回错误给发送方，不静默。
+   * - `slowConsumers`：因发送缓冲超限被 1008 断开的对端。
+   * - `rejectedPairs`：中继回过 `pair-fail` 的配对尝试次数（码错/过期/已用过/额度耗尽）。
+   */
+  const counters = { droppedFrames: 0, slowConsumers: 0, rejectedPairs: 0 }
+
   // ── 发送 ────────────────────────────────────────────────────────────
 
   function sendTo(sock: Sock | undefined, frame: RelayFrame | Record<string, unknown>): void {
@@ -142,6 +157,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
     const windowMs = peer.role === 'client' ? config.slowConsumerClientMs : config.slowConsumerHostMs
     const verdict = peer.backpressure.check(buffered, config.maxBufferedBytes, now, windowMs)
     if (!verdict.shouldClose) return
+    counters.slowConsumers += 1
     log.warn('slow consumer disconnected', {
       clientId: peer.clientId,
       hostId: peer.hostId,
@@ -234,6 +250,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       // 手机上 `translatePairFail` 只认四个 reason（F6 的冻结消费面），所以我们不能把
       // 内部原因 `rate_limited` 直接写进 pair-fail —— 那会把英文字面量弹给用户。
       // 对用户有意义且成立的只有"这张码现在配不上"，真正的限速原因进日志给运维。
+      counters.rejectedPairs += 1
       sendToPeer(peer, pairFailFrameOf('invalid_or_expired'))
       log.warn('pair budget exhausted (global)', { clientId: peer.clientId, reason: 'rate_limited' })
       return
@@ -241,6 +258,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
     const claimed = state.claim(frame.pairingToken, peer.clientId)
     if (!claimed.ok) {
       peer.pairAttempts += 1
+      counters.rejectedPairs += 1
       sendToPeer(peer, pairFailFrameOf(claimed.reason))
       log.info('pair failed', {
         clientId: peer.clientId,
@@ -290,6 +308,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       if (!host) {
         // 会话还在、主机暂时不在（宽限期内）。这里**绝不能**回 `unknown_session`——
         // 客户端见到它就会丢配对、要求重新扫码，而它只要等主机回来再发一次即可。
+        counters.droppedFrames += 1
         sendError(peer, 'host_unavailable')
         return
       }
@@ -299,7 +318,11 @@ export function createRelay(config: RelayConfig): RelayHandle {
     }
     // 下行：中继重新编号（客户端不信 seq 的单调性，但编号让审计与合并可写）。
     const seq = state.nextHostSequence(frame.sessionId)
-    for (const sock of state.clientSockets(frame.sessionId)) {
+    const sockets = state.clientSockets(frame.sessionId)
+    // 会话还在、一个观众都没有：这一帧没有收件人。**必须计数**——R1 的静默黑洞
+    // 就是"主机往一个没有钥匙的对端推"，它在日志里不留痕，只能靠这个计数被发现。
+    if (sockets.length === 0) counters.droppedFrames += 1
+    for (const sock of sockets) {
       if (seq !== undefined) sendTo(sock, encToClient(frame.sessionId, seq, frame.ciphertext))
     }
   }
@@ -314,12 +337,18 @@ export function createRelay(config: RelayConfig): RelayHandle {
     const clients = state.clientSockets(frame.sessionId)
     if (peer.role === 'client') {
       const host = state.hostSocket(frame.sessionId)
-      if (host) sendTo(host, { t: 'enc-batch', sessionId: frame.sessionId, items: frame.items })
+      if (!host) {
+        counters.droppedFrames += 1
+        state.touchConversation(frame.sessionId)
+        return
+      }
+      sendTo(host, { t: 'enc-batch', sessionId: frame.sessionId, items: frame.items })
       state.touchConversation(frame.sessionId)
       return
     }
     // 下行批量帧由中继逐条编号（客户端只看 ciphertext，但编号让"帧数不膨胀、顺序不乱"
     // 这类审计断言可写）。编号失败说明会话在飞行中被删了——那这一批就不该再发出去。
+    if (clients.length === 0) counters.droppedFrames += 1
     const items: Array<{ seq: number; ciphertext: string }> = []
     for (const item of frame.items) {
       const seq = state.nextHostSequence(frame.sessionId)
@@ -443,6 +472,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       const declaredType = (parsed as { t?: unknown } | null)?.t
       if (typeof declaredType === 'string' && !parseEndpointFrame(parsed)) {
         if (declaredType === 'pair-begin-client') {
+          counters.rejectedPairs += 1
           sendToPeer(peer, pairFailFrameOf('invalid_or_expired'))
           return
         }
@@ -554,7 +584,11 @@ export function createRelay(config: RelayConfig): RelayHandle {
       ok: !shuttingDown,
       version: config.version,
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+      // 瞬时快照（会上下浮动）与累计计数（只增不减）分开：混在一起会让
+      // "手机不更新"这类排查分不清"现在是空的"和"一直送不出去"。
       ...state.counts(),
+      ...counters,
+      lastPingAgo: lastPingAt === 0 ? -1 : Math.round((Date.now() - lastPingAt) / 1000),
       shuttingDown,
     }
   }

@@ -866,3 +866,46 @@ test('重配：旧会话的密文不许再灌给已经重配的手机（🟡7）
     await ctx.close()
   }
 })
+
+test('/healthz 诊断计数：丢弃帧 / 慢消费者 / 被拒配对 都有出口（A8）', async () => {
+  const ctx = await startRelay({
+    DRC_MAX_BUFFERED_BYTES: '4096',
+    DRC_SWEEP_MS: '150',
+    DRC_SLOW_CONSUMER_HOST_MS: '400',
+  })
+  try {
+    const healthOf = () => fetch(`http://127.0.0.1:${ctx.port}/healthz`).then((r) => r.json())
+    const counters = async () => {
+      const h = await healthOf()
+      return { dropped: h.droppedFrames, slow: h.slowConsumers, rejected: h.rejectedPairs }
+    }
+
+    // 起点必须归零，否则后面的"增量"断言是假的。
+    assert.deepEqual(await counters(), { dropped: 0, slow: 0, rejected: 0 }, '刚起来时三个计数都必须是 0')
+
+    // ① 被拒配对：拿一个不存在的 6 位码去配，中继会回 pair-fail。
+    const bogus = await Peer.connect(ctx.url)
+    ctx.open.push(bogus)
+    bogus.send({ t: 'hello', role: 'client', protocol: 1, clientId: 'inst-bogus', clientMeta: { platform: 'wechat-mp' } })
+    await bogus.until((f) => f.t === 'hello-ok')
+    bogus.send({ t: 'pair-begin-client', pairingToken: '000000' })
+    await bogus.until((f) => f.t === 'pair-fail')
+    assert.equal((await counters()).rejected, 1, '被拒的配对必须有出口，否则线上只能靠翻日志')
+
+    // ② 丢弃帧：观众退场后会话仍在（会话归主机），主机继续下行 —— 这一帧没有收件人。
+    //    R1 的"静默黑洞"正是这个形状，它必须至少在 /healthz 上可见。
+    const { host, client, conversationId } = await pairUp(ctx)
+    client.send({ t: 'session-leave', sessionId: conversationId })
+    await host.until((f) => f.t === 'peer-left' && f.sessionId === conversationId)
+    host.send({ t: 'enc', sessionId: conversationId, seq: 1, ciphertext: CIPHER })
+    await sleep(250)
+    assert.equal((await counters()).dropped, 1, '没有收件人的帧必须计数')
+
+    // ③ 慢消费者：钉住主机的发送缓冲，越过窗口就会被 1008 断开。
+    pinBuffered(ctx.relay.state.hostSocket(conversationId), 1_000_000)
+    assert.ok(await closedWithin(host, 4_000), '主机应被断开（前一条测试已锁语义，这里只借它产生计数）')
+    assert.equal((await counters()).slow, 1, '被断开的慢消费者必须计数')
+  } finally {
+    await ctx.close()
+  }
+})
