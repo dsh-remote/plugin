@@ -81,12 +81,15 @@ node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须�
 `docs/DESIGN.md` §4/§4.5 有全文，这里只列影响判断的：
 
 - **D1：PSK 从不上网**。旧实现把 PSK 放在 `pair-begin` 里发给中继；现在只发 6 位码，
-  PSK 只在二维码里。**后果**：旧 host + 新中继能兼容（多余字段被 zod strip），
-  **新 host + 旧中继会硬失败**（旧中继要求 `pair-begin.psk` 是 ≥16 字符的字符串）。
+  PSK 只在二维码里。**后果**：**两个方向都不能单向混搭**——新 host 发给旧中继会硬失败
+  （旧中继要求 `pair-begin.psk` 是 ≥16 字符的字符串）；旧 host 发给新中继也**不是**兼容
+  （旧 host 发的 `auth` 落到新中继的 `default:` 分支，只会收到 `error{unknown_frame}`，
+  它等不到 `auth-ok`，会一直停在 connecting——见下面的 D5）。
   所以回滚单位是"中继产物 + 插件产物**成对**回滚"，不是只回滚一边。
 - **D3/D6：会话跨断连存活**（这是这次的产品级卖点：手机回前台不再要求重新扫码）。
   代价是必须有一条"主机不认得这条 convId"的出口，见 §5 的 R1 三件套。
 - **D5：`auth`/`auth-ok`/`auth-fail` 并入 `hello`/`hello-ok`**；失败统一 `error{bad_token}`。
+  这条把 D1 的"不能单向混搭"补齐：旧 host 的 `auth` 在新中继里是 `unknown_frame`。
 - **D9：apiProxy / typert 两个弱 carrier 整个删掉**，只留 `services` + `mock`。
 - **F6：`pair-fail.reason` 只能是小程序能翻译的四个**。中继的全局限速原因
   （`rate_limited`）只进日志，线上写 `invalid_or_expired`——弹英文给用户是不允许的。

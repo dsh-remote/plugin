@@ -336,6 +336,34 @@ test('D6：主机短暂掉线不通知客户端；超过宽限期才发 peer-lef
   }
 })
 
+test('宽限期判死主机：每个成员恰好收到一条 peer-left（曾经是 N² 条）', async () => {
+  const ctx = await startRelay({ DRC_HOST_GRACE_MS: '200', DRC_SWEEP_MS: '50' })
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    // 中继当前一条会话只放一个客户端（认领是一次性的），所以第二台设备是"将来可能出现的
+    // 形状"。直接往状态表里放进这个成员——本用例要验的是**通知条数**这条不变量，
+    // 而不是认领流程（那条路在 D4 与配对用例里）。
+    const second = await Peer.connect(ctx.url)
+    second.send({ t: 'hello', role: 'client', protocol: 1, clientId: 'inst-2' })
+    await second.until((f) => f.t === 'hello-ok')
+    ctx.open.push(second)
+    ctx.relay.state.conversations.get(conversationId).clients.add('inst-2')
+
+    host.ws.terminate()
+    await client.until((f) => f.t === 'peer-left', 1500)
+    await second.until((f) => f.t === 'peer-left', 1500)
+
+    // 再等几拍。旧实现把外层内层写成同一个 clientIds，每个成员会拿到 2 条：这里必须仍是 1。
+    await sleep(180)
+    const count = (peer) => peer.frames.filter((f) => f.t === 'peer-left').length
+    assert.equal(count(client), 1, '第一个成员收到了重复的 peer-left')
+    assert.equal(count(second), 1, '第二个成员收到了重复的 peer-left')
+    assert.equal(ctx.relay.state.conversations.has(conversationId), false)
+  } finally {
+    await ctx.close()
+  }
+})
+
 test('D4：注册过但不属于该会话的客户端拿到 unknown_session（有恢复出口，复核 R2）', async () => {
   const ctx = await startRelay()
   try {

@@ -500,10 +500,11 @@ export function createRelay(config: RelayConfig): RelayHandle {
     lastPingAt = Date.now()
     // D6：超过宽限期仍没回来的主机，才真正通知它的客户端重配对。
     for (const dropped of state.expireOfflineHosts(config.hostGraceMs)) {
+      // 这里曾经误写成**嵌套两层同一个 clientIds**（外层内层同名），于是每个客户端收到
+      // N 条 `peer-left` 而不是 1 条：帧数随成员数平方增长，手机还会把同一次"主机离开"
+      // 重复处理。有测试锁住"每个成员恰好一条"。
       for (const clientId of dropped.clientIds) {
-        for (const clientId of dropped.clientIds) {
-          sendTo(state.clients.get(clientId)?.ws, peerLeftFrame(dropped.conversationId, dropped.hostId))
-        }
+        sendTo(state.clients.get(clientId)?.ws, peerLeftFrame(dropped.conversationId, dropped.hostId))
       }
       log.info('host grace expired', { hostId: dropped.hostId, sessions: dropped.conversationId })
     }
