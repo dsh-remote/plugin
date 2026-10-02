@@ -24,7 +24,7 @@ import { PairingWindow } from './core/pairing-window.js'
 import { RelayClient } from './transport/relay.js'
 import { SystemSleepBackend } from './platform/sleep-posix.js'
 import { createServicesKernel } from './platform/carrier-services.js'
-import { DEFAULT_SYSTEM_CLOCK } from './core/clock.js'
+import { createOneShotTimers, DEFAULT_SYSTEM_CLOCK } from './core/clock.js'
 import { pairingImagePath, StatusFile, writePrivateFile } from './shell/status.js'
 import { pairingPairText, PAIR_UNAVAILABLE_TEXT } from './shell/pairing-text.js'
 import { DEFAULT_CONFIG, readConfig, redact, validateConfig, type PluginConfig } from './shell/config.js'
@@ -143,6 +143,10 @@ export function apply(ctx: LooseContext, injected: Partial<PluginConfig> = {}): 
 function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): RuntimeHandle | undefined {
   const config = readConfig(injected)
   const clock = systemClock
+  // 载具探测的复查（8s/25s/60s）与载具宽限都是"宿主还活着就顺手看一眼"的一次性动作。
+  // 它们必须 unref 且在停机时撤掉，否则 60s 那一发会把事件循环钉住——`node e2e/run.mjs`
+  // 1.2s 跑完却 60s 才退出、任何 headless/CLI 跑法白等一分钟，都出自这里（见 core/clock.ts）。
+  const oneShot = createOneShotTimers(clock)
   const status = new StatusFile(config.statusFile, clock)
   const problems = validateConfig(config)
   const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void => {
@@ -623,7 +627,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
   // 服务可能晚到：8s / 25s / 60s 各复查一次，把"根本没提供"和"提供得晚"分开。
   for (const delayMs of [8_000, 25_000, 60_000]) {
     try {
-      clock.setTimeout(() => {
+      oneShot.schedule(() => {
         probe.injectFiredLive = injectFired.join('|') || 'never'
         probe.injectFired = probe.injectFiredLive
         collectForensics(`t${delayMs}:`)
@@ -668,8 +672,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       if (!value) return
       collected.apiProxy = value
       if (!decided) {
-        // 先不抢跑：等宽限期，让 services 有机会先到。
-        clock.setTimeout(tryStart, config.carrierGraceMs)
+        // 先不抢跑：等宽限期，让 services 有机会先到。这发也 unref——它只是"再看一眼"，
+        // 进程若已无别的事可做就不该为它多活一个宽限期。
+        oneShot.schedule(tryStart, config.carrierGraceMs)
       }
       tryStart()
     }) as never)
@@ -775,6 +780,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     state,
     createPairing,
     stop(): void {
+      // 复查定时器要先撤：停机之后它们再去写 status.json，写的是已经过期的取证。
+      oneShot.cancelAll()
       status.stop()
       runtime?.stop()
       relay?.stop()

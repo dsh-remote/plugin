@@ -542,6 +542,29 @@ export function trailDump(phone, limit = 14) {
     .join(' | ')
 }
 
+/**
+ * `Promise.race` 的卫生版：超时那一发**在胜负分晓后一定被撤掉**。
+ *
+ * 为什么不能直接写 `await Promise.race([p, delay(ms)])`：`Promise.race` 只认先到的结果，
+ * **不会取消输家**。`delay(ms)` 的定时器是 ref 着的，于是进程要一直等到它自然到期——
+ * 实测代价就是"1.3s 打完全绿、进程 ~10s 后才退出"，而拖尾的正是提问卡那一步输掉的
+ * `delay(10_000)`（它走 `node:timers/promises`，连包 global.setTimeout 的探针都看不见）。
+ *
+ * 产品侧同款写法在 `packages/plugin/src/platform/carrier-services.ts` 的 `withTimeout`：
+ * 那里 `finally` 里清了，所以没有这个问题——e2e 这边漏了，补齐。
+ */
+export async function raceWithTimeout(promise, ms) {
+  let timer
+  const guard = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), ms)
+  })
+  try {
+    return await Promise.race([promise, guard])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 // ── 零知识帧审计 ─────────────────────────────────────────────────────
 
 /**
@@ -956,7 +979,9 @@ export async function main() {
         [{ questionId: 'q1', selected: ['staging'] }],
         `红线 15：出站 answers 必须是 [{questionId,selected:[optionId]}]，收到 ${JSON.stringify(answeredCmd.cmd.answers)}`,
       )
-      const settled = await Promise.race([asked, delay(10_000).then(() => null)])
+      // 用 raceWithTimeout 而不是裸的 Promise.race：`asked` 先赢时，输掉的那发
+      // `delay(10_000)` 会 ref 着把进程多钉 ~10s（见 raceWithTimeout 的说明）。
+      const settled = await raceWithTimeout(asked, 10_000)
       assert.ok(settled, '手机端的答案 10s 内没结算到内核侧')
       assert.deepEqual(settled.answers.map((a) => a.id), ['q1'], '内核侧必须按 questionId 对上问题')
       assert.deepEqual(settled.answers[0].selected, ['预发'], '主机必须把手机回传的 id 翻回平台用的 label（红线 15）')
