@@ -7,7 +7,7 @@ name: Release
 # 就会出现"有 Release 没包"的假象；反过来（发了包、Release 没建）最多是少一条公告，
 # 且可以手工补。两者都不可能回滚，所以把较轻的那个放在后面。
 #
-# `dsh-remote-protocol` 是**发 npm 的**：server 与 control 两个仓都以 `^1.0.0` 消费它，
+# `dsh-remote-wire` 是**发 npm 的**：server 与 control 两个仓都以 `^1.0.0` 消费它，
 # 这样它们能带 lockfile、CI 能跑 `--frozen-lockfile`。别再退回 git 依赖——那会要求
 # 两个消费仓各写一条按 commit 精确锁定的 `allowBuilds` 键来放行 `prepare`（实测 pnpm 11
 # 只认这一种形式），协议每次升版都得手改两处。

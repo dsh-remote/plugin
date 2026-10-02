@@ -1,5 +1,5 @@
 /**
- * dsh-remote-protocol — DSH Remote Control 的线协议层。
+ * dsh-remote-wire — DSH Remote Control 的线协议层。
  *
  * 三条约束，决定了这个包长什么样：
  *

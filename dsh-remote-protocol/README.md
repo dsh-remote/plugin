@@ -1,7 +1,10 @@
-# dsh-remote-protocol
+# dsh-remote-wire
+
+> 仓库目录名是 `dsh-remote-protocol`，npm 包名是 `dsh-remote-wire`——`dsh-remote-protocol`
+> 这个名字在 npm 上已被第三方占用。下文与本仓源码里的 `dsh-remote-wire` 均指这个 npm 包。
 
 [![CI](https://github.com/providcc/dsh-remote-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/providcc/dsh-remote-protocol/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-remote-protocol.svg)](https://www.npmjs.com/package/dsh-remote-protocol)
+[![npm](https://img.shields.io/npm/v/dsh-remote-wire.svg)](https://www.npmjs.com/package/dsh-remote-wire)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 **DSH Remote Control** 三端共用的线协议——DSH 宿主插件、零知识中继、微信小程序客户端。
@@ -12,9 +15,9 @@
 ## 安装
 
 ```sh
-pnpm add dsh-remote-protocol
+pnpm add dsh-remote-wire
 # 或
-npm install dsh-remote-protocol
+npm install dsh-remote-wire
 ```
 
 要求 Node.js **≥ 20**。
@@ -23,17 +26,17 @@ npm install dsh-remote-protocol
 
 | 模块                                 | 导入路径                       | 职责                                                                |
 | ------------------------------------ | ------------------------------ | ------------------------------------------------------------------- |
-| bytes                                | `dsh-remote-protocol`（内部）  | base64 / UTF-8 / 拼接，与小程序 vendored 的 `js-base64` 逐字节一致  |
-| [keys](./src/crypto/keys.ts)         | `dsh-remote-protocol/keys`     | PSK 生成、HKDF 风格的两把方向密钥派生、计数器 nonce 构造            |
-| [record](./src/crypto/record.ts)     | `dsh-remote-protocol/record`   | `seal()` / `open()`——基于 `tweetnacl` 的 XSalsa20-Poly1305 密封记录 |
-| [frames](./src/wire/frames.ts)       | `dsh-remote-protocol/frames`   | 每一条中继控制帧的 zod schema + 解析器                              |
-| [payloads](./src/wire/payloads.ts)   | `dsh-remote-protocol/payloads` | `cmd.*` / `ev.*` 载荷目录的 zod schema                              |
-| [outbound](./src/wire/outbound.ts)   | `dsh-remote-protocol/outbound` | 中继 → 端点、主机 → 客户端消息的类型化构造器                        |
-| [pairing](./src/identity/pairing.ts) | `dsh-remote-protocol/pairing`  | `dshr:/p?...` 配对 URI 编解码、6 位码工具                           |
-| [ids](./src/identity/ids.ts)         | `dsh-remote-protocol/ids`      | 会话 / 主机 / 命令 id 生成                                          |
-| [sleep](./src/platform/sleep.ts)     | `dsh-remote-protocol/sleep`    | 防休眠命令构造器（`caffeinate` / `systemd-inhibit`）                |
+| bytes                                | `dsh-remote-wire`（内部）  | base64 / UTF-8 / 拼接，与小程序 vendored 的 `js-base64` 逐字节一致  |
+| [keys](./src/crypto/keys.ts)         | `dsh-remote-wire/keys`     | PSK 生成、HKDF 风格的两把方向密钥派生、计数器 nonce 构造            |
+| [record](./src/crypto/record.ts)     | `dsh-remote-wire/record`   | `seal()` / `open()`——基于 `tweetnacl` 的 XSalsa20-Poly1305 密封记录 |
+| [frames](./src/wire/frames.ts)       | `dsh-remote-wire/frames`   | 每一条中继控制帧的 zod schema + 解析器                              |
+| [payloads](./src/wire/payloads.ts)   | `dsh-remote-wire/payloads` | `cmd.*` / `ev.*` 载荷目录的 zod schema                              |
+| [outbound](./src/wire/outbound.ts)   | `dsh-remote-wire/outbound` | 中继 → 端点、主机 → 客户端消息的类型化构造器                        |
+| [pairing](./src/identity/pairing.ts) | `dsh-remote-wire/pairing`  | `dshr:/p?...` 配对 URI 编解码、6 位码工具                           |
+| [ids](./src/identity/ids.ts)         | `dsh-remote-wire/ids`      | 会话 / 主机 / 命令 id 生成                                          |
+| [sleep](./src/platform/sleep.ts)     | `dsh-remote-wire/sleep`    | 防休眠命令构造器（`caffeinate` / `systemd-inhibit`）                |
 
-根入口（`dsh-remote-protocol`）会把上面全部再导出一次。
+根入口（`dsh-remote-wire`）会把上面全部再导出一次。
 
 ## 设计约束
 
@@ -59,8 +62,8 @@ base64 / UTF-8 用 Node 内置的 `Buffer` 与 `TextEncoder`——在大量输�
 用派生出的密钥密封 / 打开一条记录：
 
 ```ts
-import { generatePsk, derivePskKey } from 'dsh-remote-protocol/keys'
-import { seal, open } from 'dsh-remote-protocol/record'
+import { generatePsk, derivePskKey } from 'dsh-remote-wire/keys'
+import { seal, open } from 'dsh-remote-wire/record'
 
 const psk = generatePsk()
 const key = derivePskKey(psk, 'c2h', 'c_abc123')
@@ -72,7 +75,7 @@ const back = open(key, record) // { t: 'ping' }
 构造与解析配对 URI：
 
 ```ts
-import { buildPairingUri, parsePairingUri } from 'dsh-remote-protocol/pairing'
+import { buildPairingUri, parsePairingUri } from 'dsh-remote-wire/pairing'
 
 const uri = buildPairingUri({ server: 'wss://relay.example', psk, token: '042317' })
 const info = parsePairingUri(uri) // 任何畸形输入返回 null
@@ -81,7 +84,7 @@ const info = parsePairingUri(uri) // 任何畸形输入返回 null
 构造平台防休眠命令：
 
 ```ts
-import { detectBackend, buildSleepCommand } from 'dsh-remote-protocol/sleep'
+import { detectBackend, buildSleepCommand } from 'dsh-remote-wire/sleep'
 
 const backend = detectBackend(process.platform) // 'caffeinate' | 'systemd-inhibit' | 'unsupported'
 if (backend !== 'unsupported') {

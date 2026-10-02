@@ -1,5 +1,5 @@
 {
-  "name": "dsh-remote-protocol",
+  "name": "dsh-remote-wire",
   "version": "1.0.0",
   "description": "Wire protocol for DSH Remote Control: sealed-record crypto, KDF, pairing URI, control frames, payload catalog, keep-awake command builder. Pure functions — no I/O, no timers, no platform symbols.",
   "type": "module",
