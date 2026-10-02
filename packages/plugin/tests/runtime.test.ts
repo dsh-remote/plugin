@@ -893,3 +893,104 @@ test('挂起审批期间每 pendingRefreshMs 续锁，且 runtime 侧的 hold �
   await clock.advance(360_000)
   assert.ok(sleepPort.stops >= 1, '审批结束后锁必须能靠空闲自动释放：这就是"这台机器一次远程审批过就再也睡不了"那条事故')
 })
+
+// ── 历史：手机打开会话时要读到主机上已有的内容 ──────────────────────
+
+test('cmd.session_history：条目走与实时流同一批出站构造器，游标原样带回去', async () => {
+  const { runtime, transport, kernel } = fixture()
+  const asked: Array<{ sessionId: string; beforeSeq?: number; limit: number }> = []
+  kernel.readHistory = (sessionId, options) => {
+    asked.push({ sessionId, ...options })
+    return Promise.resolve({
+      events: [
+        { kind: 'delta', sessionId, messageId: 'm1', text: '看看完成度', role: 'user', done: true },
+        { kind: 'tool', sessionId, callId: 'c1', phase: 'completed', tool: 'Bash', resultPreview: 'total 88' },
+        { kind: 'delta', sessionId, messageId: 'm2', text: '结构清楚。', role: 'assistant', done: true },
+      ],
+      nextBeforeSeq: 9,
+    })
+  }
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', beforeSeq: 42, limit: 3 }),
+    'c_000000000001',
+  )
+  await settle()
+
+  // 历史是**回执**不是广播：广播会把整份历史发给每一条配对通道
+  const pages = transport.replies
+    .map((item) => item.payload)
+    .filter((payload) => payload.t === PAYLOAD_TYPES.evSessionHistory)
+  assert.equal(pages.length, 1, `历史页必须只回给发起者（实得 ${pages.length} 条）`)
+  const page = pages[0] as Extract<EvPayload, { t: 'ev.session_history' }>
+  assert.equal(page.sessionId, 'ses_live', 'F3：载荷里的 sessionId 是 DSH 会话 id，必须逐字回原值')
+  assert.equal(page.cmdId, `cmd_${PAYLOAD_TYPES.cmdSessionHistory}`, 'cmdId 不回原值 → 手机认不出这是哪次请求的页')
+  assert.deepEqual(asked, [{ sessionId: 'ses_live', beforeSeq: 42, limit: 3 }], '游标与条数必须逐字传给内核端口')
+  assert.deepEqual(
+    page.items.map((item) => item.t),
+    ['ev.message_delta', 'ev.tool_event', 'ev.message_delta'],
+    '条目顺序必须保持（升序），否则手机上整段历史是倒着讲的',
+  )
+  assert.equal(page.nextBeforeSeq, 9, '有更早的一页就必须把游标带回去，否则「加载更早」永远点不动')
+  // 运行态不许混进历史：回放历史不该去改顶栏。类型上本来就写不出来（条目只允许两种叶子载荷），
+  // 这里再对**产物**查一遍——schema 是运行期才拦的，而漏掉它只会静默生效。
+  assert.equal(JSON.stringify(page.items).includes('run_state'), false)
+})
+
+test('cmd.session_history：内核没有这个能力时明确拒绝，绝不回一张空页', async () => {
+  const { runtime, transport, kernel } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+  assert.equal(kernel.readHistory, undefined, '夹具有 readHistory 的话这条断言就失去意义了')
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live' }), 'c_000000000001')
+  await settle()
+
+  const pages = transport.replies.map((item) => item.payload).filter((p) => p.t === PAYLOAD_TYPES.evSessionHistory)
+  assert.equal(pages.length, 0, '能力缺失却回了一张空页 → 手机上显示"这个会话没内容"，一个会让人查错方向的假事实')
+  const results = transport.resultReplies()
+  assert.equal(results[0]?.ok, false)
+  assert.match(String(results[0]?.message ?? ''), /历史/, '拒绝原因必须点名"历史"，否则手机上只有一句看不懂的话')
+})
+
+test('cmd.session_history：读历史时炸了也必须回执失败（手机不能对着转圈干等）', async () => {
+  const { runtime, transport, kernel } = fixture()
+  kernel.readHistory = () => Promise.reject(new Error('这一代宿主不能读会话历史'))
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.replies.length = 0
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live' }), 'c_000000000001')
+  await settle()
+
+  const results = transport.resultReplies()
+  assert.equal(results.length, 1)
+  assert.equal(results[0]?.ok, false)
+  assert.equal(results[0]?.cmdId, `cmd_${PAYLOAD_TYPES.cmdSessionHistory}`)
+  assert.match(String(results[0]?.message ?? ''), /不能读会话历史/)
+})
+
+test('cmd.session_history：不带游标 = 要最新一页（不该把 beforeSeq 塞成 undefined 传给内核）', async () => {
+  const { runtime, transport, kernel } = fixture()
+  let seen: Record<string, unknown> | undefined
+  kernel.readHistory = (sessionId, options) => {
+    seen = { sessionId, ...options }
+    return Promise.resolve({ events: [] })
+  }
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live' }), 'c_000000000001')
+  await settle()
+  assert.deepEqual(seen, { sessionId: 'ses_live', limit: 40 }, '省掉 beforeSeq 才是"最新一页"；多一个 undefined 键会让内核侧的判空走岔')
+})

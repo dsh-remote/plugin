@@ -45,6 +45,22 @@ export type KernelEvent =
   | { kind: 'title'; sessionId: string; title: string }
   | { kind: 'sessions-changed'; reason?: string }
 
+/**
+ * 一页历史。
+ *
+ * `events` 用的是**与实时流同一套 KernelEvent 词汇**，而不是另立一套"历史消息"形状：
+ * 内核日志里的事件和实时 `session/event` 本来就是同一种东西（都是
+ * `{type, seq, data}`），所以翻译函数可以原样复用，出站构造器也可以原样复用。
+ * 另立一套的话，同一段翻译逻辑要写两遍，而两份实现分叉的表现是
+ * "实时看着对、历史看着怪"——靠肉眼很难发现。
+ *
+ * `nextBeforeSeq` 省略 = 这是最初的一页（没有更早的内容了）。
+ */
+export interface KernelHistoryPage {
+  events: KernelEvent[]
+  nextBeforeSeq?: number
+}
+
 /** 一次待决审批。`id` 是插件自己生成的关联键（手机回传时逐字带回）。 */
 export interface PendingApproval {
   id: string
@@ -100,6 +116,18 @@ export interface KernelPort {
   runState(sessionId: string): Promise<{ running: boolean; state: SessionSummary['state'] }>
   sendPrompt(sessionId: string, text: string): Promise<{ ok: boolean; message?: string }>
   interrupt(sessionId: string): Promise<{ ok: boolean; message?: string }>
+
+  /**
+   * 读一条会话已有的历史（手机打开会话时用）。
+   *
+   * **可选**：读历史依赖宿主暴露 `sessionQuery`（`listSessions` / `readTitleSnapshots`
+   * 那条路线的同一个服务），而不同代际的能力面不一样。缺失时调用方必须能明确报出
+   * "这一代没有这个能力"，而不是回一个空列表——空列表在手机上就是"这个会话没内容"，
+   * 那是一个会让人查错方向的假事实。
+   *
+   * `options.beforeSeq` 是上一页给的游标（取 `seq < beforeSeq`）；省略表示要最新一页。
+   */
+  readHistory?(sessionId: string, options: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage>
 
   /** 订阅会话事件；返回退订函数。实现必须拒绝订阅 waterfall（见 guard.ts）。 */
   subscribe(onEvent: (event: KernelEvent) => void): () => void

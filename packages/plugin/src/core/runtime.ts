@@ -19,14 +19,16 @@
  *   由 `outbound.ts` 的构造器产出，参数表里就没有 sessionId。
  */
 import { randomUUID } from 'node:crypto'
-import type { AnswerItem, CmdPayload, EvPayload, QuestionItem, SessionSummary } from '@dsh-rc/protocol'
+import type { AnswerItem, CmdPayload, EvPayload, HistoryItem, QuestionItem, SessionSummary } from '@dsh-rc/protocol'
 import {
   keepAwakeState,
+  messageDelta,
   permissionRequest,
   questionRequest,
   result as resultOf,
   runState,
   sessionChanged,
+  sessionHistory,
   toolEvent,
 } from '@dsh-rc/protocol/outbound'
 import type { ApprovalDecision, AskUserQuestionAnswerValue, KernelEvent, KernelPort } from '../ports/index.js'
@@ -85,6 +87,8 @@ const DEFAULTS: RuntimeOptions = {
 
 /** 一次列表最多给手机多少条会话（与中继侧的会话上限同源，取证 §5.3）。 */
 const LISTING_LIMIT = 100
+/** 一次历史翻页默认给多少条（协议上界 200，这里更保守：一帧要装得下）。 */
+const HISTORY_LIMIT = 40
 /** 相邻两条 `ev.session_changed` 的最小间隔；小于它就改成尾随推送。 */
 const SESSION_MERGE_MS = 500
 
@@ -203,6 +207,32 @@ export class HostRuntime {
           const snapshot = this.sleep.setEnabled(cmd.enabled, cmd.idleReleaseSec)
           this.broadcast(keepAwakeState(snapshot))
           reply(true)
+          return
+        }
+        case 'cmd.session_history': {
+          // 能力缺失时**明确拒绝**：回一张空页在手机上是"这个会话没内容"，
+          // 那是一个会让人查错方向的假事实。能力面差异是真实存在的（见 KernelPort）。
+          const read = this.kernel.readHistory
+          if (!read) {
+            reply(false, { message: '主机这一代不支持读取历史（内核端口没有 readHistory 能力）' })
+            return
+          }
+          const page = await read.call(this.kernel, cmd.sessionId, {
+            ...(cmd.beforeSeq === undefined ? {} : { beforeSeq: cmd.beforeSeq }),
+            limit: cmd.limit ?? HISTORY_LIMIT,
+          })
+          // 条目走**与实时流同一批出站构造器**：形状一致才谈得上"同一套渲染路径"。
+          const items: HistoryItem[] = []
+          for (const event of page.events) {
+            const item = historyWireItem(event)
+            if (item) items.push(item)
+          }
+          this.replyTo(conversationId, sessionHistory({
+            sessionId: cmd.sessionId,
+            cmdId: cmd.cmdId,
+            items,
+            ...(page.nextBeforeSeq === undefined ? {} : { nextBeforeSeq: page.nextBeforeSeq }),
+          }))
           return
         }
       }
@@ -466,4 +496,35 @@ export class HostRuntime {
 
 function messageOf(error: unknown): string {
   return String((error as Error)?.message ?? error)
+}
+
+/**
+ * `KernelEvent` → 历史条目。
+ *
+ * 运行态 / 标题 / 列表变化在历史里没有位置——它们是"此刻"的事，回放历史不该去改顶栏；
+ * 返回 `undefined` 由调用方丢掉。
+ *
+ * `done` 恒为 `true`：历史里的消息是**已经写完的**。不置的话手机上正文末尾会挂着一个
+ * 一直闪的光标，看起来像还在生成。
+ */
+function historyWireItem(event: KernelEvent): HistoryItem | undefined {
+  if (event.kind === 'delta') {
+    return messageDelta({
+      messageId: event.messageId,
+      delta: event.text,
+      done: true,
+      ...(event.role === undefined ? {} : { role: event.role }),
+    })
+  }
+  if (event.kind === 'tool') {
+    return toolEvent({
+      callId: event.callId,
+      phase: event.phase,
+      ...(event.tool === undefined ? {} : { tool: event.tool }),
+      ...(event.title === undefined ? {} : { title: event.title }),
+      ...(event.argsPreview === undefined ? {} : { argsPreview: event.argsPreview }),
+      ...(event.resultPreview === undefined ? {} : { resultPreview: event.resultPreview }),
+    })
+  }
+  return undefined
 }

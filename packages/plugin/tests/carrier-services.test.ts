@@ -19,7 +19,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServicesKernel, type ServicesBundle } from '../src/platform/carrier-services.js'
+import { createServicesKernel, historyPageFromLog, type ServicesBundle } from '../src/platform/carrier-services.js'
 import { FakeClock } from '../src/core/clock.js'
 
 interface Calls {
@@ -262,4 +262,199 @@ test('未知事件类型不映射但要在 kernel.unmappedEventTypes 里看得�
   assert.deepEqual(seen, [], '未知类型被映射成了某个事件：F1 禁止挪用语义')
   assert.equal(String((kernel.describe() as Record<string, unknown>).unmappedEventTypes), 'brand/new-event', '没留痕：下一次"手机上缺东西"又要从头猜')
   assert.match(String((kernel.describe() as Record<string, unknown>).eventTypes), /brand\/new-event/, '收到过什么类型也要记：分不清"内核没发"与"我们没认"')
+})
+
+// ── 历史：内核日志 → 一页条目 ────────────────────────────────────────
+//
+// 夹具用的是**真机日志的形状**（取证：`~/.dsh/sessions/**/session.v4.jsonl.zstd`，逐字抄），
+// 不是"照着类型定义编一个"。这一层最容易犯的错就是拿想象中的形状去测自己写的解析。
+
+/** 一轮：用户说一句、模型想一下（reasoning + tool-call）、调工具、拿到结果、给出结论。 */
+function realLog(sessionId: string): Array<{ type: string; seq: number; data: Record<string, unknown> }> {
+  return [
+    { type: 'turn/start', seq: 5, data: { turn: 1 } },
+    { type: 'step/start', seq: 7, data: { turn: 1, step: 1 } },
+    {
+      type: 'user/message',
+      seq: 9,
+      data: { content: [{ type: 'text', text: '看看这个项目的完成度' }], source: { kind: 'user' }, role: 'user', id: 'u-9' },
+    },
+    {
+      type: 'assistant/message',
+      seq: 11,
+      // 正文在 data.message.content；这一条只有 reasoning + tool-call —— 正文是空的
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '先看看目录里有什么。' },
+            { type: 'tool-call', id: 'call_a', name: 'run_code', arguments: '{"code":"ls"}' },
+          ],
+        },
+      },
+    },
+    { type: 'tool/call', seq: 12, data: { turn: 1, step: 1, callId: 'call_a', name: 'Bash', arguments: '{"command":"ls -la"}' } },
+    {
+      type: 'tool/result',
+      seq: 13,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'tool',
+          source: { kind: 'tool', callId: 'call_a' },
+          toolCallId: 'call_a',
+          content: [{ type: 'text', text: 'total 88\ndrwxr-xr-x  20 linbin' }],
+        },
+      },
+    },
+    {
+      type: 'assistant/message',
+      seq: 14,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'reasoning', text: '看完了。' },
+            { type: 'text', text: '项目结构清楚，完成度不错。' },
+          ],
+        },
+      },
+    },
+    { type: 'turn/end', seq: 15, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
+}
+
+test('历史：与实时流同构的日志被翻译成同一种条目，空正文与运行态都不落进页面', () => {
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: realLog('ses_1'), limit: 100 })
+  const shape = page.events.map((e) => {
+    if (e.kind === 'delta') return `delta:${e.role}:${e.text}`
+    if (e.kind === 'tool') return `tool:${e.phase}:${e.callId}`
+    return `other:${e.kind}`
+  })
+  assert.deepEqual(shape, [
+    'delta:user:看看这个项目的完成度',
+    // 只有 reasoning + tool-call 的那条 assistant/message **不该**产生正文块：
+    // 不过滤的话历史里会插进一堆空白正文
+    'tool:args:call_a',
+    'tool:completed:call_a',
+    'delta:assistant:项目结构清楚，完成度不错。',
+  ])
+  assert.equal(page.nextBeforeSeq, undefined, '整份日志一次给完，不该再给游标')
+})
+
+test('历史：思维链正文（M28）一个字节都不出站 —— 历史这条路径也必须守', () => {
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: realLog('ses_1'), limit: 100 })
+  const dumped = JSON.stringify(page)
+  assert.equal(dumped.includes('先看看目录里有什么'), false, 'reasoning 泄漏到出站结构里了')
+  assert.equal(dumped.includes('看完了'), false, 'reasoning 泄漏到出站结构里了')
+  assert.equal(dumped.includes('reasoning'), false)
+})
+
+test('历史：一条原始事件可能折成 0/1/2 条 —— 分页必须切在事件边界上，不能切在条目中间', () => {
+  const log = realLog('ses_1')
+  const all = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100 })
+  // 从最后往前一页页翻，拼起来必须与一次全给**逐字相同**
+  const collected: unknown[] = []
+  let cursor: number | undefined
+  for (let guard = 0; guard < 20; guard++) {
+    const page = historyPageFromLog({
+      sessionId: 'ses_1',
+      events: log,
+      limit: 2,
+      ...(cursor === undefined ? {} : { beforeSeq: cursor }),
+    })
+    collected.unshift(...page.events)
+    if (page.nextBeforeSeq === undefined) break
+    cursor = page.nextBeforeSeq
+  }
+  assert.deepEqual(collected, all.events, '翻页拼起来与一次全给不一致：中间丢或重了')
+})
+
+test('历史：翻不动的时候不许给游标（否则手机上会长出一个点了没反应的「加载更早」）', () => {
+  const log = realLog('ses_1')
+  const one = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 2 })
+  assert.equal(typeof one.nextBeforeSeq, 'number', '还有更早的内容就必须给游标')
+  const rest = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, beforeSeq: one.nextBeforeSeq ?? 0 })
+  assert.equal(rest.nextBeforeSeq, undefined, '已经到最早了还在给游标')
+  assert.ok(rest.events.length > 0)
+  // 游标是**排他**上界：拿同一个游标再要一次，结果必须完全一致（幂等）
+  const again = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, beforeSeq: one.nextBeforeSeq ?? 0 })
+  assert.deepEqual(again, rest)
+})
+
+test('历史：预算再小也要给出一整组，不能产出空页（空页 + 游标 = 翻页死循环）', () => {
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: realLog('ses_1'), limit: 1 })
+  assert.ok(page.events.length >= 1, '给了空页但游标还在动，手机端的「加载更早」会一直转')
+})
+
+test('历史：没有下文的工具调用要落成"已结束 + 说明"，不能让它一直显示"正在执行"', () => {
+  const log = [
+    { type: 'user/message', seq: 1, data: { content: [{ type: 'text', text: '跑一下' }], role: 'user', id: 'u-1' } },
+    { type: 'tool/call', seq: 2, data: { turn: 1, step: 1, callId: 'call_x', name: 'Bash', arguments: '{"command":"sleep 999"}' } },
+    // 这一轮被中断：没有 tool/result，只有一条 error 收尾
+    { type: 'turn/end', seq: 3, data: { turn: 1, reason: { kind: 'error', error: { message: 'user interrupted', code: 'ABORT' } } } },
+  ]
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100 })
+  const tool = page.events.find((e) => e.kind === 'tool')
+  assert.ok(tool && tool.kind === 'tool')
+  assert.equal(tool.phase, 'completed', '停在 args/started 会让步骤组一直显示「正在执行 1 个步骤」')
+  assert.match(tool.resultPreview ?? '', /中断/, '要说明为什么没有结果，不能只留一个空结果')
+  // 收尾的错误文案要留下：否则手机上"这一轮什么都没发生"与"成功回合"长得一样
+  const texts = page.events.filter((e) => e.kind === 'delta').map((e) => (e.kind === 'delta' ? e.text : ''))
+  assert.ok(
+    texts.some((t) => t.includes('user interrupted')),
+    `错误原因被丢了：${JSON.stringify(texts)}`,
+  )
+})
+
+test('历史：未知事件类型既不映射也不炸（内核一直在加新事件）', () => {
+  const page = historyPageFromLog({
+    sessionId: 'ses_1',
+    events: [
+      { type: 'brand/new-event', seq: 1, data: { x: 1 } },
+      { type: 'user/message', seq: 2, data: { content: [{ type: 'text', text: '在' }], role: 'user', id: 'u-2' } },
+    ],
+    limit: 100,
+  })
+  assert.equal(page.events.length, 1)
+  assert.equal(page.events[0]!.kind, 'delta')
+})
+
+test('历史：空日志给空页、且不给游标（"这个会话没有内容"与"读不出来"必须分得清）', () => {
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: [], limit: 100 })
+  assert.deepEqual(page.events, [])
+  assert.equal(page.nextBeforeSeq, undefined)
+})
+
+test('读历史走 sessionQuery.readSession，把它给的整份事件交给分页', async () => {
+  const f = fixture()
+  const asked: unknown[] = []
+  const services = f.bundle({ live: true })
+  services.sessionQuery = {
+    readSession: (id: string) => {
+      asked.push(id)
+      return Promise.resolve({ session: { id }, events: realLog(id) })
+    },
+  }
+  const kernel = f.kernel(services)
+  const page = await kernel.readHistory!('ses_1', { limit: 100 })
+  assert.deepEqual(asked, ['ses_1'], '读历史必须点名那条会话')
+  assert.equal(page.events.length, 4)
+  assert.match(String((kernel.describe() as Record<string, unknown>).historyFace), /readSession/)
+})
+
+test('宿主没有 sessionQuery.readSession 时必须**抛**，不许回一张空页', async () => {
+  const f = fixture()
+  const kernel = f.kernel(f.bundle({ live: true })) // bundle 里根本没有 sessionQuery
+  await assert.rejects(
+    () => kernel.readHistory!('ses_1', { limit: 10 }),
+    /不能读会话历史/,
+    '回空页在手机上是"这个会话没内容"——一个会让人查错方向的假事实',
+  )
+  assert.match(String((kernel.describe() as Record<string, unknown>).historyFace), /absent/)
 })

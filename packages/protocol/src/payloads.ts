@@ -144,6 +144,42 @@ export const evResult = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
 })
 
+/**
+ * 一页历史条目。**故意复用实时流那两种载荷**，而不是另立一套"历史消息"形状。
+ *
+ * 理由是小程序侧的成本：聊天页的块流模型（轮次/指令/步骤组/正文）已经把
+ * `ev.message_delta` 与 `ev.tool_event` 的回放规则写死了一遍。历史若另立形状，
+ * 同一套规则就得写第二遍，而两份实现迟早分叉——表现是"实时看着对、历史看着怪"，
+ * 这种缺陷很难靠肉眼发现。
+ *
+ * 深不递归：这里只允许两种**叶子**载荷，`ev.session_history` 自身不在其中。
+ */
+const historyItem = z.discriminatedUnion('t', [evMessageDelta, evToolEvent])
+/** 历史里的一条。 */
+export type HistoryItem = z.infer<typeof historyItem>
+
+/**
+ * 主机已有的历史（一次一页，按 seq **升序**）。
+ *
+ * 三条约定：
+ * - `items[].t` 与实时流同构，小程序用**同一条分发路径**回放，不写第二套渲染规则；
+ * - **只有游标，没有 `hasMore`**：`nextBeforeSeq` 在 = 还有更早的一页（把它原样回传进
+ *   `cmd.session_history.beforeSeq`），不在 = 到底了。用两个字段表达同一件事，
+ *   迟早会出现"说还有、却没给游标"这种自相矛盾的载荷，而它的表现是——
+ *   手机上「加载更早」点了没反应，且没有任何报错。一个字段就没有这种状态。
+ * - 翻页游标由**主机**给：一条原始内核事件可能被折叠成 0/1/2 条线格式条目，
+ *   小程序既不知道折叠规则也不该知道，按条数自己推算迟早会跳过或重发一段。
+ * - 条目里不带 `ev.run_state`：运行态是"此刻"的事，回放历史不该去改顶栏。
+ */
+export const evSessionHistory = z.object({
+  t: z.literal('ev.session_history'),
+  sessionId: nonEmpty,
+  cmdId: nonEmpty,
+  items: z.array(historyItem),
+  /** 有更早的一页时给出游标；**没有这个字段就表示这是最初的一页**。 */
+  nextBeforeSeq: z.number().int().nonnegative().optional(),
+})
+
 /** evSessionChanged 的推导类型。 */
 export type EvSessionChanged = z.infer<typeof evSessionChanged>
 /** evMessageDelta 的推导类型。 */
@@ -160,6 +196,10 @@ export type EvRunState = z.infer<typeof evRunState>
 export type EvKeepAwakeState = z.infer<typeof evKeepAwakeState>
 /** evResult 的推导类型。 */
 export type EvResult = z.infer<typeof evResult>
+/** evSessionHistory 的推导类型。 */
+export type EvSessionHistory = z.infer<typeof evSessionHistory>
+/** cmdSessionHistory 的推导类型。 */
+export type CmdSessionHistory = z.infer<typeof cmdSessionHistory>
 /** cmdSendPrompt 的推导类型。 */
 export type CmdSendPrompt = z.infer<typeof cmdSendPrompt>
 /** cmdAnswer 的推导类型。 */
@@ -186,6 +226,7 @@ export const evPayload = z.discriminatedUnion('t', [
   evRunState,
   evKeepAwakeState,
   evResult,
+  evSessionHistory,
 ])
 export type EvPayload = z.infer<typeof evPayload>
 
@@ -246,7 +287,27 @@ export const cmdKeepAwake = z.object({
 })
 
 /**
- * 手机发来的命令载荷，共 6 种——就是 `mp/core/client.js` 的便捷方法能产出的全部。
+ * 读主机上已有的历史（`sessionId` 是 DSH 会话 id，不是配对通道 id，F3）。
+ *
+ * 分页语义刻意做成「**游标由主机给、小程序原样回传**」：
+ * - 不带 `beforeSeq` = 要最新的一页；
+ * - 带 `beforeSeq` = 要 `seq < beforeSeq` 的那一页，取值来自上一次响应的 `nextBeforeSeq`。
+ *
+ * 为什么不按"第几页/每页 N 条"来切：一条原始内核事件可能被折叠成 0 条（空文本的
+ * assistant/message）、1 条或 2 条（tool/call + tool/result）线格式条目，
+ * 小程序既不知道折叠规则也不该知道。让它按条数推算翻页，迟早会跳过或重发一段。
+ */
+export const cmdSessionHistory = z.object({
+  t: z.literal('cmd.session_history'),
+  cmdId: nonEmpty,
+  sessionId: nonEmpty,
+  beforeSeq: z.number().int().nonnegative().optional(),
+  /** 上限 200：一次翻页要不动整条会话，也不能是一条能顶满中继帧预算的巨帧。 */
+  limit: z.number().int().positive().max(200).optional(),
+})
+
+/**
+ * 手机发来的命令载荷，共 7 种——就是 `mp/core/client.js` 的便捷方法能产出的全部。
  *
  * 旧实现还有一个 `cmd.subscribe`：它的 handler 只回一个 `ev.result{ok:true}`，
  * `sessionIds`/`includeContent` 没有任何过滤效果，而小程序从不发它。
@@ -259,6 +320,7 @@ export const cmdPayload = z.discriminatedUnion('t', [
   cmdInterrupt,
   cmdListSessions,
   cmdKeepAwake,
+  cmdSessionHistory,
 ])
 export type CmdPayload = z.infer<typeof cmdPayload>
 
@@ -282,6 +344,7 @@ export const PAYLOAD_TYPES = {
   cmdInterrupt: 'cmd.interrupt',
   cmdListSessions: 'cmd.list_sessions',
   cmdKeepAwake: 'cmd.keep_awake',
+  cmdSessionHistory: 'cmd.session_history',
   evSessionChanged: 'ev.session_changed',
   evMessageDelta: 'ev.message_delta',
   evToolEvent: 'ev.tool_event',
@@ -290,6 +353,7 @@ export const PAYLOAD_TYPES = {
   evRunState: 'ev.run_state',
   evKeepAwakeState: 'ev.keep_awake_state',
   evResult: 'ev.result',
+  evSessionHistory: 'ev.session_history',
 } as const
 
 /**

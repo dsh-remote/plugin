@@ -13,7 +13,15 @@
  */
 import type { SessionSummary } from '@dsh-rc/protocol'
 import type { QuestionItem } from '@dsh-rc/protocol'
-import type { ApprovalDecision, AskUserQuestionAnswerValue, Clock, InteractionSink, KernelEvent, KernelPort } from '../ports/index.js'
+import type {
+  ApprovalDecision,
+  AskUserQuestionAnswerValue,
+  Clock,
+  InteractionSink,
+  KernelEvent,
+  KernelHistoryPage,
+  KernelPort,
+} from '../ports/index.js'
 
 export interface MockKernelOptions {
   clock: Clock
@@ -24,6 +32,25 @@ export interface MockKernelOptions {
   autoReply?: boolean
   /** 模拟审批：收到指令后自动挂一次审批请求。 */
   autoApproval?: boolean
+  /** 假历史（seq 就是下标）。不给就用一份两轮的默认内容，够验证翻页与渲染。 */
+  history?: KernelEvent[]
+  /** 读历史时报错（用来验证"能力缺失要明确拒绝，而不是回一张空页"）。 */
+  historyError?: string
+}
+
+/**
+ * 默认假历史：两轮，正好覆盖四种块的组合（指令 / 步骤组 / 正文 / 用户消息）。
+ * 故意不给 `done` 之外的收尾事件——历史里没有运行态。
+ */
+function defaultHistory(sessionId: string): KernelEvent[] {
+  return [
+    { kind: 'delta', sessionId, messageId: 'mock_h1', text: '看看这个项目的完成度', role: 'user', done: true },
+    { kind: 'delta', sessionId, messageId: 'mock_h2', text: '我先看一下目录结构。', role: 'assistant', done: true },
+    { kind: 'tool', sessionId, callId: 'mock_hc1', phase: 'completed', tool: 'Bash', title: 'ls -la', argsPreview: '{"command":"ls -la"}', resultPreview: 'total 88' },
+    { kind: 'delta', sessionId, messageId: 'mock_h3', text: '结构清楚了。', role: 'assistant', done: true },
+    { kind: 'delta', sessionId, messageId: 'mock_h4', text: '再跑一遍测试', role: 'user', done: true },
+    { kind: 'delta', sessionId, messageId: 'mock_h5', text: '测试全过。', role: 'assistant', done: true },
+  ]
 }
 
 export class MockKernel implements KernelPort {
@@ -86,6 +113,22 @@ export class MockKernel implements KernelPort {
   subscribe(onEvent: (event: KernelEvent) => void): () => void {
     this.listeners.add(onEvent)
     return () => this.listeners.delete(onEvent)
+  }
+
+  /**
+   * 假历史：`seq` 就是下标，从后往前切一页。
+   * 翻页语义与真实载体一致（`beforeSeq` 是**排他**上界、省略游标=到底了），
+   * 所以小程序侧的翻页逻辑能在本地闭环里真跑一遍。
+   */
+  async readHistory(sessionId: string, options: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage> {
+    if (this.options.historyError) throw new Error(this.options.historyError)
+    const log = this.options.history ?? defaultHistory(sessionId)
+    const upTo = options.beforeSeq === undefined ? log.length : Math.max(0, Math.min(log.length, options.beforeSeq))
+    const from = Math.max(0, upTo - Math.max(1, options.limit))
+    return {
+      events: log.slice(from, upTo),
+      ...(from > 0 ? { nextBeforeSeq: from } : {}),
+    }
   }
 
   attachInteractionSink(sink: InteractionSink): () => void {

@@ -33,6 +33,7 @@ import type {
   Clock,
   InteractionSink,
   KernelEvent,
+  KernelHistoryPage,
   KernelPort,
   KernelSession,
 } from '../ports/index.js'
@@ -62,10 +63,13 @@ export interface ServicesOptions {
   /** 标题读取的超时与批量上限（读失败只让列表无标题，不影响列表本身）。 */
   titleTimeoutMs?: number
   titleBatch?: number
+  /** 读一次会话历史的超时。读的是整份日志，慢会话可能到几百毫秒，所以比标题宽。 */
+  historyTimeoutMs?: number
 }
 
 const MAX_TITLE_BATCH_DEFAULT = 25
 const TITLE_TIMEOUT_DEFAULT = 4000
+const HISTORY_TIMEOUT_DEFAULT = 15_000
 const LIST_LIMIT_DEFAULT = 100
 
 /** 折叠后的插件内部形状。 */
@@ -349,6 +353,41 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     }
   }
 
+  /**
+   * 读一条会话已有的历史（手机打开会话时用）。
+   *
+   * 走 `sessionQuery.readSession(id)`：它返回**整份**会话日志（不是窗口），
+   * 与实时 `session/event` 同一套 `{type, seq, data}` 形状 —— 所以翻译直接复用
+   * `sessionEventKernelEvents`，分页由 `historyPageFromLog` 在插件侧切。
+   *
+   * 为什么不逐页读：`readEvent({seq, before, after})` 那边有 50 条的窗口上限，
+   * 按它翻页要先知道"哪些 seq 是有内容的"，多一层猜测；而整份日志本来就要被
+   * `_corpus.load()` 完整读出来（含 replay 校验），**分页切在内存里做不会多读一个字节**。
+   * 真机实测：4 轮对话的日志 713 行，读一次是毫秒级。
+   *
+   * 能力缺失时**抛**而不是回空页：空页在手机上是"这个会话没内容"，
+   * 那是一个会让人查错方向的假事实。
+   */
+  async function readHistory(sessionId: string, page: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage> {
+    const read = fn(services.sessionQuery, 'readSession')
+    if (!read) {
+      throw new Error(
+        `这一代宿主不能读会话历史（sessionQuery 没有 readSession，keys=[${shapeOf(services.sessionQuery)}]）`,
+      )
+    }
+    const loaded = (await withTimeout(
+      Promise.resolve(read.call(services.sessionQuery, sessionId)),
+      options.historyTimeoutMs ?? HISTORY_TIMEOUT_DEFAULT,
+    )) as { events?: Array<{ type?: unknown; seq?: unknown; data?: unknown }> } | undefined
+    const events = Array.isArray(loaded?.events) ? loaded!.events : []
+    return historyPageFromLog({
+      sessionId,
+      events,
+      ...(page.beforeSeq === undefined ? {} : { beforeSeq: page.beforeSeq }),
+      limit: page.limit,
+    })
+  }
+
   function subscribe(onEvent: (event: KernelEvent) => void): () => void {
     const on = services.on
     if (typeof on !== 'function') {
@@ -568,6 +607,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     },
     sendPrompt,
     interrupt,
+    readHistory,
     subscribe,
     attachInteractionSink,
     ensureRunnable,
@@ -579,6 +619,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         carrier: 'services',
         sessions: typeof services.sessions === 'object',
         sessionQuery: typeof services.sessionQuery === 'object',
+        // 读历史只依赖这一条。真机上"点进会话是空的"第一步就要分清：
+        // 是宿主没这个能力、还是我们没读出来。没有这个字段就只能猜。
+        historyFace: typeof fn(services.sessionQuery, 'readSession') === 'function' ? 'readSession' : `absent (keys=${shapeOf(services.sessionQuery)})`.slice(0, 120),
         agents: typeof services.agents === 'object',
         agentDefaultModel: typeof services.agentDefaultModel === 'object',
         workspaceRegistry: typeof services.workspaceRegistry === 'object',
@@ -724,6 +767,129 @@ function eventContent(data: LooseObject): unknown {
   if (data?.content !== undefined && data?.content !== null) return data.content
   const message = data?.message as LooseObject | undefined
   return message?.content
+}
+
+// ── 历史：内核日志 → 一页线格式条目 ───────────────────────────────────
+
+/** 一页历史默认给多少条线格式条目（够看几轮，又不会顶满中继的帧预算）。 */
+export const HISTORY_LIMIT_DEFAULT = 40
+/** 单张页面的正文总预算（字符）。超了就少给几条，剩下的由游标继续翻。 */
+const HISTORY_CHAR_BUDGET = 100_000
+/** 单条正文的硬上限。小程序侧的正文块上限是 20000，这里留出余量。 */
+const HISTORY_TEXT_MAX = 12_000
+
+/**
+ * 内核日志 → 一页历史。**纯函数**，理由与 `sessionEventKernelEvents` 一样：
+ * 这一段每一条都对应一个真机形状，必须能在 CI 里逐条测。
+ *
+ * 三件在真机日志上验证过的事（取证：`~/.dsh/sessions/**\/session.v4.jsonl.zstd`）：
+ *
+ * 1. **日志事件与实时 `session/event` 是同一个形状**（`{type, seq, data}`），
+ *    所以这里直接复用 `sessionEventKernelEvents`。顺带得到一个关键性质：
+ *    同一条消息在两条路径上算出的 `messageId` **逐字相同**（都走 `messageIdOf`），
+ *    于是"实时已经渲染过、历史里又来一遍"这种重叠靠 id 就能去重。
+ * 2. **一条原始事件可能折成 0 条**：绝大多数 `assistant/message` 带的是
+ *    `reasoning` + `tool-call`（正文是**空的**），按 M28 只有 `type==='text'` 的分片出站。
+ *    不过滤的话，历史里会插进一堆空白正文块。
+ * 3. **`turn/end` 会产生终结帧**（空文本 + done、以及 run-state）。历史不需要终结帧
+ *    ——没有东西需要被终止——所以只留 delta/tool 两种，运行态一律丢掉：
+ *    回放历史不该去改顶栏的"运行中"。
+ */
+export function historyPageFromLog(input: {
+  sessionId: string
+  events: Array<{ type?: unknown; seq?: unknown; data?: unknown }>
+  beforeSeq?: number
+  limit: number
+  charBudget?: number
+}): KernelHistoryPage {
+  const { sessionId } = input
+  const groups: Array<{ seq: number; events: KernelEvent[] }> = []
+
+  for (const raw of input.events ?? []) {
+    const type = typeof raw?.type === 'string' ? raw.type : ''
+    if (!type) continue
+    const seq = typeof raw?.seq === 'number' && Number.isFinite(raw.seq) ? raw.seq : 0
+    const data = (raw?.data ?? {}) as LooseObject
+    const mapped = sessionEventKernelEvents({ sessionId, type, seq, data })
+    const kept = mapped.filter(isHistoryWorthy)
+    if (kept.length > 0) groups.push({ seq, events: kept })
+  }
+
+  // 一次调用里的所有 tool/call：它的结果在不在**整份日志**里。读历史时整份日志都到手了，
+  // 所以这里能区分"这一步确实干完了"与"这一步没有下文"。
+  const terminal = new Set<string>()
+  for (const group of groups) {
+    for (const event of group.events) {
+      if (event.kind === 'tool' && (event.phase === 'completed' || event.phase === 'failed')) {
+        terminal.add(event.callId)
+      }
+    }
+  }
+
+  const ranged = input.beforeSeq === undefined ? groups : groups.filter((group) => group.seq < input.beforeSeq!)
+  const limit = Math.max(1, input.limit)
+  const budget = input.charBudget ?? HISTORY_CHAR_BUDGET
+
+  // 从**后往前**取，保证拿到的是"最近的一页"，而不是会话开头。
+  const page: typeof groups = []
+  let items = 0
+  let chars = 0
+  for (let i = ranged.length - 1; i >= 0; i--) {
+    const group = ranged[i]!
+    // 已经够一页了：**但至少给一组**，否则 limit 很小时会产出一张空页而游标还在动。
+    if (page.length > 0 && (items >= limit || chars >= budget)) break
+    const normalized = group.events.map((event) => normalizeHistoryEvent(event, terminal))
+    page.unshift({ seq: group.seq, events: normalized })
+    items += normalized.length
+    chars += normalized.reduce((sum, event) => sum + charCountOf(event), 0)
+  }
+
+  const flat: KernelEvent[] = []
+  for (const group of page) flat.push(...group.events)
+
+  // 游标只在**确实还有更早、且还有内容**的时候给：给出一个翻不出东西的游标，
+  // 手机上会长出一个点了没反应的「加载更早」。
+  const earliest = page.length > 0 ? page[0]!.seq : undefined
+  const hasEarlier = earliest !== undefined && ranged.some((group) => group.seq < earliest)
+
+  return {
+    events: flat,
+    ...(hasEarlier ? { nextBeforeSeq: earliest } : {}),
+  }
+}
+
+/** 历史只留"有内容"的两种：有正文的 delta、有 callId 的工具事件。 */
+function isHistoryWorthy(event: KernelEvent): boolean {
+  if (event.kind === 'delta') return event.text.length > 0
+  if (event.kind === 'tool') return event.callId.length > 0
+  return false
+}
+
+/**
+ * 一条没有下文（整份日志里都没有结果）的工具调用，在历史里要有个说法。
+ *
+ * 它只会出现在"这一轮被中断或出错"的情形。原样留给手机的话，步骤组会显示
+ * 「正在执行 1 个步骤」并一直闪 —— 而那条会话其实早就停了，看起来就像页面坏了。
+ * 所以这里落成一个明确的、不撒谎的形态：状态按"已结束"渲染，结果位写明原因。
+ *
+ * 如果这条会话此刻还在跑，真正的那条结果稍后会从实时流到达，手机按 callId
+ * 在原位替换掉这句占位文案（`chat.js` 的 `_onTool` 就是按 callId 找的）。
+ */
+function normalizeHistoryEvent(event: KernelEvent, terminal: Set<string>): KernelEvent {
+  if (event.kind === 'delta') {
+    if (event.text.length <= HISTORY_TEXT_MAX) return event
+    return { ...event, text: `${event.text.slice(0, HISTORY_TEXT_MAX)}…（这条回复过长，已截断）` }
+  }
+  if (event.kind === 'tool' && !terminal.has(event.callId) && event.phase !== 'completed' && event.phase !== 'failed') {
+    return { ...event, phase: 'completed', resultPreview: '（这一轮被中断，这个工具没有返回结果）' }
+  }
+  return event
+}
+
+function charCountOf(event: KernelEvent): number {
+  if (event.kind === 'delta') return event.text.length
+  if (event.kind === 'tool') return (event.resultPreview ?? '').length + (event.argsPreview ?? '').length
+  return 0
 }
 
 function textOf(data: LooseObject): string {

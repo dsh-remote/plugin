@@ -26,7 +26,9 @@ import {
   type EvResult,
   type EvRunState,
   type EvSessionChanged,
+  type EvSessionHistory,
   type EvToolEvent,
+  type HistoryItem,
   type QuestionItem,
   type SessionSummary,
   PAYLOAD_TYPES,
@@ -171,6 +173,31 @@ export function result(cmdId: string, ok: boolean, extras: EvResultExtras = {}):
     ok,
     ...(message === undefined ? {} : { message }),
     ...(data === undefined ? {} : { data }),
+  }
+}
+
+/**
+ * 一页历史。
+ *
+ * **只给游标，不给 `hasMore`**：`nextBeforeSeq` 在 = 还有更早的一页，不在 = 到底了。
+ * 原来那版是两个字段，于是"说还有、却忘了给游标"能写得出来，而那产出的是一条
+ * 过不了自己 schema 的载荷——它只会在手机侧被静默丢弃，表现是「加载更早」点了没反应。
+ * 现在这种状态在类型上不存在。
+ */
+export function sessionHistory(args: {
+  sessionId: string
+  cmdId: string
+  items: HistoryItem[]
+  /** 省略即"这是最初的一页"。 */
+  nextBeforeSeq?: number
+}): EvSessionHistory {
+  const { sessionId, cmdId, items, nextBeforeSeq } = args
+  return {
+    t: PAYLOAD_TYPES.evSessionHistory,
+    sessionId,
+    cmdId,
+    items,
+    ...(nextBeforeSeq === undefined ? {} : { nextBeforeSeq }),
   }
 }
 

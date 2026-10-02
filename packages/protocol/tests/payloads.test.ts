@@ -12,12 +12,13 @@ import {
   cmdKeepAwake,
   cmdResolvePermission,
   cmdSendPrompt,
+  cmdSessionHistory,
   isoOrUndefined,
   parseCmdPayload,
   parseEvPayload,
 } from '../src/payloads.js'
 
-test('六个命令逐个通过；t 拼错的载荷必须被拒（不认识的命令不能当命令执行）', () => {
+test('七个命令逐个通过；t 拼错的载荷必须被拒（不认识的命令不能当命令执行）', () => {
   assert.ok(
     parseCmdPayload({ t: 'cmd.send_prompt', cmdId: 'c1', sessionId: 'ses_1', text: '只回复 ok' }),
   )
@@ -42,8 +43,52 @@ test('六个命令逐个通过；t 拼错的载荷必须被拒（不认识的命
     }),
   )
   assert.ok(parseCmdPayload({ t: 'cmd.keep_awake', cmdId: 'c6', enabled: true }))
+  assert.ok(parseCmdPayload({ t: 'cmd.session_history', cmdId: 'c7', sessionId: 'ses_1' }))
   assert.equal(parseCmdPayload({ t: 'cmd.send_promt', cmdId: 'c1', sessionId: 's', text: '' }), null)
   assert.equal(parseCmdPayload({ t: 'cmd.subscribe', cmdId: 'c1' }), null, '已删除的 no-op 命令不再被认')
+})
+
+test('session_history：beforeSeq/limit 都可省（省 = 要最新一页），limit 上界 200', () => {
+  assert.ok(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's' }).success)
+  assert.ok(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's', beforeSeq: 0 }).success)
+  assert.ok(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's', limit: 200 }).success)
+  // 0 是合法游标（最小 seq），但 0 条不是一个合法的"每页条数"
+  assert.equal(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's', limit: 0 }).success, false)
+  assert.equal(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's', limit: 201 }).success, false)
+  assert.equal(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: 's', beforeSeq: -1 }).success, false)
+  assert.equal(cmdSessionHistory.safeParse({ t: 'cmd.session_history', cmdId: 'c', sessionId: '' }).success, false)
+})
+
+test('ev.session_history：条目只允许实时流那两种叶子载荷（不递归、不夹带运行态）', () => {
+  const ok = {
+    t: 'ev.session_history',
+    sessionId: 'ses_1',
+    cmdId: 'c1',
+    items: [
+      { t: 'ev.message_delta', messageId: 'm1', delta: '你好', role: 'user', done: true },
+      { t: 'ev.tool_event', callId: 't1', phase: 'completed', tool: 'Bash', resultPreview: 'ok' },
+    ],
+    nextBeforeSeq: 9,
+  }
+  assert.notEqual(parseEvPayload(ok), null)
+
+  // 历史里出现第三种载荷（例如运行态）必须被拒：回放历史不该去动顶栏状态
+  assert.equal(
+    parseEvPayload({ ...ok, items: [{ t: 'ev.run_state', sessionId: 'ses_1', state: 'running' }] }),
+    null,
+  )
+  // 递归（历史里套历史）也要被拒
+  assert.equal(parseEvPayload({ ...ok, items: [ok] }), null)
+})
+
+test('ev.session_history：只有游标、没有 hasMore —— 一个字段就没有"自相矛盾"这种状态', () => {
+  const base = { t: 'ev.session_history', sessionId: 'ses_1', cmdId: 'c1', items: [] }
+  assert.notEqual(parseEvPayload(base), null, '没有游标 = 这是最初的一页')
+  assert.notEqual(parseEvPayload({ ...base, nextBeforeSeq: 7 }), null)
+  assert.notEqual(parseEvPayload({ ...base, nextBeforeSeq: 0 }), null, '0 是合法游标（最小 seq）')
+  assert.equal(parseEvPayload({ ...base, nextBeforeSeq: -2 }), null)
+  assert.equal(parseEvPayload({ ...base, nextBeforeSeq: 1.5 }), null)
+  assert.equal(parseEvPayload({ ...base, items: 'x' }), null)
 })
 
 test('命令必填项缺一即拒（cmdId 是回执对答的唯一凭据）', () => {

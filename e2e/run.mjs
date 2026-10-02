@@ -670,6 +670,29 @@ export function assertListPushed({ resultPayload, sessionChangedPayload, cmdId, 
   }
 }
 
+/**
+ * 宿主命令返回契约（`@deepseek-ai/dsh-commands` 的 `normalizeResult`）的最小复刻。
+ *
+ * 权威复刻件在 `packages/plugin/tests/command-result.test.ts`（含"带牙"反证与源码差分）；
+ * 这里只保证"交给宿主的那一瞬形状合法"。线上事故 `command "drc" returned unknown result kind "text"`
+ * 就发生在注册/调用边界上——所以在线分支也要在这里真的过一遍。
+ */
+export function assertCommandResult(command, value, label = `/drc ${command}`) {
+  assert.ok(
+    value && typeof value === 'object' && 'kind' in value,
+    `${label} 必须返回 CommandResult 对象，收到 ${JSON.stringify(value)?.slice(0, 120)}`,
+  )
+  if (value.kind === 'success') {
+    assert.ok(value.text === undefined || typeof value.text === 'string', `${label} success.text 给了就必须是 string，收到 ${typeof value.text}`)
+    return value
+  }
+  if (value.kind === 'error') {
+    assert.ok(typeof value.text === 'string' && value.text.trim().length > 0, `${label} error.text 必须是非空 string`)
+    return value
+  }
+  assert.fail(`${label} 返回了宿主不认的 kind=${JSON.stringify(String(value.kind))}：宿主会抛 unknown result kind，整条命令失败`)
+}
+
 // ── 主脚本 ───────────────────────────────────────────────────────────
 
 export async function main() {
@@ -707,6 +730,24 @@ export async function main() {
       assert.equal(host.state().carrier, 'mock')
       note(`hostId=${host.hostId} carrier=${host.state().carrier} relay=${host.state().relay} conversations=${host.state().conversations}`)
       note('内核面 = platform/mock-kernel：会话 id 一律 ses_mock*，本步不证明真内核（真内核见 e2e/live-e2e.mjs）')
+    })
+
+    await run('/drc 命令的返回值过宿主契约（线上事故：unknown result kind "text"）', async () => {
+      const definition = host.commands?.drc
+      assert.ok(definition && typeof definition.handler === 'function', 'apply() 必须把 drc 命令注册进 ctx.commands')
+
+      // 在线分支：此刻中继已 online，handler 会真的渲染二维码文本并返回 ——
+      // 这正是用户敲 `/drc pair` 踩到的那个返回点（离线分支在插件单测里覆盖）。
+      const pairResult = assertCommandResult('pair', await definition.handler({ commandId: 'e2e-cmd-pair', rawInput: 'pair' }))
+      assert.equal(pairResult.kind, 'success', `drc pair 的 kind 必须是 success，收到 ${JSON.stringify(pairResult)?.slice(0, 120)}`)
+      assert.ok(typeof pairResult.text === 'string' && pairResult.text.length > 0, 'drc pair 必须给出可读文本（二维码就渲染在文本里，不另开图片）')
+      assert.match(pairResult.text, /dshr:\/p\?|配对/, 'drc pair 文本里要能看出是配对信息')
+
+      const statusResult = assertCommandResult('status', await definition.handler({ commandId: 'e2e-cmd-status', rawInput: 'status' }))
+      assert.equal(statusResult.kind, 'success')
+      const snapshot = JSON.parse(statusResult.text)
+      assert.equal(snapshot.relay, 'online', 'drc status 快照必须反映中继已连通（这是排错入口）')
+      note(`drc pair → kind=success/${pairResult.text.length}字符；drc status → relay=${snapshot.relay}`)
     })
 
     await run('主机发布配对码 → pair-ready 带正整数 ttlMs → 手机用真实 mp/core 代码配对', async () => {
@@ -777,6 +818,46 @@ export async function main() {
         note(`${trigger}：sessions=${changed.sessions.map((s) => `${s.id}/${s.state}`).join(', ')}`)
       }
       note('列表里的 ses_mock* 恰恰证明这是 mock 内核；真内核列表非空由 live-e2e 取证')
+    })
+
+    await run('cmd.session_history → 真 mp 代码 loadHistory 拿到一页历史，且游标能真的往前翻', async () => {
+      // 主机上**已有的**对话要能同步到手机：这一条走的是真 `mp/core/client.js` 的
+      // `loadHistory`（不是测试自己拼帧），验的就是两端对 `cmd/ev.session_history` 的口径一致。
+      const first = await phone.client.loadHistory(MOCK_SESSION_ID, { limit: 3 })
+      assert.ok(first, 'loadHistory 返回 null = 这一页没拿到（未配对 / 超时 / 断线）')
+      const sent = phone.cmds.filter((c) => c.cmd.t === 'cmd.session_history').pop()
+      assert.ok(sent, '手机没发出 cmd.session_history')
+      assert.equal(sent.cmd.sessionId, MOCK_SESSION_ID, '载荷 sessionId 必须是 DSH 会话 id（F3）')
+      assert.equal(sent.cmd.limit, 3, 'limit 必须原样上行')
+      assert.equal(first.cmdId, sent.cmd.cmdId, 'ev.session_history.cmdId 必须原样回传（对答靠它匹配）')
+      assert.ok(first.sessionId === MOCK_SESSION_ID, '回执的 sessionId 也必须逐字相同')
+      assert.ok(
+        Array.isArray(first.items) && first.items.length > 0,
+        `历史页必须带 items，收到 ${JSON.stringify(first).slice(0, 200)}`,
+      )
+      for (const item of first.items) {
+        assert.ok(
+          ['ev.message_delta', 'ev.tool_event'].includes(item.t),
+          `历史条目只允许实时流那两种（小程序用同一条分发路径回放），收到 ${JSON.stringify(item.t)}`,
+        )
+      }
+      // 翻页：游标**由主机给、手机原样回传**。第二页必须存在、内容不同、且游标严格前移。
+      assert.equal(typeof first.nextBeforeSeq, 'number', 'mock 历史比一页长，第一页必须给出更早的游标')
+      const second = await phone.client.loadHistory(MOCK_SESSION_ID, { beforeSeq: first.nextBeforeSeq, limit: 3 })
+      assert.ok(second, '带游标再取一页失败（loadHistory 返回 null）')
+      const sent2 = phone.cmds.filter((c) => c.cmd.t === 'cmd.session_history').pop()
+      assert.equal(sent2.cmd.beforeSeq, first.nextBeforeSeq, '第二页必须把主机给的游标原样回传')
+      const fingerprint = (page) => page.items.map((i) => `${i.t}:${i.callId ?? i.messageId ?? i.delta ?? ''}`).join('|')
+      assert.notEqual(
+        fingerprint(second),
+        fingerprint(first),
+        '第二页与第一页内容逐字相同 = 游标没起作用（手机上会无限重复同一段）',
+      )
+      const nextCursor = typeof second.nextBeforeSeq === 'number' ? second.nextBeforeSeq : -1
+      assert.ok(nextCursor < first.nextBeforeSeq, `游标没有往前移：${nextCursor} 不 < ${first.nextBeforeSeq}`)
+      note(
+        `limit=3 → items=${first.items.length} nextBeforeSeq=${first.nextBeforeSeq} → 再一页 items=${second.items.length} nextBeforeSeq=${second.nextBeforeSeq ?? '（到底）'}`,
+      )
     })
 
     await run('F3：帧外层 sessionId(c_*) ≠ 载荷 sessionId(DSH 会话 id)，且与 sessions[].id 同值', async () => {

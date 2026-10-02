@@ -26,6 +26,7 @@ import { SystemSleepBackend } from './platform/sleep-posix.js'
 import { createServicesKernel } from './platform/carrier-services.js'
 import { DEFAULT_SYSTEM_CLOCK } from './core/clock.js'
 import { pairingImagePath, StatusFile, writePrivateFile } from './shell/status.js'
+import { pairingPairText, PAIR_UNAVAILABLE_TEXT } from './shell/pairing-text.js'
 import { DEFAULT_CONFIG, readConfig, redact, validateConfig, type PluginConfig } from './shell/config.js'
 import { renderTerminalQr, qrPng } from './platform/qr.js'
 import type { KernelPort, Clock } from './ports/index.js'
@@ -74,6 +75,15 @@ const MAX_CONVERSATIONS = 64
 
 /** 取证：同一个进程里宿主调用了几次 `apply`（bundle 被重复挂载时能看到）。 */
 const APPLY_COUNT = { n: 0 }
+
+/**
+ * 宿主命令的返回契约（`@deepseek-ai/dsh-commands` 的 `normalizeResult`）。
+ *
+ * 只有两种 kind；别的值会在注册边界上 `throw TypeError("...unknown result kind...")`，
+ * 整条命令失败。**把它写成类型**是为了让"写错 kind"在编译期就红，而不是等用户在
+ * 真机上看到一句宿主内部错误。
+ */
+export type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
 
 /** 默认时钟：真实定时器。测试注入假时钟（见 core/clock.ts）。 */
 export const systemClock: Clock = DEFAULT_SYSTEM_CLOCK
@@ -684,43 +694,47 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
   // 拿 commands 的方式和拿内核服务完全一样：`ctx.commands` 这种"直接点属性"的读法在
   // 真 cordis 上下文上是**抛错**的（属性名不在本 fiber 的 inject 集合里，见 reflect.ts
   // 的 get trap），所以先试 `ctx.get('commands', true)`，再用 `ctx.inject` 等晚到。
+  //
+  // **返回值只能是 `{kind:'success', text?}` 或 `{kind:'error', text}`。**
+  // 宿主在注册边界上做校验（`@deepseek-ai/dsh-commands` 的 `normalizeResult`），
+  // 别的 `kind` 一律 `throw TypeError("...unknown result kind...")`——用户看到的是
+  // 一条命令整个失败，而不是"格式不标准"。旧实现把这条契约写在注释里，重写时漏掉了，
+  // 于是 `/drc pair` 报 `unknown result kind "text"`。
+  // 现在**两道锁**：类型上 `CommandResult` 让写错 kind 编译就红（`pnpm -r typecheck`），
+  // 运行时有 `tests/command-result.test.ts` 走一遍 apply() 注册出来的真 handler。
   const commandDefinition = {
     name: 'drc',
     description: 'DSH 远程控制：发布配对二维码、查看中继与内核接合状态',
     input: { hint: 'pair | status | unpair' },
-    handler: async (invocation: { commandId: string; rawInput: string }) => {
+    handler: async (invocation: { commandId: string; rawInput: string }): Promise<CommandResult> => {
       const argument = String(invocation.rawInput ?? '').trim().toLowerCase()
       if (argument.startsWith('pair')) {
         const pairing = createPairing()
-        if (!pairing) return { kind: 'text', text: '中继还没连上，暂时无法配对。看 status.json 的 relayProblem。' }
+        if (!pairing) return { kind: 'success', text: PAIR_UNAVAILABLE_TEXT }
         // **二维码就出在这条命令的文本里**：配对这件事不许把用户赶到另一个窗口去
         // （写 PNG + `open` 就是把 DSH 里的问题拿到 DSH 外面回答）。文本渲染在
         // 任何等宽渲染器下都能扫，默认用半块字符（`half`）——一个终端格子约等于
         // "高 = 2×宽"，所以半块最接近正方形取景。
         if (config.qrImage) writePairingImage(pairing.qr, config, log)
         const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle, ansi: config.qrAnsi })
-        const ttlSec = Math.max(0, Math.round((pairing.expiresAt - clock.now()) / 1000))
         return {
-          kind: 'text',
-          text: [
-            `配对码 ${pairing.token} · ${ttlSec} 秒内有效 · 一次性`,
-            '小程序里扫码，或手输这 6 位数字。',
-            '',
-            terminal,
-            // 二维码扫不出来时（比例字体、吞字形的渲染器）这条路仍然成立：
-            // 小程序的配对页可以直接粘贴这一行。
-            '',
-            pairing.qr,
-            '',
-            config.qrImage ? `另已写出图片 ${pairingImagePath(config.statusFile)}` : '（如需图片版：把 patch 里的 qrImage 设为 true）',
-          ].join('\n'),
+          kind: 'success',
+          text: pairingPairText({
+            token: pairing.token,
+            qr: pairing.qr,
+            expiresAt: pairing.expiresAt,
+            now: clock.now(),
+            qrImage: config.qrImage,
+            statusFile: config.statusFile,
+            terminalQr: terminal,
+          }),
         }
       }
       if (argument.startsWith('unpair')) {
         for (const id of relay?.conversationIds() ?? []) relay?.voidConversation(id)
-        return { kind: 'text', text: '已解除所有配对；手机端会显示"主机已断开，请重新配对"。' }
+        return { kind: 'success', text: '已解除所有配对；手机端会显示"主机已断开，请重新配对"。' }
       }
-      return { kind: 'text', text: JSON.stringify(state(), null, 2) }
+      return { kind: 'success', text: JSON.stringify(state(), null, 2) }
     },
   }
   let commandsTaken = false

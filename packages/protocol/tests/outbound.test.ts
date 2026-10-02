@@ -28,6 +28,7 @@ import {
   result,
   runState,
   sessionChanged,
+  sessionHistory,
   toolEvent,
   permissionRequest,
   questionRequest,
@@ -105,4 +106,32 @@ test('出站载荷都能被解析，且字段名与 schema 一致', () => {
 test('makeError：message 缺席时不留空键（否则对侧会读到 undefined 文案）', () => {
   assert.deepEqual(keysOf(makeError('internal')), ['code', 't'])
   assert.deepEqual(keysOf(makeError('internal', 'boom')), ['code', 'message', 't'])
+})
+
+test('sessionHistory：游标只在"还有更早的一页"时出现，一个字段不会自相矛盾', () => {
+  const last = sessionHistory({ sessionId: 'ses_1', cmdId: 'c1', items: [] })
+  assert.deepEqual(keysOf(last), ['cmdId', 'items', 'sessionId', 't'], '省略游标 = 最初的一页')
+  assert.notEqual(parseEvPayload(last), null)
+
+  const more = sessionHistory({
+    sessionId: 'ses_1',
+    cmdId: 'c1',
+    items: [
+      { t: 'ev.message_delta', messageId: 'm1', delta: 'hi', role: 'user', done: true },
+      { t: 'ev.tool_event', callId: 'c1', phase: 'completed', tool: 'Bash' },
+    ],
+    nextBeforeSeq: 3,
+  })
+  assert.deepEqual(keysOf(more), ['cmdId', 'items', 'nextBeforeSeq', 'sessionId', 't'])
+  assert.notEqual(parseEvPayload(more), null)
+})
+
+test('sessionHistory：条目里的 sessionId 可以缺省（外层已经带了，逐条重复只是白占帧）', () => {
+  const page = sessionHistory({
+    sessionId: 'ses_1',
+    cmdId: 'c1',
+    items: [{ t: 'ev.tool_event', callId: 'c1', phase: 'started', tool: 'Bash' }],
+  })
+  assert.deepEqual(keysOf(page.items[0] ?? {}), ['callId', 'phase', 't', 'tool'])
+  assert.notEqual(parseEvPayload(page), null)
 })
