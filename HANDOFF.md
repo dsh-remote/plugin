@@ -467,7 +467,8 @@ CI：`dsh-remote-server` main 上 `504da5f`、`d421206` 两次 push 均 **succes
   在伞仓 `e2e/` 而不在本仓 `tests/`，**e2e 归属哪个仓**这个决定必须先做。
 - **C6**：`/healthz` 加 `peers`/`rssBytes`/`sweepMaxMs`/`globalDropped`/`pingBacklog`。
   判据改为"能看见每连接成本与 sweep 阻塞"（C0 用的是外部代理，C6 换成进程内真数）。
-- **C7**：`listen({ backlog: 4096 })` + upgrade raw socket `setNoDelay(true)`；
-  sysctl（`somaxconn`/`tcp_max_syn_backlog`）归用户自己的配置批次。
-  C0 侧的观测：本机建连 10k 只用 0.7 s（loopback，量不出 accept 队列问题），
-  这条得在真链路 + 重连风暴场景下验。
+- **C7**：**用户 2026-10-03 明确先不做**（我改到一半已 `git restore`，`dsh-remote-server`
+  工作树干净、停在 `d421206`）。原计划：`listen({ backlog: 4096 })` + upgrade raw socket
+  `setNoDelay(true)`；sysctl（`somaxconn`/`tcp_max_syn_backlog`）归用户自己的配置批次。
+  C0 侧的观测留着备用：本机建连 10k 只用 0.7 s（loopback，量不出 accept 队列问题），
+  这条真要做必须在真链路 + 重连风暴场景下验。
