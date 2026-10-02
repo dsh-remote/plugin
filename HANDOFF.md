@@ -34,14 +34,19 @@
 ### 1.1 唯一没能在真机上取证的两条（诚实记账，不许当成已通过）
 
 - **审批**：`kernel.approvalFace` 在真宿主上是 `"registered"`——插件确实**登记成了
-  `approval/request` waterfall 的参与者**。但本机这些会话的工具全部被宿主策略直接放行
-  （`schedule_create` 之类不问就跑了），审批**从未发起**，所以"卡片推给手机 → 手机点批准 →
-  内核继续"这一整条只在**本地全链路**里验过（`e2e/mp-client.test.mjs` 第 5 条 +
-  `e2e/run.mjs` 第 7 步）。要补的真机取证：在桌面里开一个会问的会话/策略，再跑
-  `node e2e/live-e2e.mjs --session <那个会话 id> --prompt <会触发审批的指令>`。
-- **提问**：`kernel.questionsFace` 在真宿主上是 `"no userQuestions provider"`——
-  这一代宿主没暴露 `userQuestions.registerProvider`，模型自己也说没有 AskUserQuestion 工具，
-  所以**接管路径在本机不可能跑起来**（不是代码问题，但也不能写作已验证）。
+  `approval/request` waterfall 的参与者**。但这条路径本机现在**按宿主设计就不可能触发**：
+  扫 `~/.dsh/sessions/*/*/session.v4.jsonl.zstd` 里每个会话的 `approval/policy` 事件，
+  **23 个会话全是 `never`**（部分是 `source:"delegation"`），而
+  `@deepseek-ai/dsh-user-approval` 的 README 写着 `'never' rejects before interactive dispatch`
+  ——即在参与者被问到之前就决定了。所以"卡片推给手机 → 手机点批准 → 内核继续"这一整条
+  只在**本地全链路**里验过（`e2e/mp-client.test.mjs` 第 5 条 + `e2e/run.mjs` 第 7 步）。
+  要补真机取证：把某个会话的策略设成 `ask`（桌面 UI 里做，或用服务的 `setApprovalPolicy()`），
+  再跑 `node e2e/live-e2e.mjs --session <那个会话 id> --prompt <需要审批的指令>`。
+  重扫命令：`node /tmp/…`——照 §6 的方式读 `request/header`/`approval/policy` 事件即可。
+- **提问**：`kernel.questionsFace` 现在会把服务实际暴露的成员一起报出来，真机上是
+  `no registerProvider (keys=name|typertRemote|waits|queuedReplies|…)`——这一代宿主的
+  `ctx.userQuestions` 不是 `@deepseek-ai/dsh-user-questions` 那份带 `registerProvider` 的
+  服务定义，所以**接管路径在本机不可能跑起来**（不是代码问题，但也不能写作已验证）。
   本地闭环有测试：`e2e/mp-client.test.mjs` 第 6 条 + `e2e/run.mjs` 第 9 步。
 
 ## 2. 快速恢复环境
