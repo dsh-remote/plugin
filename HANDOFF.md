@@ -403,3 +403,71 @@ git 包的 `prepare` 必须靠 `pnpm-workspace.yaml` 的 `allowBuilds` 放行，
 
 `presentation` 的 `package.json` 里 `homepage` 指向 `#readme` 而该目录没有 README——无害，
 但它不是发包对象，下次动它时一并清掉。
+
+## 8. 中继规模化批次 C0–C7（2026-10-03 深夜，**C0/C1/C2 已完成，C3–C7 未动**）
+
+用户给了 C0–C7 的改造清单，并指示"推送后执行、自行决策、不停不问"。工作全部落在
+**开源仓 `dsh-remote-server/`**（不是伞仓 `apps/server/`，两边已漂移；用户给的行号
+`server.ts:541 sweep()` 等对得上开源仓那份）。
+
+### 8.1 已完成
+
+| 条 | 内容 | 提交 | 证据 |
+|---|---|---|---|
+| C0 | `scripts/loadtest-conns.mjs` 压测装置 + `SELF-HOSTING.md` §4.1 基线表 | `22b09cd` | 1k/5k/10k 三档实跑 |
+| C1 | 保活 ping 分桶轮转（`DRC_PING_INTERVAL_MS` 60 s / `DRC_PING_TICK_MS` 1 s），表清扫仍 5 s | `504da5f` | `tests/heartbeat.test.mjs` 4 条，**全部变异验过** |
+| C2 | `peersOfSockets()` → `forEachPeer()`，不再每轮复制 N 长数组 | `d421206` | 78 项全绿；`relay.test.mjs:799` 已覆盖遍历中 terminate |
+
+CI：`dsh-remote-server` main 上 `504da5f`、`d421206` 两次 push 均 **success**。
+
+### 8.2 C0 实测数（这台机器：macOS / 8 逻辑核 / node 22；空载 RSS ≈ 57 MB）
+
+| N | 每连接 RSS | 每连接 fd | ping/s | sweep 最坏阻塞 | CPU |
+|---|---|---|---|---|---|
+| 1k | 11 KB | 1 | 197 | 6 ms | ≈0.01 核 |
+| 5k | 8 KB | 1 | 985 | 41 ms | 0.02 核 |
+| 10k | 7 KB | 1 | 1 960 | **96 ms** | 0.02–0.07 核 |
+
+**C1 之后同档复测（10k）**：最坏阻塞 **96 → 7 ms**、ping 1 960 → 167 次/秒、CPU 0.02 核。
+
+这批数推翻了清单里的三条前提，后面几轮的判据要按它们改：
+
+1. **内存不是约束项**。7–11 KB/连接 → 10k 连接的路由表才 70–110 MB。`DRC_MAX_CONNS=200`
+   卡的是 2 vCPU 上的转发算力，不是内存。C6 的价值是**可观测性**，不是容量。
+2. **C1 的真正收益是事件循环，不是带宽**。10k 个 ping 挤在同一轮里把循环堵到 96 ms，
+   这期间所有在途流式帧都在排队。带宽那部分（清单估的 2.1 Mbps）在**真链路上成立**
+   （每条 ping 吃 ~42 B IP+TCP 头 + 一个 ACK），但 **loopback 量不出来**——
+   实测只有 WS 帧层的 2 B/ping。文档里把"实测"和"解析式"分开写了。
+3. **C3 的阈值不能从这批数推**。C0 的连接是**空载**的，一条业务帧都没走；
+   而 C3 的担忧是 `JSON.parse` + zod 在集体突发下打满 2 vCPU。
+   → **C3 开工前要先给压测装置加"带流量模式"**（走完 pair-begin / claim，再打 `enc`），
+   否则全局预算的数还是拍脑袋。这条是清单本身的缺口，不是我漏做。
+
+### 8.3 C1 的代价（写进代码注释、文档和测试，没藏）
+
+`alive` 是"上一轮有没有回 pong"的**单轮标志**（结构没动，只换节奏），所以半开对端
+（无 FIN/RST 的那种）从最坏 `2×sweepMs`≈10 s 变成最坏约 `2×pingIntervalMs`≈**121 s**
+才被回收，期间一直占着 `DRC_MAX_CONNS` 的槽位。常规断开仍走 `close`/`error`，不受影响。
+在意回收速度就把 `DRC_PING_INTERVAL_MS` 调小。`tests/heartbeat.test.mjs` 第 4 条
+用**裸 socket 握手后不回 pong**把这个上下界都钉住了（改成一轮判活、或悄悄调大 interval，都会红）。
+
+清单原本说"peer.alive 的判活窗口跟着改成 ping 周期 + 一轮容忍"——那会漏掉这是**两轮**
+这一事实，我按实测形状写成了 2×。
+
+### 8.4 C3–C7 待办（含清单里我改了两处判据的地方）
+
+- **C3**：先扩压测装置做带流量测量，再定 `DRC_GLOBAL_FRAMES_PER_SEC/BYTES_PER_SEC`。
+  处置按清单：中继不能丢 `enc`，所以超预算判给**触发它的那条连接**（1008 + 计数进 `/healthz`）。
+- **C4**：`Log.throttledCount(key, fields)` 按秒聚合。**C0 已经把量级测出来了**：
+  稳态日志 0 B/s，但 10k 建连风暴在 0.7 s 内写了 **10 000 行 / 1.3 MB**（每条 ~130 B）
+  ——所以 C4 治的是**重启风暴**，和 C7 是同一场景，这两条该一起看。
+- **C5**：**红线待用户拍**。`DESIGN §5.5` 写死"新增持久化：0"。D1 之后表里没有 `psk`，
+  前半条理由已不成立；但"谁和谁配过对"这层**元数据**落盘仍然成立。要用户判断能不能接受。
+  另外两件事会一起冒出来：systemd 要配 `ReadWritePaths=`；`e2e/restart-resume.test.mjs`
+  在伞仓 `e2e/` 而不在本仓 `tests/`，**e2e 归属哪个仓**这个决定必须先做。
+- **C6**：`/healthz` 加 `peers`/`rssBytes`/`sweepMaxMs`/`globalDropped`/`pingBacklog`。
+  判据改为"能看见每连接成本与 sweep 阻塞"（C0 用的是外部代理，C6 换成进程内真数）。
+- **C7**：`listen({ backlog: 4096 })` + upgrade raw socket `setNoDelay(true)`；
+  sysctl（`somaxconn`/`tcp_max_syn_backlog`）归用户自己的配置批次。
+  C0 侧的观测：本机建连 10k 只用 0.7 s（loopback，量不出 accept 队列问题），
+  这条得在真链路 + 重连风暴场景下验。
