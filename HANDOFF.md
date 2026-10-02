@@ -296,8 +296,27 @@ v0.1.0，2026-08-14），我们无法发。按用户定的「`dsh-remote-` 开�
 2. 再推 `dsh-remote-server` / `dsh-remote-control`，各跑一次 `pnpm install`，
    把生成的 `pnpm-lock.yaml` 提交，然后把 CI/release 里的 `--no-frozen-lockfile`
    改成 `--frozen-lockfile`（`^1.0.0` 在协议包发布前解析不出来，所以现在只能非冻结）。
-3. 两个仓的 release 工作流都需要仓库 secret **`NPM_TOKEN`**（Automation 类型）。
+3. 两个仓的 release 工作流都需要仓库 secret **`NPM_TOKEN`**。**这个 token 必须是能 bypass 2FA 的**
+   ——npm 现在发布强制「2FA 或 bypass-2FA 的 token」，CI 里做不了 2FA。颗粒度 token 要
+   **勾上 "Bypass 2FA"**（且账号本身已开 2FA），或直接用 **Classic 的 Automation token**。
+   实测一个 `bypass_2fa:false` 的颗粒度 token（`package:write`）会在 `PUT /dsh-remote-wire`
+   处 403（原文：「Two-factor authentication or granular access token with bypass 2fa enabled
+   is required」）。用 `curl -H "Authorization: Bearer <token>" https://registry.npmjs.org/-/npm/v1/tokens`
+   可自查 `bypass_2fa` 字段。
 4. `dsh-remote-mp/project.config.json` 里是**用户自己的小程序 appid**，别人 fork 必须改。
+
+### 7.1.1 首次发布踩过的两个 CI 坑（都已修，别再犯）
+
+- **`pnpm/action-setup` 里不能再写 `version:`**：package.json 已有 `packageManager: pnpm@11.7.0`，
+  两处同时指定会 `ERR_PNPM_BAD_PM_VERSION` 直接失败。workflow 里只留 `- uses: pnpm/action-setup@v4`。
+  （protocol / server / control 三仓共 7 处，2026-10-03 已清。）
+- **`format:check` 会覆盖 workflow 的 yml 与 markdown 表格**：改完 README 的表格列宽/badge 行后要先
+  `prettier --write`，否则 `pnpm format:check` 红。验证时用**干净环境**复现（`git archive HEAD | tar -x`
+  到伞仓之外），否则 pnpm 会向上走到伞仓的 `pnpm-workspace.yaml`，跑的不是 CI 那套。
+- **`git push` 的通道**：这台机器 `github.com:443` 被墙（`api.github.com` 正常），且本机 SSH key
+  属于**已封禁**的 `linbin66`。现用方案：`~/.ssh/id_ed25519_providcc*`（每仓一把）作为 write
+  deploy key，remote 走 `git@ssh.github.com:443`，靠各仓 `core.sshCommand` 指定 `-i`。
+  （一把 deploy key 只能挂一个仓，同一把挂第二个会报 `key is already in use`。）
 
 ### 7.2 走过的弯路（别再退回 git 依赖）
 
