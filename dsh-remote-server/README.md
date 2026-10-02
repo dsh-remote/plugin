@@ -36,7 +36,7 @@ pnpm build            # tsc + esbuild → dist/bundle/main.js
 DRC_HOST_TOKEN=$(openssl rand -hex 32) DRC_PORT=8787 node dist/bundle/main.js
 ```
 
-单文件产物把 `ws` 与协议层（`dsh-remote-protocol`）全部内联，只有 `bufferutil` /
+单文件产物把 `ws` 与协议层（`dsh-remote-wire`）全部内联，只有 `bufferutil` /
 `utf-8-validate` 这两个**可选**原生加速模块留在外面——缺了照常跑。于是部署退化成
 **拷一个文件 + 一个 env 文件**，不需要 `npm install`、不需要 `node_modules`。
 

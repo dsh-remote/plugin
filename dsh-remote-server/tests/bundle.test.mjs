@@ -102,7 +102,7 @@ test('单文件在没有 node_modules 的空目录里能启动、应答健康检
 })
 
 test('协议包声明 sideEffects:false —— 上面那条零知识保证的前提', () => {
-  const pkg = JSON.parse(readFileSync(require.resolve('dsh-remote-protocol/package.json'), 'utf8'))
+  const pkg = JSON.parse(readFileSync(require.resolve('dsh-remote-wire/package.json'), 'utf8'))
   assert.equal(pkg.sideEffects, false, '没有这条，打包器不会把 record/keys 从产物里摇掉')
   assert.ok(!('tweetnacl' in (pkg.dependencies ?? {})) === false, 'tweetnacl 仍是协议包的运行时依赖（插件要用）')
 })

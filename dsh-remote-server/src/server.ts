@@ -2,7 +2,7 @@
  * server — 零知识 WebSocket 中继的装配：http + ws + 控制面分发 + 清扫 + 停机。
  *
  * 结构上的零知识由三件事共同保证，缺一不可：
- * 1. 本进程不 import 任何密码学模块（`dsh-remote-protocol/record`、`tweetnacl` 都不在依赖图里；
+ * 1. 本进程不 import 任何密码学模块（`dsh-remote-wire/record`、`tweetnacl` 都不在依赖图里；
  *    `tests/bundle.test.mjs` 会直接断言打出来的单文件里没有 xsalsa20/secretbox 痕迹）；
  * 2. 数据面帧的 `ciphertext` 只被搬运，中继只读它的**字符集**（拒非法 base64）；
  * 3. 日志字段类型只允许标量（见 `log.ts`），控制面里出现的只有 id / 计数 / 配对码 / label。
@@ -20,8 +20,8 @@ import {
   type EndpointFrame,
   type ErrorCode,
   type RelayFrame,
-} from 'dsh-remote-protocol/frames'
-import { newHostId } from 'dsh-remote-protocol/ids'
+} from 'dsh-remote-wire/frames'
+import { newHostId } from 'dsh-remote-wire/ids'
 import {
   encBatchToClient,
   encToClient,
@@ -35,7 +35,7 @@ import {
   peerJoinedNotice,
   peerLeft as peerLeftFrame,
   pong as pongFrameOf,
-} from 'dsh-remote-protocol/outbound'
+} from 'dsh-remote-wire/outbound'
 import type { RelayConfig } from './config.js'
 import { BackpressureGate, Budget, FrameRateGate } from './limits.js'
 import { Log, REDACTED } from './log.js'

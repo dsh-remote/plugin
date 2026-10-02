@@ -19,8 +19,8 @@
  * 本文件**不 import `ws`**：对端只以一个极简的 `Sock` 结构出现，
  * 所以状态机可以被纯内存的单测完整驱动，不需要真的起 socket。
  */
-import { newConversationId } from 'dsh-remote-protocol/ids'
-import type { ClientMeta } from 'dsh-remote-protocol/frames'
+import { newConversationId } from 'dsh-remote-wire/ids'
+import type { ClientMeta } from 'dsh-remote-wire/frames'
 
 /** 对端 socket 的最小面（真实现是 `ws` 的 WebSocket，测试里可以是内存对象）。 */
 export interface Sock {

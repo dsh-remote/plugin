@@ -25,7 +25,7 @@ pnpm build
 
 打包结果（事实，出处 `scripts/bundle-relay.mjs`）：
 
-- **`ws` 与协议层全部内联**，端点 `import` 的 `dsh-remote-protocol/frames`、`outbound`、`ids`
+- **`ws` 与协议层全部内联**，端点 `import` 的 `dsh-remote-wire/frames`、`outbound`、`ids`
   都在产物里；只有 `bufferutil` / `utf-8-validate` 这两个**可选**原生加速模块留在外面，缺了照常跑。
 - 产物是 ESM，所以头部补了一句真 `createRequire`（内联进来的 CJS 模块有 `require(...)`，
   esbuild 默认会把它们换成运行期抛错的兜底函数）。
@@ -141,7 +141,7 @@ DRC_PORT=9000 ./scripts/relay-start.sh
 （都可被同名环境变量覆盖）。
 
 `--bundle` 与默认的差别只在**跑哪个产物**：`dist/src/main.js` 那一份还需要 `node_modules`
-才能解析 `dsh-remote-protocol`（只在开发工作区里跑得起来，仓库内的单测也用它）；
+才能解析 `dsh-remote-wire`（只在开发工作区里跑得起来，仓库内的单测也用它）；
 `dist/bundle/main.js` 才是生产形态。 **[已验证：脚本源码 + `tests/bundle.test.mjs`]**
 
 手工起（不依赖脚本）：
