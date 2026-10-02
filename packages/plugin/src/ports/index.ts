@@ -129,6 +129,18 @@ export interface KernelPort {
    */
   readHistory?(sessionId: string, options: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage>
 
+  /**
+   * 新建一条会话（手机上那个「新建会话」）。
+   *
+   * **可选**：它依赖宿主暴露 `sessionController`，而不同代际暴露的服务面不一样。
+   * 缺失时调用方必须明确拒绝并说出缺哪一层，**不许**回一条"已创建"——
+   * 手机拿着一个假的 sessionId 一路走下去，失败点会离病根很远。
+   *
+   * 成功时返回**主机分配**的 id。刻意不接受标题：命名是主机那一侧的事
+   * （创建时不传 sessionId 由内核分配，不传 cwd 就用默认项目目录）。
+   */
+  newSession?(): Promise<{ ok: boolean; sessionId?: string; message?: string }>
+
   /** 订阅会话事件；返回退订函数。实现必须拒绝订阅 waterfall（见 guard.ts）。 */
   subscribe(onEvent: (event: KernelEvent) => void): () => void
 

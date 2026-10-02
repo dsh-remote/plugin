@@ -24,6 +24,8 @@ var PROTOCOL_VERSION = 1
  * 页面只需要分得清"拿到了 / 没拿到"，用 reject 会让每个调用点都要写 try/catch。
  */
 var HISTORY_TIMEOUT_MS = 15000
+/** 一次普通命令（目前只有新建会话）等回执的上限。比读历史短：创建是本地操作，不该慢。 */
+var COMMAND_TIMEOUT_MS = 12000
 
 class DrcClient {
   constructor() {
@@ -47,8 +49,12 @@ class DrcClient {
     this._cmdSeq = 0
     this._resume = null
     this._decryptFails = 0
-    /** cmdId → resolve。历史是**回执类**载荷：它只回答我们发出的那一次请求，不是广播。 */
-    this._historyWaiters = {}
+    /**
+     * cmdId → done(payload)。**回执类**载荷（它只回答我们发出的那一次请求，不是广播）：
+     * 取历史（`ev.session_history`）与命令结果（`ev.result`，目前只有新建会话用）都在这里。
+     * 一张表按 cmdId 分派，是因为"结算点只有一个"这条纪律不好维护第二份。
+     */
+    this._cmdWaiters = {}
   }
 
   // ── 事件 ──────────────────────────────────────────────────────────
@@ -165,21 +171,21 @@ class DrcClient {
     this.sessions = []
     this.keepAwake = null
     this._decryptFails = 0
-    // 还挂着的取历史请求不会有回音了：就地结算掉，否则页面的「历史读取中」会一直转
-    this._settleHistory(null)
+    // 还挂着的回执类请求不会有回音了：就地结算掉，否则页面的「历史读取中」会一直转
+    this._settleWaiters(null)
   }
 
   /**
-   * 把所有挂起的取历史请求按同一个结果结算（断线/解配时用）。
+   * 把所有挂起的**回执类**请求按同一个结果结算（断线/解配时用）。
    *
-   * **不能"先换表再回调"**：`done()` 里的幂等守卫查的是 `self._historyWaiters[cmdId]`，
-   * 表一旦先被换成空的，每个回调都会在守卫处早退 —— 连 15s 超时那条路也一起被吃掉，
+   * **不能"先换表再回调"**：`done()` 里的幂等守卫查的是 `self._cmdWaiters[cmdId]`，
+   * 表一旦先被换成空的，每个回调都会在守卫处早退 —— 连超时那条路也一起被吃掉，
    * 于是断线时页面上的「正在读取主机上的历史…」会永远转下去（不发错、不重试，最难查）。
    * 结算点只有 `done()` 一个，让它自己删自己那一行。
    */
-  _settleHistory(page) {
-    var ids = Object.keys(this._historyWaiters)
-    for (var i = 0; i < ids.length; i++) this._historyWaiters[ids[i]](page)
+  _settleWaiters(payload) {
+    var ids = Object.keys(this._cmdWaiters)
+    for (var i = 0; i < ids.length; i++) this._cmdWaiters[ids[i]](payload)
   }
 
   /** 配对不可用了：丢掉并要求重新扫码。 */
@@ -330,14 +336,19 @@ class DrcClient {
     this._decryptFails = 0
     // 回执类载荷：它是**回答我们某一次请求**的，不是一条事件。所以先结算那个 Promise，
     // 并且不再往下当普通事件发一遍 —— 否则页面会同时走两条路处理同一页历史。
-    if (payload.t === 'ev.session_history') {
-      var waiter = this._historyWaiters[payload.cmdId]
-      // **不要在这里 delete**：结算点只有一个，就是 loadHistory 里的 done()。
-      // 两边都删过一次 => done() 里的幂等守卫（`if (!self._historyWaiters[cmdId]) return`）
-      // 永远命中，Promise 永不 resolve——真机与本地闭环的表现都是「加载更早」转圈不动、
-      // 或首屏历史永远停在 loading（15s 的超时同样会被这个早退吃掉）。
-      if (waiter) waiter(payload)
-      return
+    //
+    // `ev.result` 也走这里：它有 `cmdId`，所以是"对答"（新建会话在等它），
+    // 只有**没有** waiter 时才当普通事件发下去（那是别的命令的回执，页面按老规矩弹提示）。
+    if (payload.t === 'ev.session_history' || payload.t === 'ev.result') {
+      var waiter = this._cmdWaiters[payload.cmdId]
+      // **不要在这里 delete**：结算点只有一个，就是各自 done() 里的那一处。
+      // 两边都删过一次 => done() 里的幂等守卫（`if (!self._cmdWaiters[cmdId]) return`）
+      // 永远命中，Promise 永不 resolve —— 真机与本地闭环的表现都是「加载更早」转圈不动、
+      // 或首屏历史永远停在 loading（超时同样会被这个早退吃掉）。
+      if (waiter) {
+        waiter(payload)
+        return
+      }
     }
     // 每个页面都要的簿记放在这里，页面保持「哑」
     if (payload.t === 'ev.session_changed') {
@@ -412,21 +423,63 @@ class DrcClient {
     return new Promise(function (resolve) {
       var timer = null
       // 结算点只有一个：删掉登记因此是幂等的，超时与回帧谁先到都只生效一次
-      var done = function (page) {
-        if (!self._historyWaiters[cmdId]) return
-        delete self._historyWaiters[cmdId]
+      var done = function (payload) {
+        if (!self._cmdWaiters[cmdId]) return
+        delete self._cmdWaiters[cmdId]
         if (timer) clearTimeout(timer)
-        resolve(page)
+        // 断线/解配时 `_settleWaiters(null)` 会喂进一个 null，那也是"没拿到"
+        resolve(payload && payload.t === 'ev.session_history' ? payload : null)
       }
       timer = setTimeout(function () {
         done(null)
       }, HISTORY_TIMEOUT_MS)
-      self._historyWaiters[cmdId] = done
+      self._cmdWaiters[cmdId] = done
 
       var cmd = { t: 'cmd.session_history', cmdId: cmdId, sessionId: sessionId }
       if (opts.beforeSeq !== undefined && opts.beforeSeq !== null) cmd.beforeSeq = opts.beforeSeq
       if (opts.limit) cmd.limit = opts.limit
       if (!self.sendCmd(cmd)) done(null)
+    })
+  }
+
+  /**
+   * 让主机新建一条会话，返回主机分配的 id。
+   *
+   * 与 `loadHistory` 同一套回执机制：按 `cmdId` 登记 waiter，回帧（这里是 `ev.result`）
+   * 或超时只结算一次，断线时由 `_settleWaiters` 就地结算 —— 三个出口都要有结果，
+   * 否则页面会永远停在"正在新建…"。
+   *
+   * @returns Promise<{ok: boolean, sessionId?: string, message?: string}>。
+   *          `ok:false` 一定带可读原因：主机那一代没有这个能力、创建失败、超时、断线，
+   *          四种都要能说出来，"新建没反应"是最难查的那种表现。
+   */
+  newSession() {
+    var self = this
+    if (!this.isPaired() || !this.sock) {
+      return Promise.resolve({ ok: false, message: '还没有连上主机' })
+    }
+    var cmdId = this.newCmdId()
+    return new Promise(function (resolve) {
+      var timer = null
+      var done = function (payload) {
+        if (!self._cmdWaiters[cmdId]) return
+        delete self._cmdWaiters[cmdId]
+        if (timer) clearTimeout(timer)
+        if (payload && payload.t === 'ev.result') {
+          var data = payload.data || {}
+          var id = typeof data.sessionId === 'string' ? data.sessionId : ''
+          if (payload.ok && id) resolve({ ok: true, sessionId: id })
+          else resolve({ ok: false, message: payload.message || '新建会话失败' })
+          return
+        }
+        // 超时 / 断线：两种都不该说成"失败了"就完事，得让人知道是哪种
+        resolve({ ok: false, message: '主机没有回应（超时或已断开）' })
+      }
+      timer = setTimeout(function () {
+        done(null)
+      }, COMMAND_TIMEOUT_MS)
+      self._cmdWaiters[cmdId] = done
+      if (!self.sendCmd({ t: 'cmd.new_session', cmdId: cmdId })) done(null)
     })
   }
 }

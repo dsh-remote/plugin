@@ -68,7 +68,7 @@ export interface RuntimeHandle {
   stop(): void
 }
 
-const SERVICE_NAMES = ['sessions', 'sessionQuery', 'agents', 'agentDefaultModel', 'workspaceRegistry', 'userQuestions']
+const SERVICE_NAMES = ['sessions', 'sessionQuery', 'agents', 'agentDefaultModel', 'workspaceRegistry', 'userQuestions', 'sessionController']
 
 /** 同时保持的配对通道硬上界：超出就从最不活跃的开始剪（空闲 TTL 之外的第二道闸）。 */
 const MAX_CONVERSATIONS = 64

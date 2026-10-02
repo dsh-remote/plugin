@@ -10,6 +10,7 @@ import {
   SESSION_STATES,
   cmdAnswer,
   cmdKeepAwake,
+  cmdNewSession,
   cmdResolvePermission,
   cmdSendPrompt,
   cmdSessionHistory,
@@ -18,7 +19,7 @@ import {
   parseEvPayload,
 } from '../src/payloads.js'
 
-test('七个命令逐个通过；t 拼错的载荷必须被拒（不认识的命令不能当命令执行）', () => {
+test('八个命令逐个通过；t 拼错的载荷必须被拒（不认识的命令不能当命令执行）', () => {
   assert.ok(
     parseCmdPayload({ t: 'cmd.send_prompt', cmdId: 'c1', sessionId: 'ses_1', text: '只回复 ok' }),
   )
@@ -44,8 +45,21 @@ test('七个命令逐个通过；t 拼错的载荷必须被拒（不认识的命
   )
   assert.ok(parseCmdPayload({ t: 'cmd.keep_awake', cmdId: 'c6', enabled: true }))
   assert.ok(parseCmdPayload({ t: 'cmd.session_history', cmdId: 'c7', sessionId: 'ses_1' }))
+  assert.ok(parseCmdPayload({ t: 'cmd.new_session', cmdId: 'c8' }))
   assert.equal(parseCmdPayload({ t: 'cmd.send_promt', cmdId: 'c1', sessionId: 's', text: '' }), null)
   assert.equal(parseCmdPayload({ t: 'cmd.subscribe', cmdId: 'c1' }), null, '已删除的 no-op 命令不再被认')
+})
+
+test('cmd.new_session：只带 cmdId，命名与 id 都归主机', () => {
+  assert.ok(cmdNewSession.safeParse({ t: 'cmd.new_session', cmdId: 'c' }).success)
+  // cmdId 是回执对答的钥匙（手机靠它认出"这是我那次新建的结果"），空的会让回执无处可归
+  assert.equal(cmdNewSession.safeParse({ t: 'cmd.new_session', cmdId: '' }).success, false)
+  assert.equal(cmdNewSession.safeParse({ t: 'cmd.new_session' }).success, false)
+  // 手机不自带 sessionId / 标题：id 由内核分配、名字由内核起（第一次发指令后会自己改）。
+  // 多余字段会被剥掉而不是悄悄流到内核 —— 剥掉是"我们没打算传"的证据，透传则是隐患。
+  const stripped = cmdNewSession.parse({ t: 'cmd.new_session', cmdId: 'c', sessionId: 'ses_x', title: '我编的名字' })
+  assert.equal('sessionId' in stripped, false)
+  assert.equal('title' in stripped, false)
 })
 
 test('session_history：beforeSeq/limit 都可省（省 = 要最新一页），limit 上界 200', () => {

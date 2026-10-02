@@ -212,6 +212,8 @@ export type CmdInterrupt = z.infer<typeof cmdInterrupt>
 export type CmdListSessions = z.infer<typeof cmdListSessions>
 /** cmdKeepAwake 的推导类型。 */
 export type CmdKeepAwake = z.infer<typeof cmdKeepAwake>
+/** cmdNewSession 的推导类型。 */
+export type CmdNewSession = z.infer<typeof cmdNewSession>
 
 /**
  * 出站载荷（host → client）。小程序解密后按 `t` 分发，认不出的类型被**静默丢弃**，
@@ -278,6 +280,23 @@ export const cmdListSessions = z.object({
   cmdId: nonEmpty,
 })
 
+/**
+ * 新建一个会话。
+ *
+ * **不带标题**：命名的权力在主机那一侧（内核 `sessionController.commands.create({})`
+ * 不传 sessionId 就分配一个新的，不传 cwd 就用默认项目目录）。手机擅自编一个"新会话"
+ * 塞过去，只会盖掉主机自己的命名规则，而且第一次发指令后标题还会被内核改掉——
+ * 那时候用户看到的就是一条**自己改过名字的会话又变了名**。
+ *
+ * 回执走 `ev.result`：它本来就有 `cmdId`（对答靠它匹配）与 `ok`/`message`
+ * （失败时手机要能说出原因），`data.sessionId` 带上新会话的 id。
+ * 为这一件事新立一个 `ev.*` 载荷不值得——那会让"结果回执"有两条并行的路。
+ */
+export const cmdNewSession = z.object({
+  t: z.literal('cmd.new_session'),
+  cmdId: nonEmpty,
+})
+
 export const cmdKeepAwake = z.object({
   t: z.literal('cmd.keep_awake'),
   cmdId: nonEmpty,
@@ -307,7 +326,7 @@ export const cmdSessionHistory = z.object({
 })
 
 /**
- * 手机发来的命令载荷，共 7 种——就是 `mp/core/client.js` 的便捷方法能产出的全部。
+ * 手机发来的命令，共 8 种——就是 `mp/core/client.js` 的便捷方法能产出的全部。
  *
  * 旧实现还有一个 `cmd.subscribe`：它的 handler 只回一个 `ev.result{ok:true}`，
  * `sessionIds`/`includeContent` 没有任何过滤效果，而小程序从不发它。
@@ -321,6 +340,7 @@ export const cmdPayload = z.discriminatedUnion('t', [
   cmdListSessions,
   cmdKeepAwake,
   cmdSessionHistory,
+  cmdNewSession,
 ])
 export type CmdPayload = z.infer<typeof cmdPayload>
 
@@ -345,6 +365,7 @@ export const PAYLOAD_TYPES = {
   cmdListSessions: 'cmd.list_sessions',
   cmdKeepAwake: 'cmd.keep_awake',
   cmdSessionHistory: 'cmd.session_history',
+  cmdNewSession: 'cmd.new_session',
   evSessionChanged: 'ev.session_changed',
   evMessageDelta: 'ev.message_delta',
   evToolEvent: 'ev.tool_event',

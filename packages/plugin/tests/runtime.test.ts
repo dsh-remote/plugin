@@ -994,3 +994,85 @@ test('cmd.session_history：不带游标 = 要最新一页（不该把 beforeSeq
   await settle()
   assert.deepEqual(seen, { sessionId: 'ses_live', limit: 40 }, '省掉 beforeSeq 才是"最新一页"；多一个 undefined 键会让内核侧的判空走岔')
 })
+
+// ── 新建会话：手机上那个「＋ 新建」 ──────────────────────────────────
+
+test('cmd.new_session：回执带上主机分配的 id，并额外推一次列表（F8）', async () => {
+  const { runtime, transport, kernel, clock } = fixture()
+  let calls = 0
+  kernel.newSession = () => {
+    calls += 1
+    return Promise.resolve({ ok: true, sessionId: 'ses_made' })
+  }
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  // 越过合并窗口再动手：否则这一次列表推送会被合并成尾随推送（窗口是 500ms 的防抖），
+  // 而这条用例要看的是"新建之后有没有推列表"，不是"防抖还灵不灵"（那条另有用例）。
+  await clock.advance(1_000)
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdNewSession, {}), 'c_000000000001')
+  await settle()
+
+  const results = transport.resultReplies()
+  assert.equal(results.length, 1, '新建必须回执一次且只一次')
+  assert.equal(results[0]?.ok, true)
+  assert.equal(results[0]?.cmdId, `cmd_${PAYLOAD_TYPES.cmdNewSession}`, 'cmdId 不回原值 → 手机认不出这是哪次新建的结果')
+  assert.equal(
+    (results[0]?.data as { sessionId?: string } | undefined)?.sessionId,
+    'ses_made',
+    '新会话的 id 必须回给手机：它是接下来所有命令的 sessionId',
+  )
+  assert.equal(calls, 1)
+  // F8：状态变了就要额外推一次列表。不推的话，用户新建完回到列表，那条会话最长要等
+  // 15 秒的兜底刷新才出现 —— 表现就是"新建了但列表没变"。
+  const changed = transport.ofType(PAYLOAD_TYPES.evSessionChanged)
+  assert.ok(changed.length >= 1, '新建之后没有额外推 session_changed → 列表停在旧快照')
+})
+
+test('cmd.new_session：内核没有这个能力时明确拒绝（不许回一个编出来的 id）', async () => {
+  const { runtime, transport, kernel } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+  assert.equal(kernel.newSession, undefined, '夹具有 newSession 的话这条断言就失去意义了')
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdNewSession, {}), 'c_000000000001')
+  await settle()
+
+  const results = transport.resultReplies()
+  assert.equal(results.length, 1)
+  assert.equal(results[0]?.ok, false)
+  assert.equal((results[0]?.data as { sessionId?: string } | undefined)?.sessionId, undefined, '拒绝时绝不能带 id')
+  assert.match(String(results[0]?.message ?? ''), /新建会话/, '拒绝原因必须点名"新建会话"，否则手机上只有一句看不懂的话')
+})
+
+test('cmd.new_session：创建炸了也回执失败，且不推列表（手机不能对着转圈干等）', async () => {
+  const { runtime, transport, kernel, clock } = fixture()
+  kernel.newSession = () => Promise.reject(new Error('workspace 挂不上'))
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  // 同样越过合并窗口：这样"零条 session_changed"才是"没推"，而不是"被防抖吃了"。
+  await clock.advance(1_000)
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdNewSession, {}), 'c_000000000001')
+  await settle()
+  await clock.advance(1_000) // 就算有尾随推送也该落地了
+
+  const results = transport.resultReplies()
+  assert.equal(results.length, 1)
+  assert.equal(results[0]?.ok, false)
+  assert.match(String(results[0]?.message ?? ''), /workspace 挂不上/, '内核给的原因要原样透传，别换一句更含糊的')
+  assert.equal(
+    transport.ofType(PAYLOAD_TYPES.evSessionChanged).length,
+    0,
+    '没造出会话却推列表 = 让手机去刷新一个没变的东西',
+  )
+})

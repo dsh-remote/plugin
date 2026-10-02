@@ -50,6 +50,16 @@ export interface ServicesBundle {
   agentDefaultModel?: LooseObject
   workspaceRegistry?: LooseObject
   userQuestions?: LooseObject
+  /**
+   * 新建会话的唯一落点。
+   *
+   * 取证：`@deepseek-ai/dsh-api-session-controller` 的 `SessionController` 内部持有
+   * `SessionCommandController`，暴露成 `ctx.sessionController.commands.create(request)`
+   * （`lib/types/commands.js` 的 `async create(request)`，返回 `{ sessionId, agentPreset? }`）。
+   * 真实宿主里它由 Remote 服务委派，**不在 kernel 的必选成员里** —— 缺了它只是少一个能力，
+   * 不该把整条载体判定拖垮，所以它是可选服务。
+   */
+  sessionController?: LooseObject
   /** cordis 的事件注册口；对 waterfall 是**参与式**监听。 */
   on?(name: string, listener: (...args: unknown[]) => void): unknown
   off?(name: string, listener: (...args: unknown[]) => void): unknown
@@ -65,11 +75,15 @@ export interface ServicesOptions {
   titleBatch?: number
   /** 读一次会话历史的超时。读的是整份日志，慢会话可能到几百毫秒，所以比标题宽。 */
   historyTimeoutMs?: number
+  /** 新建会话的超时。 */
+  createTimeoutMs?: number
 }
 
 const MAX_TITLE_BATCH_DEFAULT = 25
 const TITLE_TIMEOUT_DEFAULT = 4000
 const HISTORY_TIMEOUT_DEFAULT = 15_000
+/** 新建会话的超时。创建要分配 id、可能还要挂 workspace，比读标题慢，但也不该让手机干等。 */
+const CREATE_TIMEOUT_DEFAULT = 8000
 const LIST_LIMIT_DEFAULT = 100
 
 /** 折叠后的插件内部形状。 */
@@ -93,6 +107,11 @@ export function createServicesKernel(services: ServicesBundle, options: Services
   const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void =>
     options.log?.(message, fields)
   const titleCache = new Map<string, { title: string; at: number }>()
+  /**
+   * 本进程刚造出来、**持久化那面还没追上**的会话（见 `listSessions` 末尾的合并）。
+   * 不合并的话，用户新建完回到列表会发现那条会话不在里面。
+   */
+  const freshSessions = new Map<string, ListedSession>()
   /** 取证用：内核实际发过来的会话事件类型，以及我们**没有映射**的那些（进 status.json）。 */
   const seenEventTypes = new Set<string>()
   const unmappedEventTypes = new Set<string>()
@@ -224,6 +243,14 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     }
     // 委派子会话整行过滤：手机上点进一条无法回答审批的子会话，比看不见更容易误导。
     records = records.filter((row) => row.origin !== 'subagent')
+    // 刚建的会话要**补**进来：`sessionQuery.listSessions` 扫的是持久化日志，
+    // 而一条还没有任何消息的新会话根本没有日志。不补的话，用户在手机上新建完
+    // 回到列表会发现那条不在里面 —— 「新建了但列表没变」比一条报错更难懂。
+    // 一旦持久化那面也能报出它，本地这条临时记录就退休，此后一切以它为准。
+    for (const [id, row] of [...freshSessions]) {
+      if (records.some((item) => item.id === id)) freshSessions.delete(id)
+      else records.push(row)
+    }
     records.sort((a, b) => createdAtOf(b) - createdAtOf(a))
     const page = records.slice(0, cap)
     await loadTitles(page.map((row) => row.id).filter((id) => !titleCache.has(id)))
@@ -241,6 +268,38 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       return Number.isNaN(parsed) ? 0 : parsed
     }
     return 0
+  }
+
+  /**
+   * 新建一条会话。
+   *
+   * 三层软探测（服务 → `commands` → `create`）而不是 `?.` 一把梭：**缺的是哪一层要能报出来**。
+   * 真机上"新建没反应"的病根可能在任意一层，而报错信息里带上"这一层有什么成员"，
+   * 排查就不用再重启一次 Harness 去取证。
+   */
+  async function newSession(): Promise<{ ok: boolean; sessionId?: string; message?: string }> {
+    const controller = services.sessionController
+    if (!controller) return { ok: false, message: '主机这一代没有 sessionController 服务' }
+    const commands = controller.commands
+    const create = fn(commands, 'create')
+    if (!create) {
+      return { ok: false, message: `sessionController.commands 上没有 create()（成员：${shapeOf(commands)}）` }
+    }
+    try {
+      // 只传空对象：不指定 sessionId（交给内核分配）、不指定 cwd / workspaceId（用默认项目目录）。
+      // 两者同时给会被内核当场拒（`gateway/bad-request`），所以这里一个都不给。
+      const made = (await withTimeout(
+        Promise.resolve(create.call(commands, {})),
+        options.createTimeoutMs ?? CREATE_TIMEOUT_DEFAULT,
+      )) as LooseObject | undefined
+      const id = typeof made?.sessionId === 'string' ? made.sessionId : ''
+      if (!id) return { ok: false, message: `新建会话没有返回 sessionId（拿到 ${shapeOf(made)}）` }
+      // 先记进 freshSessions：下一条列表推送就能带上它（见 listSessions 里的合并）。
+      freshSessions.set(id, { id, createdAt: options.clock.now() })
+      return { ok: true, sessionId: id }
+    } catch (error) {
+      return { ok: false, message: messageOf(error) }
+    }
   }
 
   /** 用户消息形状：优先用平台工厂（它会补 id 与规范化），拿不到退回最小可用对象。 */
@@ -608,6 +667,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     sendPrompt,
     interrupt,
     readHistory,
+    newSession,
     subscribe,
     attachInteractionSink,
     ensureRunnable,
@@ -622,6 +682,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         // 读历史只依赖这一条。真机上"点进会话是空的"第一步就要分清：
         // 是宿主没这个能力、还是我们没读出来。没有这个字段就只能猜。
         historyFace: typeof fn(services.sessionQuery, 'readSession') === 'function' ? 'readSession' : `absent (keys=${shapeOf(services.sessionQuery)})`.slice(0, 120),
+        // 新建会话只依赖这一条。和 historyFace 同理：真机上"新建没反应"第一件要分清的事
+        // 是宿主没有这个能力，还是我们没调对。
+        createFace: typeof fn(services.sessionController?.commands, 'create') === 'function' ? 'commands.create' : `absent (keys=${shapeOf(services.sessionController)})`.slice(0, 120),
         agents: typeof services.agents === 'object',
         agentDefaultModel: typeof services.agentDefaultModel === 'object',
         workspaceRegistry: typeof services.workspaceRegistry === 'object',

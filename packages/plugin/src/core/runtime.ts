@@ -209,6 +209,26 @@ export class HostRuntime {
           reply(true)
           return
         }
+        case 'cmd.new_session': {
+          // 能力缺失时**明确拒绝**（与 cmd.session_history 同一条原则）：回一个假的
+          // sessionId 让手机一路走下去，失败点会跑到很远的地方 —— 用户看到的是
+          // "新建了一个会话，但发什么都失败"，而病根在宿主没有这个服务。
+          const create = this.kernel.newSession
+          if (!create) {
+            reply(false, { message: '主机这一代不支持新建会话（内核端口没有 newSession 能力）' })
+            return
+          }
+          const made = await create.call(this.kernel)
+          if (!made.ok || !made.sessionId) {
+            reply(false, { message: made.message ?? '新建会话失败' })
+            return
+          }
+          reply(true, { data: { sessionId: made.sessionId } })
+          // 状态变了就要额外推一次列表（F8）：手机新建完回到列表时那条会话必须已经在，
+          // 靠 15 秒的兜底刷新等它出现是不可接受的。
+          void this.pushSessions('new-session')
+          return
+        }
         case 'cmd.session_history': {
           // 能力缺失时**明确拒绝**：回一张空页在手机上是"这个会话没内容"，
           // 那是一个会让人查错方向的假事实。能力面差异是真实存在的（见 KernelPort）。

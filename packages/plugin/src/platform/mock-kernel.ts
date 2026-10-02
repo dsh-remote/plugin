@@ -36,6 +36,8 @@ export interface MockKernelOptions {
   history?: KernelEvent[]
   /** 读历史时报错（用来验证"能力缺失要明确拒绝，而不是回一张空页"）。 */
   historyError?: string
+  /** 新建会话时报错（用来验证"新建失败必须给出可读原因，不许静默"）。 */
+  newSessionError?: string
 }
 
 /**
@@ -108,6 +110,18 @@ export class MockKernel implements KernelPort {
     if (!this.running.delete(sessionId)) return { ok: false, message: '这个会话现在没在跑' }
     this.emit({ kind: 'run-state', sessionId, state: 'idle', detail: 'interrupted' })
     return { ok: true }
+  }
+
+  /**
+   * 假的新建会话：造一个 id、塞进内存列表，行为与真实载体一致（列表里立刻能看见）。
+   * 这样"新建 → 列表出现 → 点进去"这条链在本地闭环里能真跑一遍。
+   * `newSessionError` 用来演"宿主没有这个能力"那一支。
+   */
+  async newSession(): Promise<{ ok: boolean; sessionId?: string; message?: string }> {
+    if (this.options.newSessionError) return { ok: false, message: this.options.newSessionError }
+    const sessionId = `ses_mock_new_${++this.sequence}`
+    this.sessions.unshift({ id: sessionId, state: 'idle', running: false })
+    return { ok: true, sessionId }
   }
 
   subscribe(onEvent: (event: KernelEvent) => void): () => void {

@@ -458,3 +458,97 @@ test('宿主没有 sessionQuery.readSession 时必须**抛**，不许回一张�
   )
   assert.match(String((kernel.describe() as Record<string, unknown>).historyFace), /absent/)
 })
+
+// ── 新建会话 ────────────────────────────────────────────────────────
+
+test('新建会话走 sessionController.commands.create({})：一个字段都不许自己塞', async () => {
+  const f = fixture()
+  const asked: unknown[] = []
+  const services = f.bundle({ live: true })
+  services.sessionController = {
+    commands: {
+      create: (request: unknown) => {
+        asked.push(request)
+        // 真实签名（commands.js 的 `async create`）：`{ sessionId, ...(agentPreset ? {agentPreset} : {}) }`
+        return Promise.resolve({ sessionId: 'session-abc' })
+      },
+    },
+  }
+  const kernel = f.kernel(services)
+  const made = await kernel.newSession!()
+  assert.deepEqual(made, { ok: true, sessionId: 'session-abc' })
+  // 空对象而不是 `{cwd: ...}` / `{sessionId: ...}`：不给 sessionId 才让内核分配新的，
+  // 不给 cwd/workspaceId 才用宿主自己的默认项目目录（两者同时给会被内核当场拒）。
+  assert.deepEqual(asked, [{}])
+  assert.match(String((kernel.describe() as Record<string, unknown>).createFace), /commands\.create/)
+})
+
+test('新建的空会话必须出现在列表里 —— 持久化那面还没它，而它已经不是"不存在"', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  // 持久化那面（sessionQuery.listSessions）扫的是会话**日志**，一条还没有任何消息的
+  // 新会话根本没有日志。这里就模拟这个局面：它永远报不出新建的那条。
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/w/old' } }]),
+  }
+  services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'ses_fresh' }) } }
+  const kernel = f.kernel(services)
+
+  const before = await kernel.listSessions(50)
+  assert.deepEqual(before.map((item) => item.summary.id), ['ses_old'])
+
+  await kernel.newSession!()
+
+  const after = await kernel.listSessions(50)
+  const ids = after.map((item) => item.summary.id)
+  assert.equal(ids.includes('ses_fresh'), true, `新建的会话不在列表里（实得 ${JSON.stringify(ids)}）→ 用户回到列表会以为没建上`)
+  assert.equal(ids.length, 2, '补进来的应该正好是新那一条，不能重复')
+})
+
+test('持久化那面追上之后，本地那条临时记录要退休（不能一直盖着真数据）', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const rows: Array<{ header: { id: string; createdAt: number; cwd?: string } }> = [
+    { header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/w/old' } },
+  ]
+  services.sessionQuery = { listSessions: () => Promise.resolve(rows) }
+  services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'ses_fresh' }) } }
+  const kernel = f.kernel(services)
+  await kernel.newSession!()
+  assert.equal((await kernel.listSessions(50)).length, 2, '临时记录先顶上')
+
+  // 宿主把这条落盘了 → 下一次列表里它由持久化那面给出（带 cwd 等真数据）
+  rows.push({ header: { id: 'ses_fresh', createdAt: 1_700_000_001_000, cwd: '/w/proj' } })
+  const real = await kernel.listSessions(50)
+  assert.equal(real.length, 2, '两边都有它的时候不许出现两条')
+  const fresh = real.find((item) => item.summary.id === 'ses_fresh')
+  assert.equal(fresh?.summary.workspace, '/w/proj', '要让位给真数据，而不是继续用本地那条没 workspace 的')
+})
+
+test('宿主没有 sessionController：明确说出缺什么，不许编一个 id 出来', async () => {
+  const f = fixture()
+  const kernel = f.kernel(f.bundle({ live: true }))
+  const made = await kernel.newSession!()
+  assert.equal(made.ok, false)
+  assert.equal(made.sessionId, undefined, '拒绝时绝不能带 id')
+  assert.match(String(made.message), /sessionController/, '要说清楚缺的是哪一层，否则只有一句看不懂的话')
+  assert.match(String((kernel.describe() as Record<string, unknown>).createFace), /absent/)
+})
+
+test('sessionController 在、但 commands.create 不在：也要点名到成员一级', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  services.sessionController = { commands: { rename: () => undefined } }
+  const made = await f.kernel(services).newSession!()
+  assert.equal(made.ok, false)
+  assert.match(String(made.message), /create/, '缺到哪一层就要报到哪一层（这个对象上有 rename 但没有 create）')
+})
+
+test('创建返回里没有 sessionId：按失败处理，不把 undefined 当成一个 id 往下传', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  services.sessionController = { commands: { create: () => Promise.resolve({ agentPreset: 'x' }) } }
+  const made = await f.kernel(services).newSession!()
+  assert.equal(made.ok, false)
+  assert.match(String(made.message), /sessionId/)
+})
