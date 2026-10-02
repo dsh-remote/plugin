@@ -1,0 +1,36 @@
+{
+  "name": "dsh-remote-mp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSH Remote Control —— 微信小程序控制端：扫码配对主机，发指令、看流式输出、回答审批。",
+  "license": "MIT",
+  "author": "providcc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/providcc/dsh-remote-mp.git"
+  },
+  "homepage": "https://github.com/providcc/dsh-remote-mp#readme",
+  "bugs": "https://github.com/providcc/dsh-remote-mp/issues",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "remote-control",
+    "wechat",
+    "miniprogram",
+    "e2ee"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "npm run verify && npm run theme:check && npm run contrast",
+    "verify": "node scripts/verify-miniprogram.mjs",
+    "theme": "node scripts/gen-mp-theme.mjs",
+    "theme:check": "node scripts/gen-mp-theme.mjs --check",
+    "contrast": "node scripts/check-mp-contrast.mjs"
+  },
+  "dependencies": {
+    "tdesign-miniprogram": "^1.10.0",
+    "js-base64": "^3.7.7"
+  }
+}

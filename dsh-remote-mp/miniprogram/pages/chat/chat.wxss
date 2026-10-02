@@ -1,0 +1,745 @@
+/* chat 页 —— 文档流，不是聊天气泡。
+ *
+ * 设计取向：
+ *   ① 三种内容各有各的长相，靠**位置 + 形状**一眼分辨说话人，不靠头像和昵称：
+ *      你说的靠右、实心底；它说的靠左、白底卡片；它干活的过程是一条可收起的行。
+ *      为什么必须能一眼分辨：这一页是**异步**的 —— 你发完就走了，几小时后回来读结果，
+ *      一屏里混着"我说的 / 它说的 / 它干的"，找不到自己那句话是常事。
+ *   ② 只借微信气泡的**那条语言**（左右分列 + 圆角方向），不搬社交那一套：
+ *      没有头像、没有已读、不用白色气泡去包它的正文外层再套一层。
+ *   ③ 一切颜色走 TDesign 变量（主题已固定为浅色，见 app.wxss）。
+ *   ④ 层级靠留白和字重，不靠投影 —— 真机小屏上投影会糊成一片。
+ */
+
+/* 页面骨架：顶栏 / 滚动区 / 输入区三段式。
+   jump 按钮 absolute 定位于此，所以这里要 relative。 */
+.chat-wrap {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--td-bg-color-page);
+}
+
+/* ── 顶栏：运行控制条 ─────────────────────────────────────────────── */
+.bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 18rpx 24rpx;
+  background: var(--td-bg-color-container);
+  border-bottom: 2rpx solid var(--td-component-border);
+}
+
+.bar .dot {
+  margin-right: 12rpx;
+}
+
+.bar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26rpx;
+  color: var(--td-text-color-secondary);
+}
+
+/* 次要动作用胶囊，主动作（中断）用圆钮 —— 参考图里右侧就是一组圆形按钮 */
+.bar-btn {
+  flex: 0 0 auto;
+  font-size: 24rpx;
+  line-height: 48rpx;
+  height: 48rpx;
+  padding: 0 22rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+  margin-left: 12rpx;
+}
+
+.bar-stop {
+  flex: 0 0 auto;
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 50%;
+  background: var(--td-error-color-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 12rpx;
+}
+
+/* 停止方块：CSS 画，不引图标字体 */
+.bar-stop-icon {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 4rpx;
+  background: var(--td-error-color);
+}
+
+/* ── 滚动区 ───────────────────────────────────────────────────────── */
+.scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pad {
+  padding: 28rpx 28rpx 40rpx;
+}
+
+/* 每一块的定位壳：只为了带 id 给 scroll-into-view 用 ——「加载更早」把内容插到
+   前面之后，要靠它把用户刚读到的那一块滚回视口，否则页面会原地跳动、读到哪跑哪。 */
+.blk {
+  display: block;
+}
+
+.anchor {
+  height: 2rpx;
+}
+
+/* ── 历史头 ───────────────────────────────────────────────────────
+   三种状态分开说：正在读 / 读不到（可点重试）/ 已到最早。
+   「读不到」故意用可点的一行而不是一句灰字——它需要一个出口，否则用户只能退出重进。 */
+.hist {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8rpx 16rpx 28rpx;
+}
+
+.hist-text {
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary);
+}
+
+.hist-more {
+  flex: 0 0 auto;
+  margin-left: 16rpx;
+  font-size: 24rpx;
+  color: var(--td-brand-color-on-tint);
+}
+
+/* 整行可点的那两种（读不到 / 还有更早）：主文案提一档对比度，暗示这里能按 */
+.hist-tap .hist-text {
+  color: var(--td-text-color-primary);
+}
+
+/* 转圈：CSS 画，不引图标字体（图标字体走远程 CDN，拉不到就是空白方块） */
+.hist-spin {
+  width: 22rpx;
+  height: 22rpx;
+  margin-right: 12rpx;
+  border: 3rpx solid var(--td-component-border);
+  border-top-color: var(--td-brand-color);
+  border-radius: 50%;
+  animation: hist-spin 0.8s linear infinite;
+}
+
+@keyframes hist-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 空状态 ───────────────────────────────────────────────────────── */
+.empty {
+  padding: 140rpx 24rpx 0;
+  text-align: center;
+}
+
+.empty-mark {
+  width: 104rpx;
+  height: 104rpx;
+  line-height: 104rpx;
+  margin: 0 auto 32rpx;
+  border-radius: 30rpx;
+  background: var(--td-brand-color);
+  color: var(--td-text-color-anti);
+  font-size: 34rpx;
+  font-weight: 600;
+  letter-spacing: 2rpx;
+}
+
+.empty-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  margin-bottom: 16rpx;
+}
+
+.empty-hint {
+  font-size: 26rpx;
+  line-height: 42rpx;
+}
+
+/* ── 轮次分隔：轻到只做"分段"这一件事 ─────────────────────────────── */
+.turn {
+  display: flex;
+  align-items: center;
+  padding: 36rpx 0 20rpx;
+}
+
+.turn-label {
+  flex: 0 0 auto;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--td-text-color-secondary);
+}
+
+.turn-time {
+  flex: 0 0 auto;
+  font-size: 22rpx;
+  color: var(--td-text-color-placeholder);
+  margin: 0 16rpx 0 12rpx;
+}
+
+.turn-line {
+  flex: 1 1 auto;
+  height: 2rpx;
+  background: var(--td-component-border);
+}
+
+/* ── 你的指令：靠右的实心气泡 ───────────────────────────────────────
+   为什么靠右：这一页是**异步**的 —— 指令发出去、关掉手机、几小时后回来读结果。
+   一屏里混着「我说的 / 它说的 / 它干的」，第一件要能一眼分辨的事就是"哪句是我说的"。
+   微信把"自己发的"放右边、给一个实心底色，这是最省事的一眼分辨法，沿用这条语言。
+   但只借这条语言，不搬社交那一套：没有头像、没有昵称、没有已读回执。
+
+   为什么是实心而不是浅底：长会话往回翻时要能**一眼扫到**自己下的那几条指令；
+   浅底（旧版是 brand-color-1）和卡片、和过程窗口几乎是同一个明度，扫不出来。
+   白字压在 brand 上的对比度约 7:1，贴代码片段也读得清。 */
+.user-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 28rpx;
+}
+
+.user {
+  max-width: 82%;
+  padding: 20rpx 26rpx;
+  /* 四个角里右下角收小 = 尾巴朝向说话的人（他在右边）。微信的圆角语言：
+     收小的那个角永远对着气泡的主人，一眼就知道谁在说。 */
+  border-radius: 26rpx 26rpx 8rpx 26rpx;
+  background: var(--td-brand-color, #0052d9);
+}
+
+.user-text {
+  font-size: 30rpx;
+  line-height: 46rpx;
+  color: var(--td-text-color-anti, #ffffff);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ── 步骤组：一轮「想 → 调工具 → 再想」聚成一条 ──────────────────── */
+.steps {
+  margin-bottom: 28rpx;
+}
+
+/* 收起时只占一行。这是这一页最重要的窗口管理 */
+.steps-bar {
+  display: flex;
+  align-items: center;
+  padding: 10rpx 8rpx 10rpx 0;
+}
+
+.steps-mark {
+  flex: 0 0 auto;
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  margin-right: 16rpx;
+}
+
+.steps-mark.done {
+  background: var(--td-success-color-1);
+  color: var(--td-success-color-6);
+}
+
+/* 在跑：实心圆点 + 呼吸（复用 app.wxss 的 dot-blink） */
+.steps-mark.live {
+  width: 16rpx;
+  height: 16rpx;
+  margin: 0 26rpx 0 10rpx;
+  background: var(--td-brand-color);
+  animation: dot-blink 1.1s ease-in-out infinite;
+}
+
+.steps-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26rpx;
+  color: var(--td-text-color-secondary);
+}
+
+.steps-label.live {
+  color: var(--td-brand-color-on-tint);
+}
+
+.steps-chev {
+  flex: 0 0 auto;
+  font-size: 24rpx;
+  color: var(--td-text-color-placeholder);
+  margin-left: 12rpx;
+  padding: 0 8rpx;
+}
+
+.steps-card {
+  background: var(--td-bg-color-container);
+  border: 2rpx solid var(--td-component-border);
+  border-radius: 20rpx;
+  padding: 6rpx 0;
+  overflow: hidden;
+}
+
+/* 过程窗口的高度上限。
+   为什么必须有：一组跑 8 步、每步还带参数和结果时，展开能把整页正文顶出屏幕 ——
+   这一页的主体是正文，过程不该赢。限高之后组内自己滚，正文始终在下面等着。
+   为什么是 scroll-view 而不是给 .steps-card 加 overflow: auto：小程序里 view
+   的 overflow 滚动**不生效**（开发者工具可能看起来像生效，真机不会动）。
+   max-height 而非 height：短组（只有一条）不该留一块空白。 */
+.steps-scroll {
+  max-height: 44vh;
+}
+
+/* ── 组内：思考 ───────────────────────────────────────────────────── */
+.step-think {
+  display: flex;
+  align-items: center;
+  padding: 14rpx 24rpx;
+}
+
+.step-think-mark {
+  flex: 0 0 auto;
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: var(--td-text-color-placeholder);
+  margin-right: 16rpx;
+}
+
+.step-think-mark.live {
+  background: var(--td-brand-color);
+  animation: dot-blink 1.1s ease-in-out infinite;
+}
+
+.step-think-text {
+  font-size: 24rpx;
+  line-height: 36rpx;
+  color: var(--td-text-color-secondary);
+}
+
+/* ── 组内：工具调用 ───────────────────────────────────────────────── */
+.step-tool {
+  display: flex;
+  align-items: flex-start;
+  padding: 18rpx 24rpx;
+}
+
+.step-tick {
+  flex: 0 0 auto;
+  width: 32rpx;
+  height: 32rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20rpx;
+  margin: 2rpx 16rpx 0 0;
+}
+
+.step-tick.completed {
+  background: var(--td-success-color-1);
+  color: var(--td-success-color-6);
+}
+
+.step-tick.failed {
+  background: var(--td-error-color-1);
+  color: var(--td-error-color-6);
+}
+
+/* 还在跑 / 刚拿到参数：中性色，不抢眼 */
+.step-tick.started,
+.step-tick.args {
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+}
+
+.step-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.step-head {
+  display: flex;
+  align-items: baseline;
+}
+
+.step-name {
+  flex: 0 0 auto;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.step-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26rpx;
+  color: var(--td-text-color-secondary);
+  margin-left: 12rpx;
+}
+
+.step-preview {
+  font-size: 24rpx;
+  line-height: 36rpx;
+  color: var(--td-text-color-placeholder);
+  margin-top: 6rpx;
+}
+
+.step-detail {
+  margin-top: 12rpx;
+}
+
+.step-sec {
+  margin-top: 10rpx;
+}
+
+.step-k {
+  font-size: 22rpx;
+  color: var(--td-text-color-placeholder);
+  margin-bottom: 6rpx;
+}
+
+.step-v {
+  font-size: 24rpx;
+  line-height: 38rpx;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 10rpx;
+  padding: 12rpx 16rpx;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.step-chev {
+  flex: 0 0 auto;
+  font-size: 20rpx;
+  color: var(--td-text-color-placeholder);
+  margin: 6rpx 0 0 12rpx;
+}
+
+/* ── 回复正文：靠左的卡片气泡 ───────────────────────────────────────
+   为什么给它一个容器：旧版它和上面的指令块都是"通栏 + 浅底"，两者之间没有
+   图形落差，一屏读下来是一片糊的。现在它有自己的边界（白底 + 细边 + 大圆角），
+   和右边那条实心指令形成figure/ground 的对照 —— 谁是"页面主体"一目了然。
+
+   为什么 max-width 给 94% 而不是 100%：留 6% 的缝，长回复也仍然看得出"它靠左"；
+   6% 在 375pt 屏上是 20px，几乎不损失可读宽度（长文才是这一页的主体）。
+   左上车削平的角是同一套"尾巴朝向说话人"的语言，和用户气泡正好镜像。 */
+.reply-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 28rpx;
+}
+
+.reply {
+  max-width: 94%;
+  padding: 22rpx 26rpx;
+  border-radius: 8rpx 26rpx 26rpx 26rpx;
+  background: var(--td-bg-color-container);
+  border: 2rpx solid var(--td-component-border);
+  font-size: 30rpx;
+  line-height: 48rpx;
+  color: var(--td-text-color-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* 光标：还在写的时候让人知道没结束 */
+.caret {
+  display: inline-block;
+  width: 4rpx;
+  height: 30rpx;
+  background: var(--td-brand-color);
+  margin-left: 4rpx;
+  vertical-align: text-bottom;
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ── 系统提示（裁剪提示等） ───────────────────────────────────────── */
+.note {
+  font-size: 24rpx;
+  line-height: 38rpx;
+  color: var(--td-text-color-placeholder);
+  text-align: center;
+  padding: 16rpx 0;
+  margin-bottom: 16rpx;
+}
+
+/* ── 回到最新：浮在输入区上方，不打断阅读 ─────────────────────────── */
+.jump {
+  position: absolute;
+  left: 50%;
+  bottom: 200rpx;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  padding: 12rpx 26rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-container);
+  border: 2rpx solid var(--td-component-border);
+  box-shadow: var(--td-shadow-1);
+  font-size: 24rpx;
+  color: var(--td-brand-color-on-tint);
+}
+
+.jump-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: var(--td-brand-color);
+  margin-right: 10rpx;
+}
+
+/* ── 审批 / 提问面板 ──────────────────────────────────────────────── */
+.panel {
+  flex: 0 0 auto;
+  margin: 0 24rpx 16rpx;
+  padding: 26rpx 24rpx;
+  background: var(--td-bg-color-container);
+  border: 2rpx solid var(--td-component-border);
+  border-radius: 22rpx;
+  box-shadow: var(--td-shadow-1);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+
+.panel-flag {
+  flex: 0 0 auto;
+  width: 8rpx;
+  height: 30rpx;
+  border-radius: 4rpx;
+  background: var(--td-warning-color);
+  margin-right: 14rpx;
+}
+
+.panel-flag.flag-brand {
+  background: var(--td-brand-color);
+}
+
+.panel-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.row {
+  display: flex;
+  padding: 8rpx 0;
+}
+
+.row-k {
+  flex: 0 0 auto;
+  width: 96rpx;
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-secondary);
+}
+
+.row-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-primary);
+  word-break: break-all;
+}
+
+.reason {
+  margin-top: 14rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 12rpx;
+  background: var(--td-bg-color-secondarycontainer);
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-secondary);
+}
+
+.actions {
+  display: flex;
+  margin-top: 26rpx;
+}
+
+.act {
+  flex: 1 1 auto;
+  height: 84rpx;
+  line-height: 84rpx;
+  text-align: center;
+  border-radius: 16rpx;
+  font-size: 28rpx;
+}
+
+.act-primary {
+  background: var(--td-brand-color);
+  color: var(--td-text-color-anti);
+  font-weight: 600;
+}
+
+.act-danger {
+  background: var(--td-error-color-1);
+  color: var(--td-error-color-6);
+  margin-left: 16rpx;
+}
+
+/* ── 提问 ─────────────────────────────────────────────────────────── */
+.question {
+  margin-bottom: 20rpx;
+}
+
+.question-text {
+  font-size: 28rpx;
+  line-height: 44rpx;
+  color: var(--td-text-color-primary);
+  margin-bottom: 16rpx;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  padding: 18rpx 20rpx;
+  margin-bottom: 12rpx;
+  border: 2rpx solid var(--td-component-border);
+  border-radius: 16rpx;
+  font-size: 28rpx;
+  line-height: 42rpx;
+  color: var(--td-text-color-primary);
+}
+
+.opt-on {
+  border-color: var(--td-brand-color);
+  background: var(--td-brand-color-1);
+}
+
+.opt-tick {
+  flex: 0 0 auto;
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  border: 2rpx solid var(--td-component-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  margin-right: 16rpx;
+}
+
+.opt-on .opt-tick {
+  background: var(--td-brand-color);
+  border-color: var(--td-brand-color);
+}
+
+.opt-check {
+  color: var(--td-text-color-anti);
+}
+
+/* 原生 input：**必须**显式 height + line-height。
+   微信 input 默认内容高度约 1.4rem，靠 padding 撑高会把文字垂直裁掉。 */
+.panel-input {
+  height: 84rpx;
+  line-height: 84rpx;
+  padding: 0 20rpx;
+  margin-bottom: 20rpx;
+  border: 2rpx solid var(--td-component-border);
+  border-radius: 16rpx;
+  font-size: 28rpx;
+  color: var(--td-text-color-primary);
+}
+
+.panel-ph {
+  color: var(--td-text-color-placeholder);
+}
+
+.btn-gap {
+  margin-top: 4rpx;
+}
+
+/* ── 输入区：胶囊 + 圆形发送键 ────────────────────────────────────── */
+.composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 16rpx 24rpx calc(16rpx + env(safe-area-inset-bottom));
+  background: var(--td-bg-color-container);
+  border-top: 2rpx solid var(--td-component-border);
+}
+
+.composer-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 88rpx;
+  padding: 0 28rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-secondarycontainer);
+  display: flex;
+  align-items: center;
+}
+
+.composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 88rpx;
+  line-height: 88rpx;
+  font-size: 30rpx;
+  color: var(--td-text-color-primary);
+}
+
+.composer-ph {
+  color: var(--td-text-color-placeholder);
+}
+
+.composer-send {
+  flex: 0 0 auto;
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  background: var(--td-brand-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 16rpx;
+}
+
+.composer-send.off {
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+/* 发送箭头：CSS 画的实心上三角（border-bottom 有颜色 = 尖朝上），不引图标字体 */
+.send-arrow {
+  width: 0;
+  height: 0;
+  border-left: 14rpx solid transparent;
+  border-right: 14rpx solid transparent;
+  border-bottom: 22rpx solid var(--td-text-color-anti);
+}
+
+.composer-send.off .send-arrow {
+  border-bottom-color: var(--td-text-color-placeholder);
+}

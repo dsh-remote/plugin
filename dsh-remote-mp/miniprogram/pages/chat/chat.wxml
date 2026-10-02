@@ -1,0 +1,323 @@
+<!-- 外层接 tap：点页面任何非输入区域都收起键盘（输入区/面板自己 catchtap 挡住）。
+     小程序默认不会因为点到别处而收键盘，键盘会一直盖住半屏。 -->
+<view class="chat-wrap {{themeClass}}" bindtap="onTapBlank">
+
+  <!-- 顶栏：这一页的「窗口控制条」—— 运行状态与中断。
+       过程块默认不显示（见 chat.js 的 SHOW_STEPS），所以没有「展开过程」；
+       中断放这里而不是输入区：键盘弹起时输入区会被顶走，而中断恰恰是那时候最想按的。 -->
+  <view class="bar">
+    <view class="dot {{barTheme}} {{running ? 'blink' : ''}}"></view>
+    <view class="bar-text ellipsis">{{barText}}</view>
+    <view
+      wx:if="{{showSteps && foldable}}"
+      class="bar-btn"
+      hover-class="pressed"
+      hover-stay-time="80"
+      bindtap="onToggleAll">{{expanded ? '收起过程' : '展开过程'}}</view>
+    <view
+      wx:if="{{running}}"
+      class="bar-stop"
+      hover-class="pressed"
+      hover-stay-time="80"
+      bindtap="onInterrupt">
+      <view class="bar-stop-icon"></view>
+    </view>
+  </view>
+
+  <scroll-view
+    class="scroll"
+    scroll-y
+    scroll-into-view="{{toView}}"
+    scroll-with-animation
+    enable-flex
+    lower-threshold="40"
+    bindscroll="onScroll"
+    bindscrolltolower="onScrollToLower">
+
+    <view class="pad">
+      <!-- 历史头：读到了 / 在读 / 读不到，三种说法必须分开。
+           把"读不到"显示成"这个会话没内容"，用户会以为会话真的是空的 —— 那是假事实。 -->
+      <view wx:if="{{historyState === 'loading'}}" class="hist">
+        <view class="hist-spin"></view>
+        <text class="hist-text muted">正在读取主机上的历史…</text>
+      </view>
+
+      <view
+        wx:elif="{{historyState === 'error'}}"
+        class="hist hist-tap"
+        hover-class="pressed"
+        hover-stay-time="80"
+        bindtap="onLoadEarlier">
+        <text class="hist-text">没读到主机上的历史</text>
+        <text class="hist-more">点这里重试</text>
+      </view>
+
+      <!-- 「还有更早」：整行可点。左边说**事实**（还有更早），右边说能做什么 ——
+           这两个位置原先写反了，左边那句「已到最早加载的位置」恰好是反的
+           （这一支只在 hasMore 为真时渲染），截图才看得出来。 -->
+      <view
+        wx:elif="{{hasMore}}"
+        class="hist hist-tap"
+        hover-class="pressed"
+        hover-stay-time="80"
+        bindtap="onLoadEarlier">
+        <text class="hist-text muted">{{historyLoadingMore ? '正在读取…' : '还有更早的内容'}}</text>
+        <text class="hist-more">{{historyLoadingMore ? '' : '加载更早的内容'}}</text>
+      </view>
+
+      <view wx:elif="{{historyState === 'ok' && blocks.length}}" class="hist">
+        <text class="hist-text muted">以上是主机上已有的历史</text>
+      </view>
+
+      <!-- 空状态：只有"确实读到了、而且里面什么都没有"才配说这句。
+           三句提示按状态分开 —— 读不到的时候说"连上主机之后会把历史读进来"是错的
+           （那时多半已经连上了，是读失败），会把用户支去查连接。 -->
+      <view wx:if="{{historyState !== 'loading' && blocks.length === 0}}" class="empty">
+        <view class="empty-mark">DSH</view>
+        <view class="empty-title">{{historyState === 'ok' ? '这个会话还没有内容' : '还没有可以显示的内容'}}</view>
+        <view wx:if="{{historyState === 'error'}}" class="empty-hint muted">上面那一行可以点一下重试。</view>
+        <view wx:elif="{{historyState === 'ok'}}" class="empty-hint muted">主机上这条会话是空的。发一条指令开始。</view>
+        <view wx:else class="empty-hint muted">连上主机之后会把已有的历史读进来。</view>
+      </view>
+
+      <!-- 文档流：轮次分隔 / 你的指令 / 步骤组 / 回复正文 / 系统提示。
+           三种内容在协议里本来就是三种东西，混在一个气泡里就没法读。
+           每块外面套一层带 id 的壳：「加载更早」把内容插到前面之后，
+           scroll-into-view 要靠它把用户刚读到的那一块滚回视口，否则页面会原地跳动。 -->
+      <block wx:for="{{blocks}}" wx:key="key">
+        <view class="blk" id="b{{item.key}}">
+
+          <view wx:if="{{item.kind === 'turn'}}" class="turn">
+            <view class="turn-label">{{item.label}}</view>
+            <view class="turn-time mono">{{item.time}}</view>
+            <view class="turn-line"></view>
+          </view>
+
+          <!-- 你的指令：靠右的实心气泡（作者的分离靠"位置 + 底色"，见 wxss 里的说明）。
+               外面套一层整宽的 row 来负责"靠哪边"，气泡自己只管长相 —— 
+               这样 .blk 不用改成 flex，其它块的布局一点不受影响。 -->
+          <view wx:elif="{{item.kind === 'user'}}" class="user-row">
+            <view class="user">
+              <view class="user-text">{{item.text}}</view>
+            </view>
+          </view>
+
+          <!-- 步骤组：「想 → 调工具 → 再想」聚成一条。整段**默认不渲染**。
+               数据照样落在 blocks 里：审批要知道主机在调什么、历史回放要对得上 callId，
+               删掉落块会连带坏掉那些。「不显示」是渲染层的决定，「记不记」是数据层的。
+
+               ⚠️ 这里必须用**独立的 wx:if**，不能是上一支的 wx:elif 加条件：
+               `wx:elif` 条件为假时会落到末尾的 `wx:else`（note 分支），
+               于是每个步骤组都会变成一个**空的提示条** —— 过程没显示，还多出一排空行。
+               换成 wx:if 后条件为假就是什么都不渲染。
+               留着这段的代价只是几行 wx:if，收益是哪天想看过程改一个常量就回来。 -->
+          <view wx:if="{{item.kind === 'steps' && showSteps}}" class="steps">
+            <view
+              class="steps-bar"
+              hover-class="pressed"
+              hover-stay-time="80"
+              data-idx="{{index}}"
+              bindtap="onToggleSteps">
+              <view class="steps-mark {{item.live ? 'live' : 'done'}}">
+                <text wx:if="{{!item.live}}">✓</text>
+              </view>
+              <view class="steps-label {{item.live ? 'live' : ''}}">{{item.label}}</view>
+              <view class="steps-chev">{{item.open ? '⌄' : '›'}}</view>
+            </view>
+
+            <view wx:if="{{item.open}}" class="steps-card">
+              <!-- 过程窗口：**限高 + 组内自己滚到最新**。
+                   展开一个跑了 8 步的组不该把整页正文顶出屏幕 —— 所以这里是个有界的窗口，
+                   而不是让它无限长高。scroll-into-view 指向组尾那一条，只有**还在跑**的组
+                   才给 tailId（跑完的组不再拽人，否则用户回看老组会被反复拉走）。
+                   注意小程序里 CSS `overflow: auto` 对 view 不生效，要滚只能用 scroll-view。 -->
+              <scroll-view
+                class="steps-scroll"
+                scroll-y
+                enable-flex
+                scroll-with-animation
+                scroll-into-view="{{item.tailId}}">
+                <block wx:for="{{item.items}}" wx:for-item="it" wx:for-index="ii" wx:key="key">
+                  <!-- 每条包一个带 id 的壳：就是上面 scroll-into-view 的落点 -->
+                  <view id="s{{it.key}}">
+
+                    <!-- 思考：只有阶段与耗时。思维链正文按 host-plugin-runtime.md 的 M28 红线
+                         不得跨 E2E 边界，宿主侧就被丢掉了 —— 这不是界面层能改的。 -->
+                    <view wx:if="{{it.type === 'think'}}" class="step-think">
+                      <view class="step-think-mark {{it.done ? '' : 'live'}}"></view>
+                      <text class="step-think-text">{{it.done ? '思考' : '思考中'}} {{it.msText}}</text>
+                    </view>
+
+                    <!-- 工具调用：一行名称 + 结果预览，点开看参数与完整结果 -->
+                    <view
+                      wx:else
+                      class="step-tool {{it.phase}}"
+                      hover-class="pressed"
+                      hover-stay-time="80"
+                      data-b="{{index}}"
+                      data-i="{{ii}}"
+                      bindtap="onToggleTool">
+                      <view class="step-tick {{it.phase}}">
+                        <text wx:if="{{it.phase === 'completed'}}">✓</text>
+                        <text wx:elif="{{it.phase === 'failed'}}">✕</text>
+                        <text wx:else>·</text>
+                      </view>
+                      <view class="step-main">
+                        <view class="step-head">
+                          <text class="step-name">{{it.tool}}</text>
+                          <text wx:if="{{it.title}}" class="step-title ellipsis">{{it.title}}</text>
+                        </view>
+                        <view wx:if="{{it.open}}" class="step-detail">
+                          <view wx:if="{{it.args}}" class="step-sec">
+                            <view class="step-k">参数</view>
+                            <view class="step-v mono">{{it.args}}</view>
+                          </view>
+                          <view wx:if="{{it.result}}" class="step-sec">
+                            <view class="step-k">结果</view>
+                            <view class="step-v mono">{{it.result}}</view>
+                          </view>
+                          <view wx:if="{{!it.args && !it.result}}" class="step-v mono">（还没有输出）</view>
+                        </view>
+                        <view wx:elif="{{it.preview}}" class="step-preview mono ellipsis">{{it.preview}}</view>
+                      </view>
+                      <view class="step-chev">{{it.open ? '▾' : '▸'}}</view>
+                    </view>
+                  </view>
+                </block>
+              </scroll-view>
+            </view>
+          </view>
+
+          <!-- 回复正文：靠左的卡片气泡。它才是这页的主体，所以只留 6% 的缝 ——
+               足够让人看出它靠左，又几乎不损失长文的可读宽度。
+               从这里开始重新用独立的 wx:if 链：上一支的 steps 已经改成独立 wx:if，
+               这一支不能再是它的 wx:elif（否则它会跟着 steps 一起消失）。 -->
+          <view wx:if="{{item.kind === 'text'}}" class="reply-row">
+            <view class="reply">
+              <text user-select>{{item.text}}</text><text wx:if="{{!item.done}}" class="caret"></text>
+            </view>
+          </view>
+
+          <!-- 系统提示。显式写 kind === 'note'，不用裸 wx:else：
+               裸 else 会把"没匹配上任何一支"的块也画出来（上一支 steps 关闭时
+               就是这样 —— 一排空提示条）。写明白条件，不匹配就是什么都不渲染。 -->
+          <view wx:if="{{item.kind === 'note'}}" class="note">{{item.text}}</view>
+        </view>
+      </block>
+
+      <!-- 滚动锚点：**两个静态 id** 轮流指，而不是"同一个元素换 id"。
+           后者要赌"元素改名"与"scroll-into-view 生效"谁先落到渲染层上，
+           赌输了 scroll-view 会查不到目标节点、静默不滚 —— 「回到最新」点了没反应
+           就是这么来的。两个锚点都在内容末尾，指哪个都是"到底"。 -->
+      <view id="anchor-a" class="anchor"></view>
+      <view id="anchor-b" class="anchor"></view>
+    </view>
+  </scroll-view>
+
+  <!-- 用户往上回看过：给一条回到最新的路，但不打扰他 -->
+  <view
+    wx:if="{{!atBottom && !pendingPermission && !pendingQuestion}}"
+    class="jump"
+    hover-class="pressed"
+    hover-stay-time="80"
+    bindtap="onJumpLatest">
+    <view class="jump-dot"></view>
+    <text>回到最新</text>
+  </view>
+
+  <!-- 审批卡。catchtap：面板里的空白也算"输入区"，点在它上面不该收键盘 -->
+  <view wx:if="{{pendingPermission}}" class="panel" catchtap="onNoop">
+    <view class="panel-head">
+      <view class="panel-flag"></view>
+      <view class="panel-title">需要审批</view>
+    </view>
+
+    <view>
+      <view class="row">
+        <text class="row-k">动作</text>
+        <text class="row-v mono">{{pendingPermission.action}}</text>
+      </view>
+      <view wx:if="{{pendingPermission.resource}}" class="row">
+        <text class="row-k">对象</text>
+        <text class="row-v mono">{{pendingPermission.resource}}</text>
+      </view>
+      <view wx:if="{{pendingPermission.reason}}" class="reason">{{pendingPermission.reason}}</view>
+    </view>
+
+    <view class="actions">
+      <view
+        wx:for="{{pendingPermission.options}}"
+        wx:key="id"
+        class="act {{item.id === 'reject' ? 'act-danger' : 'act-primary'}}"
+        hover-class="pressed"
+        hover-stay-time="80"
+        data-decision="{{item.id}}"
+        bindtap="onPermissionTap">{{item.label}}</view>
+    </view>
+  </view>
+
+  <!-- 提问卡 -->
+  <view wx:if="{{pendingQuestion}}" class="panel" catchtap="onNoop">
+    <view class="panel-head">
+      <view class="panel-flag flag-brand"></view>
+      <view class="panel-title">主机正在询问</view>
+    </view>
+
+    <block wx:for="{{pendingQuestion.questions}}" wx:for-item="q" wx:for-index="qi" wx:key="id">
+      <view class="question">
+        <view class="question-text">{{q.question}}</view>
+        <view class="options">
+          <view
+            wx:for="{{q.options}}"
+            wx:for-item="o"
+            wx:for-index="oi"
+            wx:key="id"
+            class="opt {{o.checked ? 'opt-on' : ''}}"
+            hover-class="pressed"
+            hover-stay-time="80"
+            data-qi="{{qi}}"
+            data-oi="{{oi}}"
+            bindtap="onOptionTap">
+            <view class="opt-tick"><text wx:if="{{o.checked}}" class="opt-check">✓</text></view>
+            <text>{{o.label}}</text>
+          </view>
+        </view>
+      </view>
+    </block>
+
+    <input
+      class="panel-input"
+      placeholder="补充说明（可选）"
+      placeholder-class="panel-ph"
+      bindinput="onFreeText"
+      bindfocus="onInputFocus" />
+    <view class="btn-gap">
+      <t-button theme="primary" size="large" block bindtap="onAnswer">提交回答</t-button>
+    </view>
+  </view>
+
+  <!-- 输入区：胶囊输入框 + 右侧圆形发送键。
+       catchtap：点输入框本身不该被外层当成"点了空白"而收键盘 -->
+  <view class="composer" catchtap="onNoop">
+    <view class="composer-pill">
+      <input
+        class="composer-input"
+        placeholder="输入指令…"
+        placeholder-class="composer-ph"
+        value="{{inputText}}"
+        focus="{{inputFocus}}"
+        cursor-spacing="24"
+        confirm-type="send"
+        bindfocus="onInputFocus"
+        bindinput="onInput"
+        bindconfirm="onSend" />
+    </view>
+    <view
+      class="composer-send {{inputText ? '' : 'off'}}"
+      hover-class="{{inputText ? 'pressed' : ''}}"
+      hover-stay-time="80"
+      bindtap="onSend">
+      <view class="send-arrow"></view>
+    </view>
+  </view>
+</view>

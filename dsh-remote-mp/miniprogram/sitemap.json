@@ -1,0 +1,9 @@
+{
+  "desc": "DSH Remote Control 小程序不参与索引",
+  "rules": [
+    {
+      "action": "disallow",
+      "page": "*"
+    }
+  ]
+}

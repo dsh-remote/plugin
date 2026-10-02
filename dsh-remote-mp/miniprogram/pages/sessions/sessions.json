@@ -1,0 +1,12 @@
+{
+  "navigationBarTitleText": "DSH 远程控制",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
+  },
+  "componentPlaceholder": {
+    "t-empty": "view"
+  }
+}

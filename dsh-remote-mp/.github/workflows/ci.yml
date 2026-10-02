@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的重复推送取消旧运行，节省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 刻意不装依赖：这几项都只读文件，`npm run` 跑 node 命令即可。
+      # 真正的编译与真机行为只有微信开发者工具能验，那部分进不了 CI，
+      # 所以这里守住的是"能确定对错"的那一层：
+      #   verify    —— JSON / 页面四件套 / 组件引用 / 自研 JS 语法 / 按需注入前提
+      #   theme:check —— theme/*.wxss 是否还与 TDesign 同步（生成物不许手改）
+      #   contrast  —— 两套变量表展开后的前景/背景对比度是否全部达标（WCAG）
+      - name: Static checks
+        run: npm run check

@@ -1,0 +1,191 @@
+<!-- 根容器带 themeClass（深色时是 theme-dark）：深色变量挂在这个 class 上，
+     靠继承铺满整页。挂在**根 view** 上而不是 page —— 变量表的选择器是 .theme-dark，
+     挂在子树深处只能染到那一小片。 -->
+<view class="page-pad {{themeClass}}">
+
+  <!-- 容器没有 WebSocket 能力时，唯一要说的就是这一句 -->
+  <view wx:if="{{!socketReady}}" class="warn card">
+    <view class="warn-title">当前环境无法连接</view>
+    <view class="warn-text">
+      这个运行环境没有 WebSocket（{{diagGlobal}}.connectSocket 不存在）。
+      请用微信开发者工具或真机调试运行。
+    </view>
+    <view class="footer-link" hover-class="pressed" bindtap="onCopyDiag">复制诊断信息</view>
+  </view>
+
+  <!-- 未配对：首页就是一个扫码入口。
+       原来这里放了三步说明卡 + 一个「扫码配对主机」按钮，按钮还要再跳一页 ——
+       三步说明是 pair 页那套表单的说明书，表单已经没有了，说明也就没人读了。 -->
+  <block wx:if="{{!paired}}">
+    <view class="hero">
+      <view class="hero-mark">DSH</view>
+      <view class="hero-title">远程控制</view>
+      <view class="hero-desc">在手机上驱动主机上的 DeepSeek Harness。</view>
+
+      <!-- 主路径只有一条，且就地完成：扫完即连，不跳页 -->
+      <view class="btn-gap">
+        <t-button
+          theme="primary"
+        size="large"
+        block
+        loading="{{busy}}"
+        disabled="{{busy || !scanReady}}"
+        bindtap="onScan">{{busy ? '正在连接…' : '扫描主机二维码'}}</t-button>
+      </view>
+      <view wx:if="{{!scanReady}}" class="hero-note muted">当前环境没有扫码能力，请用下面的手动输入。</view>
+
+      <!-- 手动输入：默认收起。没摄像头（模拟器）或二维码扫不出来时才需要它，
+           平时占版面却没人用 —— 折叠起来，但**入口必须一直在**，
+           「藏起来」和「折叠起来」的区别是后者一眼看得见。 -->
+      <view class="manual-toggle" hover-class="pressed" bindtap="onToggleManual">
+        <view class="caret {{manualOpen ? 'up' : ''}}"></view>
+        <text>{{manualOpen ? '收起手动输入' : '手动输入'}}</text>
+      </view>
+
+      <view class="card manual" wx:if="{{manualOpen}}">
+        <view class="manual-label">粘贴二维码内容</view>
+        <view class="field-box">
+          <input
+            class="field-input"
+            placeholder="dshr:/p?…"
+            placeholder-class="field-ph"
+            confirm-type="done"
+            value="{{pasteText}}"
+            bindinput="onPasteInput"
+            bindblur="onPasteCommit"
+            bindconfirm="onPasteCommit" />
+          <view
+            wx:if="{{pasteText}}"
+            class="field-clear"
+            hover-class="pressed"
+            hover-stay-time="80"
+            bindtap="onPasteClear">✕</view>
+          <view
+            wx:else
+            class="field-paste"
+            hover-class="pressed"
+            hover-stay-time="80"
+            bindtap="onPasteClipboard">粘贴</view>
+        </view>
+
+        <!-- 6 位配对码：二维码里没带时才要手输。进度点给一个「还差几位」的可见反馈 -->
+        <view class="manual-label">主机上的 6 位配对码</view>
+        <view class="code-box">
+          <input
+            class="code-input"
+            type="number"
+            maxlength="6"
+            placeholder="000000"
+            placeholder-class="code-ph"
+            value="{{token}}"
+            bindinput="onTokenInput" />
+          <view class="code-scale">
+            <view
+              wx:for="{{[0, 1, 2, 3, 4, 5]}}"
+              wx:key="*this"
+              class="code-pip {{token.length > item ? 'on' : ''}}"></view>
+          </view>
+        </view>
+
+        <view class="btn-gap">
+          <t-button theme="primary" variant="light" size="large" block loading="{{busy}}" disabled="{{busy}}" bindtap="onPair">
+            {{busy ? '配对中…' : '开始配对'}}
+          </t-button>
+        </view>
+
+        <view class="foot-note muted">配对密钥只保存在本机，指令在手机上加密后再发出。</view>
+      </view>
+    </view>
+  </block>
+
+  <block wx:if="{{paired}}">
+    <!-- 主机卡：连接状态 + 防休眠。比一行 cell 更能一眼看出"现在到底通不通" -->
+    <view class="host card">
+      <view class="host-head">
+        <view class="dot {{statusTheme}} {{connecting ? 'blink' : ''}}"></view>
+        <view class="host-name ellipsis">{{hostLabel || '主机'}}</view>
+        <view class="pill {{statusTheme}}">{{statusLabel}}</view>
+      </view>
+      <view class="host-sub ellipsis">{{statusText || '已就绪'}}</view>
+
+      <view class="host-divider"></view>
+
+      <view class="host-keep">
+        <view class="host-keep-main">
+          <view class="keep-title">防休眠</view>
+          <view class="keep-desc muted">{{keepAwakeText}}</view>
+        </view>
+        <t-switch
+          value="{{keepAwakeOn}}"
+          bind:change="onToggleKeepAwake"
+          disabled="{{status !== 'online'}}" />
+      </view>
+    </view>
+
+    <!-- 分区标题右侧放「新建会话」：它是这一页的主动作，跟着列表走。
+         不隐藏而是在离线时置灰 —— 一个会突然消失的入口比一个说明白的禁用好懂得多。 -->
+    <view class="section-title">
+      <text>会话</text>
+      <text class="section-count">{{sessions.length}}</text>
+      <view
+        class="section-action {{status === 'online' ? '' : 'off'}} {{creating ? 'busy' : ''}}"
+        hover-class="{{status === 'online' && !creating ? 'pressed' : ''}}"
+        hover-stay-time="80"
+        bindtap="onNewSession">
+        <view wx:if="{{creating}}" class="new-spin"></view>
+        <text>{{creating ? '正在新建…' : '＋ 新建会话'}}</text>
+      </view>
+    </view>
+
+    <view wx:if="{{sessions.length === 0}}" class="card empty-card">
+      <t-empty
+        icon="chat"
+        description="{{hiddenArchived ? '这里只有归档会话，已隐藏' : (status === 'online' ? '主机上还没有会话。点上面的「＋ 新建会话」开一条' : '连上主机后，这里会列出它的会话')}}" />
+    </view>
+
+    <view wx:else class="card">
+      <block wx:for="{{sessions}}" wx:for-index="idx" wx:key="id">
+        <!-- 分隔线用显式元素而不是 :not(:last-child)：wxss 的选择器支持面越窄越好 -->
+        <view wx:if="{{idx > 0}}" class="sess-line"></view>
+        <view
+          class="sess"
+          hover-class="pressed"
+          hover-stay-time="80"
+          data-id="{{item.id}}"
+          data-title="{{item.title}}"
+          bindtap="onOpen">
+          <!-- 左侧色条：运行中/待办扫一眼就能看出来，不用逐行读文字 -->
+          <view class="sess-bar {{item.badgeTheme}}"></view>
+
+          <view class="sess-main">
+            <view class="sess-title ellipsis">{{item.title}}</view>
+            <view class="sess-sub ellipsis">{{item.workspace || item.id}}</view>
+          </view>
+
+          <view class="sess-right">
+            <view class="sess-badge {{item.badgeTheme}}">
+              <view wx:if="{{item.running}}" class="pulse"></view>
+              <text>{{item.badgeText}}</text>
+            </view>
+            <view class="sess-time">{{item.updatedAt}}</view>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <!-- 归档会话被藏起来了，得留一句话，否则用户会以为会话丢了 -->
+    <view wx:if="{{hiddenText}}" class="hidden-note">{{hiddenText}}</view>
+
+    <!-- 底部：不常用但要能改的东西。重新配对**就地重新扫码**，不再跳页；
+         解除配对必须在这里有位置 —— pair 页删掉之后，这里是唯一的入口，
+         藏着的话用户就再也没法解除了。 -->
+    <view class="footer-row">
+      <view class="footer-link dim" hover-class="pressed" bindtap="onScan">重新配对</view>
+      <view class="footer-link dim" hover-class="pressed" bindtap="onUnpair">解除配对</view>
+      <view class="theme-toggle" hover-class="pressed" hover-stay-time="80" bindtap="onToggleTheme">
+        <view class="theme-glyph {{themeName}}"></view>
+        <text>{{themeName === 'dark' ? '浅色' : '深色'}}</text>
+      </view>
+    </view>
+  </block>
+</view>

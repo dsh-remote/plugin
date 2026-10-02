@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "comment": "只为把这个目录标成 CommonJS（Node 侧加载这些文件时需要）；小程序运行时无视它。已在 packOptions.ignore 里，不会打进包。"
+}

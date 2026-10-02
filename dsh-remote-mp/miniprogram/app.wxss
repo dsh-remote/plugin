@@ -1,0 +1,148 @@
+/* 全局样式：TDesign 设计变量 + 页面级骨架（组件内部样式由 TDesign 提供） */
+@import './miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss';
+/* 主题变量表。**三份的 import 顺序不能换**，理由逐条：
+   ① _index.wxss —— TDesign 原件，深浅两套都包在 @media (prefers-color-scheme) 里。
+   ② theme/light.wxss —— 浅色（**默认态**）。把浅色变量从 @media 里解放出来、
+      无条件生效，选择器与 TDesign 同为 .page,page，靠「同特异性下源码顺序靠后的胜出」
+      压掉 _index 里的深色分支。所以**系统是深色也是白底深字**。
+   ③ theme/dark.wxss —— 深色。选择器是 .theme-dark，挂在**页面根容器**的 class 上。
+      必须在 light 之后：light 写在 page 上会向下继承，本表靠顺序压掉它。
+   ②③ 两份都是 scripts/gen-mp-theme.mjs 的生成物，不要手改。 */
+@import './theme/light.wxss';
+@import './theme/dark.wxss';
+
+page {
+  background: var(--td-bg-color-page, #f3f3f3);
+  color: var(--td-text-color-primary, #1f2329);
+  font-size: 28rpx;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  /* 页面自身高度由系统给出：用 % 而不是 100vh，否则 iOS 上会把导航栏高度
+     也算进去，底部输入区被顶出屏幕（移动端「排版错乱」最常见的成因）。 */
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+view, scroll-view, input, textarea, button {
+  box-sizing: border-box;
+}
+
+.page-pad {
+  padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom));
+  /* 必须自带底色 + 铺满。
+     为什么：深色变量挂在**根容器**的 class 上（.theme-dark），而 `page` 元素自己
+     永远是浅色（浅色表写在 .page,page 上，那是默认态）。根容器不铺满、不画底色的话，
+     深色下会从下边缘 / 短内容处透出那条浅色带 —— 看着像"深色没铺满"。
+     min-height 而不是 height：内容不足一屏时底色也要到底。 */
+  min-height: 100%;
+  background: var(--td-bg-color-page);
+}
+
+/* ── 卡片：三页共用的基础容器 ─────────────────────────────────────────
+   统一圆角与描边。白底 + 描边而不是投影：真机上投影在小屏里会糊成一片，
+   描边在浅/深色两种主题下都干净。 */
+.card {
+  background: var(--td-bg-color-container, #ffffff);
+  border: 2rpx solid var(--td-component-border, #e7e7e7);
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+
+/* 区块标题：不算内容，只是标签 */
+.section-title {
+  font-size: 26rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+  padding: 24rpx 16rpx 12rpx;
+}
+
+/* 单行可省略文本：会话标题、路径这类长度不可控的内容 */
+.ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.mono {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* 弱化的辅助文字 */
+.muted {
+  color: var(--td-text-color-secondary, #5c6470);
+  font-size: 24rpx;
+  line-height: 36rpx;
+}
+
+/* 可点区域的统一按压反馈（view 用 hover-class="pressed"）。
+   小程序没有 :active，不显式声明的话点下去毫无反馈。 */
+.pressed {
+  opacity: 0.55;
+}
+
+/* ── 语义色：状态圆点与胶囊标签，sessions / pair 两页共用 ───────────
+   这两组颜色到处都要用（在线/连接中/异常/待办），散在各页写就会漂。 */
+.dot {
+  flex: 0 0 auto;
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.dot.success { background: var(--td-success-color, #2ba471); }
+.dot.primary { background: var(--td-brand-color, #0052d9); }
+.dot.warning { background: var(--td-warning-color, #e37318); }
+.dot.danger { background: var(--td-error-color, #d54941); }
+.dot.blink { animation: dot-blink 1.1s ease-in-out infinite; }
+
+.pill {
+  flex: 0 0 auto;
+  font-size: 22rpx;
+  line-height: 34rpx;
+  padding: 2rpx 16rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+.pill.success {
+  background: var(--td-success-color-1, #e3f9e9);
+  color: var(--td-success-color-6, #008858);
+}
+
+.pill.primary {
+  background: var(--td-brand-color-1, #f2f3ff);
+  color: var(--td-brand-color-on-tint, #0052d9);
+}
+
+.pill.warning {
+  background: var(--td-warning-color-1, #fff1e9);
+  color: var(--td-warning-color-6, #be5a00);
+}
+
+.pill.danger {
+  background: var(--td-error-color-1, #fff0ed);
+  color: var(--td-error-color-6, #d54941);
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+/* 底部文字链接：sessions / pair 两页共用 */
+.footer-link {
+  margin-top: 40rpx;
+  text-align: center;
+  color: var(--td-brand-color-on-tint, #0052d9);
+  font-size: 26rpx;
+  line-height: 44rpx;
+  padding: 16rpx;
+}
+
+.footer-link.dim {
+  color: var(--td-text-color-placeholder, #a0a6b0);
+  font-size: 24rpx;
+  margin-top: 8rpx;
+}

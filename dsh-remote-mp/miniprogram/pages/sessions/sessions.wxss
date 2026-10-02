@@ -1,0 +1,478 @@
+/* sessions 页：组件之外只剩少量布局。
+   颜色一律走 TDesign 变量：主题按 prefers-color-scheme 自动切换，
+   写死 #fff 的话在深色模式手机上会变成白底白字。 */
+
+/* ── 未配对：扫码入口 + 折叠的手动输入 ──────────────────────────────
+   原来这里还有一张三步说明卡（hero-steps）。删掉 pair 页之后，表单已经没了，
+   那三步是在给一张已经不存在的表单写说明书 —— 留着只是占版面。 */
+.hero {
+  padding-top: 56rpx;
+}
+
+.hero-mark {
+  width: 96rpx;
+  height: 96rpx;
+  margin: 0 auto 24rpx;
+  border-radius: 24rpx;
+  background: var(--td-brand-color, #0052d9);
+  color: var(--td-text-color-anti, #ffffff);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 32rpx;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hero-title {
+  text-align: center;
+  font-size: 40rpx;
+  font-weight: 500;
+}
+
+.hero-desc {
+  margin: 16rpx 8rpx 8rpx;
+  text-align: center;
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+.hero-note {
+  margin-top: 20rpx;
+  text-align: center;
+}
+
+/* 手动输入的开关。纯 CSS 三角，展开时翻转 —— 比两个纯文字更能提示可折叠 */
+.manual-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 28rpx;
+  padding: 16rpx;
+  font-size: 26rpx;
+  color: var(--td-brand-color-on-tint, #0052d9);
+}
+
+.caret {
+  width: 0;
+  height: 0;
+  margin-right: 12rpx;
+  border-left: 10rpx solid transparent;
+  border-right: 10rpx solid transparent;
+  border-top: 12rpx solid var(--td-brand-color, #0052d9);
+  transition: transform 0.2s ease;
+}
+
+.caret.up {
+  transform: rotate(180deg);
+}
+
+.manual {
+  margin-top: 8rpx;
+  padding: 28rpx;
+}
+
+.manual-label {
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+  margin-bottom: 12rpx;
+}
+
+.manual-label + .field-box,
+.manual-label + .code-box {
+  margin-bottom: 28rpx;
+}
+
+/* 输入行：浅底嵌入卡片，看上去就是个可输入的框。
+   input 必须显式 height：靠上下 padding 撑高会把文字垂直裁掉（真机实证）。 */
+.field-box {
+  display: flex;
+  align-items: center;
+  height: 96rpx;
+  padding: 0 16rpx 0 24rpx;
+  border-radius: 16rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 96rpx;
+  line-height: 96rpx;
+  font-size: 28rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.field-ph {
+  font-size: 28rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.field-clear {
+  flex: 0 0 auto;
+  width: 52rpx;
+  height: 52rpx;
+  line-height: 52rpx;
+  text-align: center;
+  margin-left: 12rpx;
+  border-radius: 50%;
+  background: var(--td-bg-color-component, #e7e7e7);
+  color: var(--td-text-color-placeholder, #a0a6b0);
+  font-size: 24rpx;
+}
+
+/* 读剪贴板：不必让用户长按输入框去粘，点一下就行 */
+.field-paste {
+  flex: 0 0 auto;
+  height: 56rpx;
+  line-height: 56rpx;
+  padding: 0 24rpx;
+  margin-left: 12rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-container, #ffffff);
+  color: var(--td-brand-color-on-tint, #0052d9);
+  font-size: 24rpx;
+}
+
+/* 6 位配对码：大号居中，配一排进度点 */
+.code-box {
+  padding: 16rpx 16rpx 20rpx;
+  border-radius: 16rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.code-input {
+  width: 100%;
+  height: 104rpx;
+  line-height: 104rpx;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 56rpx;
+  letter-spacing: 20rpx;
+  /* letter-spacing 会在最后一个字符后面也留一格，往左挪一点视觉才居中 */
+  padding-left: 20rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.code-ph {
+  font-size: 40rpx;
+  letter-spacing: 16rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.code-scale {
+  display: flex;
+  justify-content: center;
+  margin-top: 8rpx;
+}
+
+.code-pip {
+  width: 44rpx;
+  height: 6rpx;
+  border-radius: 3rpx;
+  margin: 0 6rpx;
+  background: var(--td-component-border, #dcdcdc);
+}
+
+.code-pip.on {
+  background: var(--td-brand-color, #0052d9);
+}
+
+.foot-note {
+  margin-top: 24rpx;
+  text-align: center;
+  font-size: 22rpx;
+  line-height: 34rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+/* 环境缺能力的警示卡 */
+.warn {
+  background: var(--td-error-color-1, #fff0ed);
+  border-color: var(--td-error-color-3, #ffb9b0);
+  padding: 24rpx;
+  margin-top: 24rpx;
+}
+
+.warn-title {
+  font-size: 30rpx;
+  font-weight: 500;
+  margin-bottom: 12rpx;
+  color: var(--td-error-color-6, #d54941);
+}
+
+.warn-text {
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.btn-gap {
+  margin-top: 32rpx;
+}
+
+/* ── 主机卡 ─────────────────────────────────────────────────────── */
+.host {
+  padding: 28rpx;
+}
+
+.host-head {
+  display: flex;
+  align-items: center;
+}
+
+/* 颜色来自 app.wxss 的 .dot；这里只管间距 */
+.host-head .dot {
+  margin-right: 14rpx;
+}
+
+.host-name {
+  flex: 1 1 auto;
+  font-size: 32rpx;
+  font-weight: 500;
+}
+
+.host-sub {
+  margin: 12rpx 0 0 30rpx;
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+.host-divider {
+  height: 2rpx;
+  margin: 26rpx 0;
+  background: var(--td-component-border, #dcdcdc);
+}
+
+.host-keep {
+  display: flex;
+  align-items: center;
+}
+
+.host-keep-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.keep-title {
+  font-size: 28rpx;
+}
+
+.keep-desc {
+  margin-top: 4rpx;
+}
+
+/* ── 会话列表 ───────────────────────────────────────────────────── */
+.section-title {
+  display: flex;
+  align-items: center;
+}
+
+.section-count {
+  margin-left: 12rpx;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+/* 「＋ 新建会话」。它是这一页的主动作，但**不做成实心大按钮** ——
+   一屏里已经有一张主机卡，再放一个实心主按钮就会和它抢注意力（skill 坑位 8），
+   所以用 tonal（浅品牌底 + 品牌字）这一档。 */
+.section-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 56rpx;
+  padding: 0 22rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  background: var(--td-brand-color-1, #f2f3ff);
+  color: var(--td-brand-color-on-tint, #0052d9);
+}
+
+/* 没连上时置灰：**能看见、能点，点了会说为什么**。
+   直接藏起来看着更干净，但用户不知道去哪找，也不知道为什么没有。 */
+.section-action.off {
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.section-action.busy {
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-secondary, #666);
+}
+
+/* 转圈：CSS 画，不引图标字体（图标字体走远程 CDN，拉不到就是空白方块） */
+.new-spin {
+  width: 20rpx;
+  height: 20rpx;
+  margin-right: 10rpx;
+  border: 3rpx solid var(--td-component-border, #dcdcdc);
+  border-top-color: var(--td-brand-color, #0052d9);
+  border-radius: 50%;
+  animation: new-spin 0.8s linear infinite;
+}
+
+@keyframes new-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty-card {
+  padding: 32rpx 0 16rpx;
+}
+
+/* 归档会话被过滤掉时的一句说明（居中、弱化，别抢会话行的注意力） */
+.hidden-note {
+  margin-top: 20rpx;
+  text-align: center;
+  font-size: 22rpx;
+  line-height: 34rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.sess {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 24rpx 24rpx 0;
+}
+
+.sess-line {
+  height: 2rpx;
+  margin-left: 30rpx;
+  background: var(--td-component-border, #dcdcdc);
+}
+
+/* 色条贴左边框：圆角只给右侧，免得被卡片的 overflow:hidden 裁掉 */
+.sess-bar {
+  flex: 0 0 auto;
+  width: 8rpx;
+  height: 64rpx;
+  border-radius: 0 8rpx 8rpx 0;
+}
+
+.sess-bar.primary { background: var(--td-brand-color, #0052d9); }
+.sess-bar.warning { background: var(--td-warning-color, #e37318); }
+.sess-bar.default { background: transparent; }
+
+.sess-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 22rpx;
+}
+
+.sess-title {
+  font-size: 30rpx;
+  line-height: 42rpx;
+}
+
+.sess-sub {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.sess-right {
+  flex: 0 0 auto;
+  margin-left: 16rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.sess-badge {
+  display: flex;
+  align-items: center;
+  font-size: 22rpx;
+  line-height: 32rpx;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+.sess-badge.primary {
+  background: var(--td-brand-color-1, #f2f3ff);
+  color: var(--td-brand-color-on-tint, #0052d9);
+}
+
+.sess-badge.warning {
+  background: var(--td-warning-color-1, #fff1e9);
+  color: var(--td-warning-color-6, #be5a00);
+}
+
+.sess-time {
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.pulse {
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 50%;
+  margin-right: 8rpx;
+  background: var(--td-text-color-secondary, #5c6470);
+  animation: dot-blink 1.1s ease-in-out infinite;
+}
+
+.sess-badge.primary .pulse {
+  background: var(--td-brand-color, #0052d9);
+}
+
+/* ── 底部：重新配对 / 解除配对 / 外观切换 ──────────────────────────────
+   放底部而不是顶栏：这些是"偶尔改一次"的设置，顶栏是窗口控制条，
+   塞设置会把运行态的信息挤掉。
+   图形用 CSS 画（半边月 / 圆饼），不用 t-icon —— 图标字体走远程 CDN，
+   拉不到就是一堆空白方块且不报错。 */
+.footer-row {
+  display: flex;
+  align-items: center;
+  margin-top: 24rpx;
+}
+
+/* 两个文字入口在左，主题切换靠右。给文字入口一点右间距，
+   否则「重新配对」「解除配对」会挤在一起读成一句。 */
+.footer-row .footer-link {
+  margin-top: 0;
+  margin-right: 32rpx;
+}
+
+.theme-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  margin-top: 0;
+  padding: 12rpx 22rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  border: 2rpx solid var(--td-component-border, #e7e7e7);
+}
+
+/* 当前是浅色 → 画一个"月牙"，表示"点了变深"；反之画一个"圆饼"。
+   形状与语义对齐：用户看到月亮就知道要去暗色那边。 */
+.theme-glyph {
+  width: 26rpx;
+  height: 26rpx;
+  border-radius: 50%;
+  margin-right: 10rpx;
+}
+
+.theme-glyph.light {
+  background: var(--td-text-color-primary, #1f2329);
+  /* 挖出一个圆：靠 box-shadow 往右偏移投出同色圆盘遮住一部分 */
+  box-shadow: inset -7rpx -3rpx 0 0 var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.theme-glyph.dark {
+  border: 3rpx solid var(--td-text-color-primary, #1f2329);
+  background: transparent;
+}

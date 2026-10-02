@@ -1,0 +1,76 @@
+name: Bug 报告
+description: 小程序行为不对（连不上、配不上、界面错位、历史读不出来）。
+title: 'bug: '
+labels: ['bug', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提交 bug。**请勿在此报告安全漏洞**——见
+        [SECURITY.md](https://github.com/providcc/dsh-remote-mp/blob/main/SECURITY.md)。
+
+        贴截图或日志前请**先脱敏**：配对二维码、`dshr:/p?...` 载荷、PSK 都换掉。
+        配对码是一次性的但仍能连上，等于把会话送人。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 对 bug 的清晰简洁描述。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望的是什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 从打开小程序到出错的完整步骤。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      placeholder: 例如 v1.0.0 或某个 commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      placeholder: 例如 微信开发者工具 1.06 / iOS 真机 微信 8.0.5x / 基础库 3.17.3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 涉及哪一端？
+      multiple: true
+      options:
+        - 小程序界面 / 交互（本仓）
+        - 配对 / 连接
+        - 会话列表 / 历史读取
+        - 对话页块流 / 流式
+        - 主题（浅/深）
+        - 宿主插件
+        - 中继服务
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: 开发者工具 Console / 真机 vConsole 的关键报错
+      description: 有就贴（已脱敏）。环境自检那一行尤其有用。
+      render: shell
