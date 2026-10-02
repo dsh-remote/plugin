@@ -2,13 +2,14 @@
      小程序默认不会因为点到别处而收键盘，键盘会一直盖住半屏。 -->
 <view class="chat-wrap {{themeClass}}" bindtap="onTapBlank">
 
-  <!-- 顶栏：这一页的「窗口控制条」—— 连接/运行状态、过程块一键展开、中断。
+  <!-- 顶栏：这一页的「窗口控制条」—— 运行状态与中断。
+       过程块默认不显示（见 chat.js 的 SHOW_STEPS），所以没有「展开过程」；
        中断放这里而不是输入区：键盘弹起时输入区会被顶走，而中断恰恰是那时候最想按的。 -->
   <view class="bar">
     <view class="dot {{barTheme}} {{running ? 'blink' : ''}}"></view>
     <view class="bar-text ellipsis">{{barText}}</view>
     <view
-      wx:if="{{foldable}}"
+      wx:if="{{showSteps && foldable}}"
       class="bar-btn"
       hover-class="pressed"
       hover-stay-time="80"
@@ -101,9 +102,16 @@
             </view>
           </view>
 
-          <!-- 步骤组：「想 → 调工具 → 再想」聚成一条。收起时只占一行，
-               这是这一页最重要的窗口管理 —— 一轮调 6 次工具不该让人翻 6 屏。 -->
-          <view wx:elif="{{item.kind === 'steps'}}" class="steps">
+          <!-- 步骤组：「想 → 调工具 → 再想」聚成一条。整段**默认不渲染**。
+               数据照样落在 blocks 里：审批要知道主机在调什么、历史回放要对得上 callId，
+               删掉落块会连带坏掉那些。「不显示」是渲染层的决定，「记不记」是数据层的。
+
+               ⚠️ 这里必须用**独立的 wx:if**，不能是上一支的 wx:elif 加条件：
+               `wx:elif` 条件为假时会落到末尾的 `wx:else`（note 分支），
+               于是每个步骤组都会变成一个**空的提示条** —— 过程没显示，还多出一排空行。
+               换成 wx:if 后条件为假就是什么都不渲染。
+               留着这段的代价只是几行 wx:if，收益是哪天想看过程改一个常量就回来。 -->
+          <view wx:if="{{item.kind === 'steps' && showSteps}}" class="steps">
             <view
               class="steps-bar"
               hover-class="pressed"
@@ -180,15 +188,20 @@
             </view>
           </view>
 
-          <!-- 回复正文：靠左的卡片气泡。它才是这页的主体，所以只留 6% 的缝 —— 
-               足够让人看出它靠左，又几乎不损失长文的可读宽度。 -->
-          <view wx:elif="{{item.kind === 'text'}}" class="reply-row">
+          <!-- 回复正文：靠左的卡片气泡。它才是这页的主体，所以只留 6% 的缝 ——
+               足够让人看出它靠左，又几乎不损失长文的可读宽度。
+               从这里开始重新用独立的 wx:if 链：上一支的 steps 已经改成独立 wx:if，
+               这一支不能再是它的 wx:elif（否则它会跟着 steps 一起消失）。 -->
+          <view wx:if="{{item.kind === 'text'}}" class="reply-row">
             <view class="reply">
               <text user-select>{{item.text}}</text><text wx:if="{{!item.done}}" class="caret"></text>
             </view>
           </view>
 
-          <view wx:else class="note">{{item.text}}</view>
+          <!-- 系统提示。显式写 kind === 'note'，不用裸 wx:else：
+               裸 else 会把"没匹配上任何一支"的块也画出来（上一支 steps 关闭时
+               就是这样 —— 一排空提示条）。写明白条件，不匹配就是什么都不渲染。 -->
+          <view wx:if="{{item.kind === 'note'}}" class="note">{{item.text}}</view>
         </view>
       </block>
 

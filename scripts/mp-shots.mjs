@@ -256,8 +256,9 @@ const SHOTS = {
       theme: 'dark',
       data: {
         title: '重做小程序对话页信息流',
+        showSteps: true, // 这张专门验过程卡的深色配色，要显式打开
         running: true,
-        barText: '主机运行中',
+        barText: '思考中…',
         barTheme: 'primary',
         foldable: 1,
         turn: 1,
@@ -319,6 +320,48 @@ const SHOTS = {
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
     {
+      // **默认态**：过程不显示，屏幕上只有你的指令、顶栏的「思考中…」和正文。
+      // 这才是用户实际会看到的那一屏 —— 前面那些带 showSteps 的场景是"打开开关之后"
+      // 的样子，属于回归备用，不能拿它们当默认验收。
+      name: 'chat-plain',
+      url: '/pages/chat/chat',
+      data: {
+        running: true,
+        barText: '思考中…',
+        barTheme: 'primary',
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:10' },
+          { key: 'u1', kind: 'user', text: '把两个测试失败查清楚', confirmed: true },
+          {
+            // 故意塞一个 steps 块：默认态下它**不该被渲染**（要能在这张图上
+            // 确认"没有那一行『正在执行 N 个步骤』"）
+            key: 'x1',
+            kind: 'steps',
+            closed: false,
+            open: true,
+            live: true,
+            tools: 3,
+            label: '正在执行 3 个步骤',
+            items: [
+              { key: 'k1', type: 'think', msText: '1.2s', done: true },
+              {
+                key: 't1',
+                type: 'tool',
+                phase: 'completed',
+                tool: 'Bash',
+                title: 'pnpm -C e2e test',
+                result: '2 项失败',
+                preview: '2 项失败',
+                open: false,
+              },
+            ],
+          },
+          { key: 'm1', kind: 'text', text: '两条都指向同一个原因，改掉就行。', done: false },
+        ],
+      },
+    },
+    {
       // 运行中的一轮，且步骤组**很长**（6 步工具）。
       // 这是专门用来验「过程窗口限高」的：展开后不该把下面的正文顶出屏幕 ——
       // 截图里正文必须还露在窗口下面，否则限高就没生效。
@@ -327,8 +370,9 @@ const SHOTS = {
       name: 'chat-live',
       url: '/pages/chat/chat',
       data: {
+        showSteps: true, // 这张要看到过程块，所以显式打开
         running: true,
-        barText: '主机运行中',
+        barText: '思考中…',
         barTheme: 'primary',
         foldable: 1,
         turn: 1,
@@ -432,6 +476,7 @@ const SHOTS = {
       name: 'chat-jump',
       url: '/pages/chat/chat',
       data: {
+        showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
         barText: '空闲',
         barTheme: 'success',
@@ -479,6 +524,7 @@ const SHOTS = {
       name: 'chat-steps',
       url: '/pages/chat/chat',
       data: {
+        showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
         barText: '空闲',
         barTheme: 'success',
@@ -564,6 +610,7 @@ const SHOTS = {
       name: 'chat-history',
       url: '/pages/chat/chat',
       data: {
+        showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
         barText: '空闲',
         barTheme: 'success',

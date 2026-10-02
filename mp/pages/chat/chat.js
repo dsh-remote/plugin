@@ -29,7 +29,20 @@ var theme = require('../../core/theme.js')
  * 3. 流式 delta 逐帧 setData 会卡，先合并再按帧刷（沿用原有策略）。
  * 4. 步骤组要「封口」：一旦有正文/轮次/指令出现，就不再往这一组里塞东西
  *    （`_sealSteps`）。漏了会把新的工具调用插进上一段已经读完的过程里。
+ *
+ * ── 过程默认不显示（SHOW_STEPS）────────────────────────────────────
+ * 手机上要看的是**结论**，不是过程。所以 `steps` 块照常在数据流里落块
+ * （审批要知道主机在调什么、去重与回放都要用到），但**默认不渲染**，
+ * 顶栏用一行「思考中…」表达"它还在动"。
+ *
+ * 为什么不把落块逻辑删掉：那些块是**唯一**的真相来源。删了之后
+ * ① 工具参数/结果帧无处落（`_replaceTool` 按 callId 找不到就退化成新开一组），
+ * ② 历史回放里每一步的 id 对不上，正文会插到错误位置。
+ * 也就是说"不显示"是渲染层的决定，"记不记"是数据层的决定，两件事要分开。
+ *
+ * 要临时看过程：把 SHOW_STEPS 改成 true，wxml 与顶栏按钮会一起回来。
  */
+var SHOW_STEPS = false
 var MAX_BLOCKS = 400
 var MAX_TEXT_PER_BLOCK = 20000
 var DELTA_FLUSH_MS = 100
@@ -135,6 +148,11 @@ Page({
     foldable: 0,
     /** 全局「展开过程」：之后新开的步骤组会继承这个状态 */
     expanded: false,
+    /**
+     * 过程块渲不渲染。见文件头 SHOW_STEPS 的说明：**数据照落，只是不显示**。
+     * 顶栏的「展开过程」按钮与 wxml 里 steps 分支都看这一个字段。
+     */
+    showSteps: SHOW_STEPS,
     /**
      * 历史读取的四个状态：
      *   idle    还没试过（未配对 / 未连上）
@@ -341,7 +359,10 @@ Page({
   _renderBar: function () {
     var c = this.client
     var text
-    if (this.data.running) text = '主机运行中'
+    // 运行中说「思考中…」而不是「主机运行中」：过程块默认不显示，
+    // 这一行是用户唯一能看见的"它还在动"的信号 —— 说「运行中」像是
+    // 有什么可看的东西其实没有，说「思考中」才是实情。
+    if (this.data.running) text = '思考中…'
     else if (typeof c.status === 'string' && c.status !== 'online') text = c.statusText || '未连接'
     else text = '空闲'
     this.setData({ barText: text, barTheme: this.data.running ? 'primary' : connTheme(c.status) })

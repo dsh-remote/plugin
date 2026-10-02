@@ -285,6 +285,49 @@ for (const must of ['node_modules', 'core/package.json', 'package-lock.json']) {
   }
 }
 
+// ⑧ 分支链不许有"用 wx:elif 关掉一支、却让内容落到后面兜底 else"的组合。
+//    wxml 的规则：wx:elif 条件为假会**落到后面的 wx:else**，而不是什么都不渲染。
+//    于是「用 wx:elif 加条件把某一支关掉」的结果是：那一支被末尾的 else 接手，
+//    渲染出一排本不该出现的元素。真踩过 —— 隐藏过程块时每个步骤组变成一个空提示条，
+//    而且编译、单测、逻辑全对，只有渲染层看得见。
+//    正确写法：被条件关掉的那一支用**独立 wx:if**，不匹配就什么都不渲染。
+//
+//    两种正当写法**不能**误报（第一版就误报了三处）：
+//    · 多分支互斥链且**末尾没有 else**：loading / error / hasMore / ok 那种，各条互斥，
+//      条件为假自然什么都不渲染。
+//    · 末尾的 else 与**紧邻的 if 恰好互补**：`wx:if="{{pasteText}}"` / `wx:else`、
+//      `think` / `tool` 这种二选一。
+//    所以判据收紧成一条：**有兜底 else，且它前面存在"带逻辑运算的 wx:elif"** ——
+//    只有这个组合才会真的画出别的东西。
+{
+  for (const page of pages) {
+    const rel = `${page}.wxml`
+    const abs = path.join(MP_DIR, rel)
+    if (!existsSync(abs)) continue
+    // 先剥掉注释：注释里写"wx:else"是常事（这条自检的说明里就有），
+    // 不剥会把它当成真标签。
+    const wxml = read(abs).replace(/<!--[\s\S]*?-->/g, '')
+
+    // 判据只认一种形态：**块流按 kind 分派时，用 wx:elif 加条件关掉某一种 kind**。
+    // 这种写法下条件为假会落到同链末尾的 wx:else，于是被关掉的那一种 kind
+    // 会被末尾的 else 接手渲染 —— 过程块变成一排空提示条就是这么来的。
+    //
+    // 不做通用语法分析：互斥链（loading/error/hasMore/ok）与二元 else
+    // （think/tool、pasteText/粘贴）都是对的，不该报。
+    // 判据 = 「有按 item.kind 的 wx:elif 且条件带逻辑运算」+「有裸 wx:else」，
+    // 两者同文件即可疑（真出问题就是这个组合）。
+    const kindElif = [...wxml.matchAll(/wx:elif="\{\{\s*item\.kind\s*===[^"]*(&&|\|\|)[^"]*\}\}"/g)]
+    const catchAll = /<view\s+wx:else[\s>]/.test(wxml)
+    if (kindElif.length && catchAll) {
+      problems.push(
+        `${rel}: 用「wx:elif + 逻辑运算」按 item.kind 关掉某一种块，而文件里还有裸 wx:else —— ` +
+          `被关掉的那一种会落到 else 被渲染出来（命中 ${kindElif.length} 处）。` +
+          "要隐藏某一种块就用独立的 wx:if=\"{{item.kind === 'xxx' && 条件}}\"，不匹配就什么都不渲染",
+      )
+    }
+  }
+}
+
 if (!quiet) {
   if (notes.length) {
     console.log('提示（不算错）：')

@@ -194,7 +194,16 @@ const CASES = {
    * 只查①的话，一个"内容没了但视口停在旧高度"的 bug 照样全绿。
    */
   fold: async (page) => {
-    await page.setData({ blocks: foldFixture(8, true, 6), foldable: 8, expanded: true })
+    // **必须显式 showSteps: true**。过程块默认不渲染（chat.js 的 SHOW_STEPS=false），
+    // 不打开的话这里数到的卡片恒为 0、内容高度恒定 —— 判据会一直红，
+    // 而红的原因不是折叠坏了，是"根本没有过程可折"。
+    // 打开开关之后，折叠这套行为仍然要成立（那是留下来的代码），所以继续守。
+    await page.setData({
+      blocks: foldFixture(8, true, 6),
+      foldable: 8,
+      expanded: true,
+      showSteps: true,
+    })
     await page.waitFor(1200)
 
     const el = await page.$('.scroll')
@@ -224,6 +233,35 @@ const CASES = {
       [heightBefore - heightAfter > 1000, `内容要真的矮下来（${Math.round(heightBefore)} → ${Math.round(heightAfter)}）`],
       [groups.length === 8 && groups.every((g) => !g.open), 'data 里每一组都变成收起的'],
       [blank <= 4, `底下不许剩空白（blank = ${blank}px，scrollTop ${topAfter} / 上限 ${Math.round(heightAfter - viewport)}）`],
+    ]
+  },
+  /**
+   * 过程默认**不显示**（本轮的产品决定）：数据里有步骤组，渲染层却一个节点都不出。
+   *
+   * 这条判据读的是 `page.$$('.steps-card').length` —— **渲染层**的节点数，
+   * 不是 data 里的块数。两者混了这条断言就白写：data 里当然还有 steps 块
+   * （审批要知道主机在调什么、回放要对得上 callId），那是故意的。
+   *
+   * 顺带盯住那个空提示条：wx:elif 条件为假会落到末尾的 wx:else，
+   * 于是每个步骤组变成一个空 note —— 页面上会多出一排空行。
+   */
+  plain: async (page) => {
+    await page.setData({ blocks: foldFixture(4, true, 3), showSteps: false })
+    await page.waitFor(1200)
+
+    const data = await page.data()
+    const groups = data.blocks.filter((b) => b.kind === 'steps')
+    const cards = (await page.$$('.steps-card')).length
+    const bars = (await page.$$('.steps-bar')).length
+    const notes = (await page.$$('.note')).length
+    const replies = (await page.$$('.reply')).length
+
+    return [
+      [groups.length === 4, `data 里仍要有步骤组（${groups.length} 个）—— 不显示 ≠ 不记录`],
+      [cards === 0, `默认态不许渲染过程卡（数到 ${cards} 张）`],
+      [bars === 0, `过程那一行也不该出现（数到 ${bars} 个）`],
+      [notes === 0, `不许掉进 note 分支变成空提示条（数到 ${notes} 个）`],
+      [replies === 4, `正文要照常渲染（${replies} 条回复）`],
     ]
   },
   /**

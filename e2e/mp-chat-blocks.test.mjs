@@ -239,7 +239,9 @@ test('assistant/message 自带 done，不得据此判定这一轮结束', () => 
   })
   p._flushDelta()
   assert.equal(p.data.running, true, '一轮里可以有好几条 assistant/message，done 不代表 turn 结束')
-  assert.equal(p.data.barText, '主机运行中')
+  // 文案是「思考中…」而不是「主机运行中」：过程块默认不渲染（SHOW_STEPS=false），
+  // 顶栏这一行是用户唯一能看见的"它还在动"。说"运行中"像是有东西可看其实没有。
+  assert.equal(p.data.barText, '思考中…')
 })
 
 test('流式 delta 合并成一块，done 落在块上', () => {
@@ -391,6 +393,68 @@ test('「回到最新」的锚点必须是两个静态 id；过程窗口必须�
   assert.match(card, /scroll-into-view="\{\{item\.tailId\}\}"/, '要滚到组尾那一条')
   assert.match(card, /id="s\{\{it\.key\}\}"/, '每条要有落点 id，否则 scroll-into-view 无处可去')
   assert.match(wxss, /\.steps-scroll\s*\{[^}]*max-height/, '限高要写在 .steps-scroll 上')
+})
+
+// ── 过程默认不显示（SHOW_STEPS = false）────────────────────────────────
+
+test('过程块默认不渲染，但数据照样落块', () => {
+  const p = makePage()
+  assert.equal(p.data.showSteps, false, '手机上要看的是结论，不是过程')
+
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'started' })
+  send(p, {
+    t: 'ev.tool_event',
+    sessionId: 's1',
+    callId: 'c1',
+    tool: 'Bash',
+    phase: 'completed',
+    resultPreview: 'ok',
+  })
+
+  // 数据层：一个步骤组必须在，且收尾帧要能按 callId 找到原来那条并更新它
+  const g = p.data.blocks.find((b) => b.kind === 'steps')
+  assert.ok(g, '不显示 ≠ 不记录：审批要知道主机在调什么，回放要对得上 callId')
+  const tool = g.items.find((it) => it.callId === 'c1')
+  assert.equal(tool.phase, 'completed', '同一次调用的收尾帧要更新到原来那条，不能新开一组')
+  assert.equal(tool.result, 'ok')
+
+  // 渲染层：wxml 里那一支必须由 showSteps 门住
+  const wxml = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxml'), 'utf8')
+  assert.match(
+    wxml,
+    /wx:if="\{\{item\.kind === 'steps' && showSteps\}\}"/,
+    '过程块要用独立的 wx:if 挂 showSteps',
+  )
+  assert.ok(
+    !/wx:elif="\{\{item\.kind === 'steps'/.test(wxml),
+    '不能写成 wx:elif：条件为假会落到末尾的 else，把每个步骤组变成一个空提示条',
+  )
+  assert.ok(
+    !/<view\s+wx:else\s+class="note"/.test(wxml),
+    'note 分支要写明 kind 条件，裸 else 会接住所有没匹配上的块',
+  )
+  assert.match(wxml, /wx:if="\{\{item\.kind === 'note'\}\}"/, 'note 要显式写条件')
+  assert.match(wxml, /wx:if="\{\{showSteps && foldable\}\}"/, '顶栏「展开过程」也要跟着关')
+})
+
+test('运行中顶栏说「思考中…」—— 那一行是唯一的"它还在动"信号', () => {
+  const p = makePage()
+  stubClient(p, () => Promise.resolve(null))
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  assert.equal(p.data.barText, '思考中…')
+  assert.equal(p.data.barTheme, 'primary')
+
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.equal(p.data.barText, '空闲', '跑完要回到空闲，不能一直写着思考中')
+})
+
+test('顶栏的「展开过程」在过程不渲染时不会出现', () => {
+  const p = makePage()
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'completed' })
+  assert.ok(p.data.foldable > 0, '数据层仍知道有可展开的组')
+  assert.equal(p.data.showSteps && p.data.foldable > 0, false, '但 wxml 的条件为假，按钮不出现')
 })
 
 test('点空白收起键盘；输入区自己 catch 住不误收', () => {
@@ -611,7 +675,7 @@ test('列表里这条会话正在跑时，顶栏要跟着变（从列表点进�
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'running', running: true }], reason: 'list' })
   assert.equal(p.data.running, true)
-  assert.equal(p.data.barText, '主机运行中')
+  assert.equal(p.data.barText, '思考中…')
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'idle', running: false }], reason: 'refresh' })
   assert.equal(p.data.running, false)

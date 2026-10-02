@@ -42,7 +42,7 @@ mp/
     package.json        仅用于把该目录标记为 CommonJS（Node 侧测试用）
   pages/
     sessions/  入口页：未配对时**就地扫码配对**；已配对是主机状态 + 防休眠 + 会话列表
-    chat/      对话：文档流（步骤组可折叠）+ 流式正文 + 审批卡、提问卡、中断
+    chat/      对话：文档流 + 流式正文 + 审批卡、提问卡、中断（过程块默认不渲染）
 ```
 
 **只有两页。** 配对曾经是独立的 `pages/pair/`，后来按「首页直接扫码」删掉了 ——
@@ -168,7 +168,28 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
 
 五种块：`turn` 轮次分隔 / `user` 你的指令 / `steps` 步骤组 / `text` 回复正文 / `note` 系统提示。
 
-**步骤组是这一页的核心抽象**。一轮里模型「想 → 调工具 → 再想 → 再调」的过程被聚成**一条**，
+### 过程默认不显示（`SHOW_STEPS = false`）
+
+**手机上要看的是结论，不是过程。** 所以 `steps` 块默认**不渲染**，顶栏用一行
+「思考中…」表达"它还在动"。
+
+**数据照样落块。** 这两件事必须分开：
+
+| | 决定什么 | 在哪 |
+|---|---|---|
+| 「记不记」 | 数据层：步骤组、参数/结果帧、按 callId 去重 | `_applyTool` / `_decorate` |
+| 「显不显示」 | 渲染层：wxml 的 `showSteps` + 顶栏按钮 | `chat.js` 的 `SHOW_STEPS` |
+
+删掉落块逻辑会连带坏掉三件事：① 审批要知道主机正在调什么；② 收尾帧要靠 `callId`
+找到原来那条并更新它（找不到就退化成新开一组，一次调用出现两行）；③ 历史回放靠
+`callId` 对齐，错了正文会插到错误位置。
+
+要临时看过程：把 `SHOW_STEPS` 改回 `true`，wxml、顶栏按钮、截图与探针会一起回来。
+下面这些规则在开关打开时仍然全部成立，所以继续有人守。
+
+### 步骤组（`showSteps` 打开时的行为）
+
+一轮里模型「想 → 调工具 → 再想 → 再调」的过程被聚成**一条**，
 界面上就是「已完成 3 个步骤」一行，点开才看得到每条细节。不聚合的话，一轮调 6 次工具
 就是 12 个块，用户要翻 6 屏才读到那句结论。
 
@@ -191,6 +212,20 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
   渲染层只管取，不在 wxml 里现算。**「还在跑」只看组内有没有未完成的条目**，不看全局
   `running`，否则前面那些早已封口的老组也会跟着显示"正在执行"。
 - 空块流时**不补**「思考中」：那一轮还没开始，状态由顶栏表达，凭空冒出一条反而落单。
+
+### ⚠️ 隐藏一块渲染分支只能用独立 `wx:if`
+
+wxml 的规则是：`wx:elif` 条件为假会**落到后面的 `wx:else`**，而不是什么都不渲染。
+所以「用 `wx:elif` 加条件把某一支关掉」的结果是：那一支被末尾的 else 接手 ——
+隐藏过程块时每个步骤组都变成一个**空的提示条**，过程没显示，反而多出一排空行。
+
+正确写法：被条件关掉的那一支用**独立的 `wx:if`**，并且末尾的 `note` 分支要写明
+`wx:if="{{item.kind === 'note'}}"`，不要留裸 `wx:else` 接住所有没匹配上的块。
+
+`pnpm check:mp-ui` 第 ⑧ 项盯这个组合（带逻辑运算的 `wx:elif` + 兜底 `wx:else`）。
+注意**不能**误报正当写法：多分支互斥链（`loading`/`error`/`hasMore`/`ok`，末尾无 else）
+与二元 else（`think`/`tool`、`pasteText`/粘贴）都是对的。判据写第一版时误报了三处，
+反证时才发现。
 
 「思考」的时长是**推断**出来的 —— 它从出现到下一条内容之间的间隔。协议里没有"思考开始了"
 这种事件，「思考」正文更是按 M28 红线根本不出站（见上）。
@@ -293,14 +328,19 @@ pnpm -r test                          # 含下面几项
 node --test e2e/mp-crypto.test.mjs    # 11 项：base64/UTF-8/密钥派生/seal-open/篡改检测
 node --test e2e/mp-client.test.mjs    # 13 项：真实 client.js + wx shim 跑完整闭环（含取历史的结算语义）
 node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
-node --test e2e/mp-chat-blocks.test.mjs   # 22 项：chat 页块流时序 + 历史回放 + 过程窗口
+node --test e2e/mp-chat-blocks.test.mjs   # 25 项：chat 页块流时序 + 历史回放 + 过程默认不显示
 node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
 node --test e2e/mp-pairing.test.mjs       # 18 项：首页内联的配对（扫码即连、失败可重试、解除配对）
 node --test e2e/mp-theme.test.mjs         # 9 项：浅/深主题（默认、双向、跨启动、导航栏、存不下）
-pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义 + 主题接线 + 配对入口在位
+pnpm check:mp-ui                      # 组件/类名声明 + 主题接线 + 配对入口在位 + 分支链兜底 else
 pnpm mp:theme --check                 # 两份变量表是否还与 TDesign 同步（含深浅覆盖对账）
 pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
+
+`pnpm mp:probe` 有四组：`jump`（回到最新真的滚了）、`plain`（过程默认不渲染，
+且没掉进 note 分支变成空提示条）、`fold`（**显式 `showSteps: true`** 后折叠仍不留空白）、
+`theme`。`fold` 必须显式打开过程 —— 默认不渲染时它数到的卡片恒为 0，
+判据会一直红，而红的原因不是折叠坏了，是"根本没有过程可折"。
 
 `check:mp-ui` 第 ⑦ 项盯住**配对入口不许消失**：首页必须有 `wx.scanCode`、
 必须有元素 `bindtap` 到它、必须有 `bindtap="onUnpair"`、必须有 `wx:if="{{paired}}"`
