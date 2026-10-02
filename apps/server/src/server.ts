@@ -37,7 +37,7 @@ import {
   pong as pongFrameOf,
 } from '@dsh-rc/protocol/outbound'
 import type { RelayConfig } from './config.js'
-import { Budget, FrameRateGate } from './limits.js'
+import { BackpressureGate, Budget, FrameRateGate } from './limits.js'
 import { Log, REDACTED } from './log.js'
 import { RelayState, WS_OPEN, type Sock } from './state.js'
 
@@ -54,8 +54,8 @@ interface Peer {
   authAttempts: number
   /** 本连接上失败的配对尝试次数（用尽即 4008 断开）。成功一次就清零。 */
   pairAttempts: number
-  /** 对端 socket 缓冲区持续超限的起点（慢消费者处置）。 */
-  overSince?: number
+  /** 对端 socket 缓冲区持续超限的计时（慢消费者处置）；窗口按角色给，见 noteBackpressure。 */
+  backpressure: BackpressureGate
   alive: boolean
 }
 
@@ -126,22 +126,30 @@ export function createRelay(config: RelayConfig): RelayHandle {
     sendToPeer(peer, makeErrorFrame(code, text))
   }
 
-  /** 慢消费者：缓冲区超限持续 10 秒即断开，而不是无限堆积把中继内存吃掉。 */
-  function noteBackpressure(peer: Peer): void {
+  /**
+   * 慢消费者：发送缓冲**连续**超限达到**本角色的窗口**才断开，而不是无限堆积把中继内存吃掉。
+   *
+   * 两个关键点都是 DESIGN-REVIEW 第 11 条读码取证出来的（窗口的推导见 limits.ts）：
+   * 1. 判定必须**定时驱动**（由 `sweep()` 调），不能只挂在 `ws.on('message')` 上：
+   *    静默的慢客户端从不发帧，挂在入站路径上等于永不评估、缓冲区一直挂着；
+   *    而"爱说话"的慢客户端反而被踢——判定挂错了地方，结果刚好是反的。
+   * 2. 窗口必须**按角色给**：客户端侧的对端是"断开即重连"且 `onOpen` 会把退避清零，
+   *    窗口短于它的重连周期就形成永不升级的 ~11s 抖动；而手机不读关闭码，
+   *    用户只看到一句"连接已断开，正在重连…"，永远等不到恢复。
+   */
+  function noteBackpressure(peer: Peer, now: number): void {
     const buffered = (peer.ws as unknown as { bufferedAmount?: number }).bufferedAmount ?? 0
-    if (buffered <= config.maxBufferedBytes) {
-      peer.overSince = undefined
-      return
-    }
-    const now = Date.now()
-    if (peer.overSince === undefined) {
-      peer.overSince = now
-      return
-    }
-    if (now - peer.overSince > 10_000) {
-      log.warn('slow consumer disconnected', { clientId: peer.clientId, hostId: peer.hostId, buffered })
-      peer.ws.close(1008, 'slow_consumer')
-    }
+    const windowMs = peer.role === 'client' ? config.slowConsumerClientMs : config.slowConsumerHostMs
+    const verdict = peer.backpressure.check(buffered, config.maxBufferedBytes, now, windowMs)
+    if (!verdict.shouldClose) return
+    log.warn('slow consumer disconnected', {
+      clientId: peer.clientId,
+      hostId: peer.hostId,
+      role: peer.role,
+      buffered,
+      overMs: verdict.overMs,
+    })
+    peer.ws.close(1008, 'slow_consumer')
   }
 
   // ── 控制面 ──────────────────────────────────────────────────────────
@@ -387,6 +395,7 @@ export function createRelay(config: RelayConfig): RelayHandle {
       rate: new FrameRateGate(config.maxFramesPerSec),
       authAttempts: 0,
       pairAttempts: 0,
+      backpressure: new BackpressureGate(),
       alive: true,
     }
     peers.set(ws, peer)
@@ -450,7 +459,6 @@ export function createRelay(config: RelayConfig): RelayHandle {
         log.error('frame handler threw', { t: frame.t, message: String((e as Error)?.message ?? e) })
         sendError(peer, 'internal')
       }
-      noteBackpressure(peer)
     })
     ws.on('pong', () => {
       peer.alive = true
@@ -498,6 +506,12 @@ export function createRelay(config: RelayConfig): RelayHandle {
       }
     }
     lastPingAt = Date.now()
+    // 慢消费者判定：**定时驱动**，不看这一轮有没有入站帧（见 noteBackpressure 的注释）。
+    // 只对 OPEN 的连接读 bufferedAmount——已关闭的连接读它是无意义的。
+    const backpressureAt = Date.now()
+    for (const [ws, peer] of peersOfSockets()) {
+      if (ws.readyState === WS_OPEN) noteBackpressure(peer, backpressureAt)
+    }
     // D6：超过宽限期仍没回来的主机，才真正通知它的客户端重配对。
     for (const dropped of state.expireOfflineHosts(config.hostGraceMs)) {
       // 这里曾经误写成**嵌套两层同一个 clientIds**（外层内层同名），于是每个客户端收到

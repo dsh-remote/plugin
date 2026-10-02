@@ -763,3 +763,67 @@ test('R3：被顶号的旧 socket 会重连并重新拿到身份（不靠人工�
     await ctx.close()
   }
 })
+
+// ── 慢消费者（DESIGN-REVIEW 第 11 条 🟡）────────────────────────────────
+
+/**
+ * 把服务端这个 socket 的发送缓冲"钉"在超限状态。
+ *
+ * 为什么不真去堵 TCP：真堵法是 `client._socket.pause()`，但被暂停的 socket 读不了
+ * ping，保活（两个扫掠周期就 terminate）会先于背压闸动手，于是测的不是背压闸。
+ * 真机上的"慢消费者"恰恰是**还在应答、只是排不快**的那种，这个桩才是它的忠实替身。
+ */
+function pinBuffered(sock, bytes) {
+  Object.defineProperty(sock, 'bufferedAmount', { get: () => bytes, configurable: true })
+}
+
+const closedWithin = (peer, ms) => Promise.race([peer.closed, sleep(ms).then(() => null)])
+
+test('慢消费者：静默的对端同样会被定时扫描评估（判定不再挂在入站帧上）', async () => {
+  const ctx = await startRelay({
+    DRC_MAX_BUFFERED_BYTES: '4096',
+    DRC_SWEEP_MS: '150',
+    DRC_SLOW_CONSUMER_HOST_MS: '400',
+  })
+  try {
+    const { host, conversationId } = await pairUp(ctx)
+    const hostSock = ctx.relay.state.hostSocket(conversationId)
+    assert.ok(hostSock, '主机 socket 必须能在 state 里取到')
+
+    // 配对之后主机一个帧都不发：旧实现只挂在 ws.on('message') 上，永远不会评估它。
+    pinBuffered(hostSock, 1_000_000)
+
+    assert.equal(await closedWithin(host, 250), null, '未到窗口不许断（不是"超限即断"）')
+
+    const closed = await closedWithin(host, 4_000)
+    assert.ok(closed, '超限持续超过窗口后必须被断开；宿主静默 ⇒ 旧实现会永远不评估')
+    assert.equal(closed.code, 1008)
+    assert.equal(closed.reason, 'slow_consumer')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('慢消费者：同样超限 1 秒，主机该断、客户端不该断（🟡11 的端到端回归点）', async () => {
+  const ctx = await startRelay({
+    DRC_MAX_BUFFERED_BYTES: '4096',
+    DRC_SWEEP_MS: '150',
+    DRC_SLOW_CONSUMER_HOST_MS: '300',
+    // 客户端窗口远大于主机：这正是被修掉的那台"踢了就重连"的循环发动机
+    DRC_SLOW_CONSUMER_CLIENT_MS: '3000',
+  })
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    pinBuffered(ctx.relay.state.hostSocket(conversationId), 1_000_000)
+    pinBuffered(ctx.relay.state.clients.get('inst-1').ws, 1_000_000)
+
+    const hostClosed = await closedWithin(host, 3_000)
+    assert.ok(hostClosed, '主机超限 ~0.3s 就该断（原有行为，不许被这次修复改掉）')
+    assert.equal(hostClosed.code, 1008)
+
+    await sleep(1_000)
+    assert.equal(client.closeCode, null, '客户端超限 1 秒不许断：10s 这类短窗口正是把手机打进重连循环的原因')
+  } finally {
+    await ctx.close()
+  }
+})

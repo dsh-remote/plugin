@@ -14,7 +14,15 @@
  * - `CONV_IDLE_TTL_MS` 会话在无活动多久后回收（默认 7 天）；
  * - `HOST_GRACE_MS` 主机 socket 断开后多久才通知客户端"主机已离开"（默认 120 秒）。
  *   没有这个宽限期，一次网络抖动就会让手机丢掉配对、必须回到电脑前重新扫码。
+ *
+ * 慢消费者窗口的一对（`SLOW_CONSUMER_HOST_MS` / `SLOW_CONSUMER_CLIENT_MS`）默认值来自
+ * `limits.ts` 的常量，两者**默认不同**是刻意的：客户端窗口是由对端（小程序）自己的
+ * 重连周期推导出来的不变量，不是性能偏好。把它调到 42.5s 以下就等于把那台
+ * "被踢→秒回→再被踢"的 ~11s 循环发动机装回去（DESIGN-REVIEW 第 11 条，
+ * `tests/limits.test.mjs` 直接读 mp 源码的常量来锁这条）。可调只是为了测试能缩短等待。
  */
+
+import { CLIENT_SLOW_CONSUMER_MS, HOST_SLOW_CONSUMER_MS } from './limits.js'
 
 export interface RelayConfig {
   hostToken: string
@@ -34,6 +42,9 @@ export interface RelayConfig {
   /** 清扫与保活周期。调小它可以让"宽限期到期"这类事件更快被观察到（测试需要）。 */
   sweepMs: number
   maxBufferedBytes: number
+  /** 慢消费者（发送缓冲持续超限）的判定窗口，按角色分：见 limits.ts 的推导。 */
+  slowConsumerHostMs: number
+  slowConsumerClientMs: number
   logLevel: LogLevel
   pairStatusEnabled: boolean
   version: string
@@ -111,6 +122,8 @@ export function loadConfig(env: NodeJS.ProcessEnv, version: string): { config: R
     hostGraceMs: integer(env.DRC_HOST_GRACE_MS, 120_000, 'DRC_HOST_GRACE_MS'),
     sweepMs: integer(env.DRC_SWEEP_MS, 5_000, 'DRC_SWEEP_MS'),
     maxBufferedBytes: integer(env.DRC_MAX_BUFFERED_BYTES, 1024 * 1024, 'DRC_MAX_BUFFERED_BYTES'),
+    slowConsumerHostMs: integer(env.DRC_SLOW_CONSUMER_HOST_MS, HOST_SLOW_CONSUMER_MS, 'DRC_SLOW_CONSUMER_HOST_MS'),
+    slowConsumerClientMs: integer(env.DRC_SLOW_CONSUMER_CLIENT_MS, CLIENT_SLOW_CONSUMER_MS, 'DRC_SLOW_CONSUMER_CLIENT_MS'),
     logLevel: level,
     pairStatusEnabled: env.DRC_PAIR_STATUS === '1' || env.DRC_PAIR_STATUS === 'true',
     version,
