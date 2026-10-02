@@ -348,7 +348,7 @@ function realLog(sessionId: string): Array<{ type: string; seq: number; data: Re
           role: 'tool',
           source: { kind: 'tool', callId: 'call_a' },
           toolCallId: 'call_a',
-          content: [{ type: 'text', text: 'total 88\ndrwxr-xr-x  20 linbin' }],
+          content: [{ type: 'text', text: 'total 88\ndrwxr-xr-x  20 dev' }],
         },
       },
     },
