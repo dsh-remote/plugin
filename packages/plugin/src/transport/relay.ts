@@ -358,6 +358,14 @@ export class RelayClient {
     }
     if (!socket) return
     socket.removeAllListeners()
+    // 摘完监听器必须补一个 error 兜底，**不能只靠下面的 try/catch**。
+    // 原因：socket 还在 CONNECTING 时 ws 的 close() 会走 abortHandshake，那条路径是
+    // `process.nextTick(emitErrorAndClose, ...)` —— 错误是**异步**发出来的，
+    // 同步的 try/catch 根本拦不到；而此时 removeAllListeners() 已经把 error 监听器
+    // 一起摘了，于是它无人接手、升级成 uncaughtException 把进程带崩。
+    // 表现就是 e2e 偶发红：'WebSocket was closed before the connection was established'
+    // （只有在"连接还没建好就停机"这个窗口里才触发，所以时红时绿）。
+    socket.on('error', () => {})
     try {
       socket.close()
     } catch {

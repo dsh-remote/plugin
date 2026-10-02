@@ -37,6 +37,12 @@ interface FakeSocket {
   close(): void
   terminate(): void
   removeAllListeners(): void
+  /**
+   * 真 `ws` 是 EventEmitter，有 `on`。`closeSocket()` 在摘完监听器后会补一个 error
+   * 兜底（见那边的注释），假 socket 少了这个方法，那条路径在测试里会直接抛
+   * `socket.on is not a function` —— mock 不忠实会把生产代码带沟里。
+   */
+  on(event: string, handler: (...args: unknown[]) => void): void
 }
 
 function makeSocket(): FakeSocket {
@@ -54,6 +60,9 @@ function makeSocket(): FakeSocket {
     },
     removeAllListeners() {
       /* 假 socket 没有监听器 */
+    },
+    on() {
+      /* 同上：假 socket 不自己发事件，能挂上就够 */
     },
   }
 }
@@ -574,4 +583,47 @@ test('条数上界是真上界：超出后从最不活跃的开始剪，而不�
   assert.deepEqual(pruned, ['c_cap1', 'c_cap2'], `必须按"最后活动"从最不活跃开始剪（刚有收发的 c_cap0 必须留下），实际剪了 ${JSON.stringify(pruned)}`)
   assert.equal(client.conversationCount, 3)
   assert.equal(client.hasPeer('c_cap0'), true, '刚发过数据的通道被剪：手机会突然撞上"会话已失效"')
+})
+
+test('停机时 socket 还停在 CONNECTING：close() 的异步 error 不许升级成 uncaughtException', async () => {
+  // 这条**必须用真 ws**（所以这里不 attachSocket）。机制来自 ws：socket 还在 CONNECTING
+  // 时 close() 走 abortHandshake，那条路径是 process.nextTick 抛 error ——
+  // 假 socket（EventEmitter）复现不了，而**同步的 try/catch 也拦不住异步抛出**。
+  // 于是 removeAllListeners() 摘掉 error 监听器之后它没人接，升级成 uncaughtException
+  // 把进程带崩。表现是 e2e 偶发红：'WebSocket was closed before the connection was
+  // established'（只有"连接还没建好就停机"这个窗口才触发，所以时红时绿，很难查）。
+  const caught: Error[] = []
+  const onUncaught = (e: Error): void => {
+    caught.push(e)
+  }
+  process.on('uncaughtException', onUncaught)
+  try {
+    const clock = new FakeClock()
+    const slots = new PairingSlots(() => clock.now())
+    const client = new RelayClient({
+      url: 'ws://127.0.0.1:1', // 没人监听 → 一直停在 CONNECTING
+      hostId: 'h_connecting',
+      label: '测试主机',
+      token: 'fake-host-token-not-a-real-secret-0123',
+      clock,
+      log: () => {},
+      onCommand: () => {},
+      onPeerJoined: () => {},
+      onConversationGone: () => {},
+      onClientLeft: () => {},
+      lookupPairingSlot: (token) => slots.resolveFor(token),
+      onPairReady: () => {},
+      onState: () => {},
+    })
+    client.connect()
+    client.stop() // 就在"连接还没建好"这个窗口里停机
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.deepEqual(
+      caught.map((e) => e.message),
+      [],
+      '停机时 close() 一个 CONNECTING 的 socket 会异步抛 error；必须在摘完监听器后补一个 error 兜底',
+    )
+  } finally {
+    process.removeListener('uncaughtException', onUncaught)
+  }
 })
