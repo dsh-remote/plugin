@@ -1,7 +1,7 @@
 # HANDOFF — dsh-remote-control
 
 > 交接给下一位开发 agent。**先读本文，再读代码。**
-> 最后更新：2026-10-02（重写后的代码全部落地，生产已切换并验证；右栏自动弹码已真机验收）。
+> 最后更新：2026-10-03（新增开源四仓改造，见 §7；协议层改发 npm）。
 
 ## 0. 一句话状态
 
@@ -263,3 +263,46 @@ curl -s https://drc.provid.cc/healthz
 node scripts/read-session-log.mjs <sessionId> --tail 20      # 内核侧真相
 cat ~/.dsh/dsh-remote-control/status.json                      # 插件侧真相
 ```
+
+## 7. 开源四仓（2026-10-03，**只做了本地改造，未建仓未推送**）
+
+用户拍板：开源到 GitHub（账号 `providcc`）、MIT、拆 4 仓，**都是平行顶层目录、统一 `dsh-remote-` 前缀**：
+
+| 目录 | 内容 | 发 npm？ |
+|---|---|---|
+| `dsh-remote-protocol/` | 线协议纯函数库（`dsh-remote-protocol`） | **发** |
+| `dsh-remote-server/` | 零知识中继（self-hosted 单文件产物） | 不发 |
+| `dsh-remote-control/` | 宿主插件 monorepo（`packages/plugin`=主插件、`packages/presentation`=右栏呈现） | 发 2 个包 |
+| `dsh-remote-mp/` | 微信小程序客户端（WeChat 官方目录布局，`miniprogramRoot: "miniprogram/"`） | 不发 |
+
+**这是拷贝出来的独立目录，不是链接。** 改 `packages/plugin/**`（并行会话常改的地方）**不会**同步到
+`dsh-remote-control/packages/plugin/**`，反之亦然——两边会漂移。要同步就用
+`git archive HEAD <path> | tar -x -C <目标>` 取已提交快照。
+
+### 7.1 一次性引导顺序（推送前必须知道）
+
+1. **先推 `dsh-remote-protocol` 并打 `v1.0.0`**，走它的 Release 把包发到 npm。
+2. 再推 `dsh-remote-server` / `dsh-remote-control`，各跑一次 `pnpm install`，
+   把生成的 `pnpm-lock.yaml` 提交，然后把 CI/release 里的 `--no-frozen-lockfile`
+   改成 `--frozen-lockfile`（`^1.0.0` 在协议包发布前解析不出来，所以现在只能非冻结）。
+3. 两个仓的 release 工作流都需要仓库 secret **`NPM_TOKEN`**（Automation 类型）。
+4. `dsh-remote-mp/project.config.json` 里是**用户自己的小程序 appid**，别人 fork 必须改。
+
+### 7.2 走过的弯路（别再退回 git 依赖）
+
+协议最初设计为 git 依赖（`github:providcc/dsh-remote-protocol#v1.0.0`）。实测 pnpm 11.7.0：
+git 包的 `prepare` 必须靠 `pnpm-workspace.yaml` 的 `allowBuilds` 放行，而键**只能是含 commit
+的精确解析结果**（`dsh-remote-protocol@git+https://...#<sha>`）；包名、`name@version`、`name@*`、
+`name@<tag>` 四种写法全部被拒（`ERR_PNPM_INVALID_VERSION_UNION` /
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）。那意味着两个消费仓各要手改一条随协议升版漂移的键。
+→ 已改为**发 npm**，消费仓写 `^1.0.0`。
+
+### 7.3 已做的清理与验证
+
+- 四个仓都不含生产标识符（无 ECS IP / 实例 id / `jevtv` / 真 hostToken / 真 PSK / `/Users/linbin`）；
+  测试夹具里的真实域名与主机名已换成 `drc.example.com` / `my-macbook`，`ls` 夹具里的用户名换成 `dev`。
+  `dsh-remote-server/deploy/` 与 `SELF-HOSTING.md` 里保留了真实公网域名 `drc.provid.cc`
+  （用户已公开过，属允许保留）。
+- 协议 `pnpm pack` 产物只含 `dist/src`（30 文件）+ LICENSE/README/package.json；把该 tgz 装进空
+  project 后 `seal/open`、`dshr:/p?` 构造解析、根入口 108 导出全部正常。
+- 消费侧用同一个 tgz 验过：server 74 项、control 271 项（plugin 221 + presentation 50）全绿。
