@@ -398,3 +398,57 @@ R3 的 client 顶号（4000 replaced）、R5 的 bundle 唯一入口、R7 的 F1
 
 
 
+
+### 2026-10-02 · 阶段 C/D 完成 + 生产切换（真实链路证伪了两条判据）
+
+**载体探测**：cordis 的 `ctx` 是 Proxy，读它没有的属性名是**抛错**，`?.` 挡不住。
+`ctx.onDispose?.()` 因此把我们的 fiber 打进 FAILED，并连带 dispose 六个 `ctx.inject` 子 fiber
+→ 服务明明在、`carrier=none`。改用真存在的 `ctx.effect`；探测属性存在性用 `'x' in ctx`
+（走 has trap，不抛）。真机现在报 `carrier=services`、六个服务全在、`hasOn=true`、25 个归档会话。
+
+**活码策略**（`core/pairing-window.ts`）：`pairOnStartSec` 的语义是"保持一张活码可用"。
+旧实现挂在 3s 状态循环里的三条 stale 判据（无码 / 中继代次变了 / 过半程）一条都没被测过
+（`legacy-spec/host-plugin-runtime.md` §7.4 第 12 条自己记着这件事）；重写后抽成纯策略，
+并加第四条——**码已被消费**就当场换一张（多轮取证因此不必重启宿主）。
+10 条断言逐条变异验证。配套 `publishPairing` 改为返回"是否真的上过网"：
+本地记一张中继没收到的码，是最难查的一种谎。
+
+**真实链路取证抓出的四处"测试全绿而手机上看不见"**，共同形状是**判据数的是帧而不是内容**：
+
+1. `assistant/message` 的正文在 `data.message.content`，第一版只读顶层 → 回复折成空串；
+2. runtime 对"正文与 done 同到"的一条完整消息只走 `complete()`，而 complete 对缓冲区里没有
+   这条消息的情形发的是 **done-only 帧** → 辛苦读出来的正文被丢掉。内核没有 token 级增量，
+   所以这本来就是主路径；
+3. `tool/call` 的参数叫 `arguments` 不叫 `args`；`tool/result` 的 callId 在 `message.toolCallId`、
+   正文在 `message.content`；
+4. 事件回调是裸交给 cordis 的 emit 的（`guardedSubscribe` 只保护注册那一步），
+   一次抛错会打断派发甚至拆掉整条订阅 → 表现是"回合跑到一半再也没事件"而 status.json 一片祥和。
+
+①② 最可怕的地方是 `live-e2e` 的"⑧ 流式输出到达 / ⑨ 有 done"两条断言**照样通过**。
+所以判据也改了：⑧ 等"发完指令之后的第一条 idle"（手机自己那条回声同样带 done:true）；
+⑧b 断言助手正文非空；⑧c 断言这一轮不是以内核报错收尾；⑩c 用 B5 的 h2c 密钥在测试侧
+自解每一帧下行密文，与主机 `outbound` 计数对账——"手机没收到"从此能分清是没发、没转、还是没解。
+status.json 新增六个字段：`outbound` / `eventTypes` / `unmappedEventTypes` / `listenerErrors` /
+`approvalFace` / `questionsFace`。
+
+**部署与安装**：profile 的 package.json 里残留 `"dsh-remote-control": "file:…"`，
+`pnpm install` 会把插件再物化一份进 profile，于是宿主里同时跑**两个实例**
+（两个 hostId、两份会话，手机连到哪个全凭运气），而 status.json 的计数来自另一个实例——
+这条误导了整整几轮排查。安装器现在拒软链、整目录先删后建、并删掉那条依赖。
+CI 与 systemd 改指单文件产物（复核 R4/R5 的破口补齐），三个包统一 `typecheck`；
+中继版本改由打包 define 注入（旧断言只验"version 是个字符串"，`0.0.0` 也算过）。
+`pair-fail.reason` 枚举收回小程序能翻译的四个（F6），限速原因只进日志。
+
+**实测**：`pnpm -r typecheck` 三包全绿；协议 76 / 中继 62 / 插件 173 / e2e 50 全绿，
+`pnpm -r test` 全绿；`run.mjs` 13 步全绿；二维码 zxing 真实解码 28/28；
+生产 `wss://drc.provid.cc` 切换后真链路 **18 项全绿**（助手正文与 2 条工具行确实到达手机），
+本地中继 `--rounds 3` **36 项全绿**，每轮一张不同的新码。
+
+**仍未取证（按未验证记账，不写作已通过）**：真机上的审批卡与提问卡。
+审批参与者登记在真宿主上是 `approvalFace="registered"`，但这些会话的策略从不发起审批；
+提问这一代宿主没暴露提供者（`questionsFace="no userQuestions provider"`，
+模型自己也说没有 AskUserQuestion 工具）。两条卡片的闭环只在本地全链路里验过
+（`e2e/mp-client.test.mjs` 第 5/6 条、`run.mjs` 第 7/9 步）。
+§7-C 那两条硬验收（⑨ 中断走 cancel、⑩ 审批/提问订阅取证到的真实通道）里，
+⑨ 已按 `agent.cancel({kind:'user'},{keepInbox:true})` 落地并有调用形状断言；
+⑩ 的"真实通道"这一半只到登记成功，端到端仍未在真机取证。

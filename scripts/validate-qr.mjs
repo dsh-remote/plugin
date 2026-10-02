@@ -17,15 +17,17 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(here, '..')
-const qrModule = path.join(root, 'packages', 'plugin', 'dist', 'src', 'qr.js')
+// 重写之后 qr 编码器住在 platform/ 下（只有它认识渲染细节，core 不认），
+// 而且全部改成异步：node-qrcode 的 API 是 promise 形的。
+const qrModule = path.join(root, 'packages', 'plugin', 'dist', 'src', 'platform', 'qr.js')
 
 if (!existsSync(qrModule)) {
-  console.error(`✖ 先构建：找不到 ${qrModule}（env -u NODE_OPTIONS pnpm -r build）`)
+  console.error(`✖ 先构建：找不到 ${qrModule}（cd packages/plugin && env -u NODE_OPTIONS pnpm build）`)
   process.exit(2)
 }
 
@@ -35,7 +37,7 @@ if (!existsSync(PY)) {
   process.exit(2)
 }
 
-const { qrMatrix, qrPng } = await import(qrModule)
+const { qrMatrix, qrPng } = await import(pathToFileURL(qrModule).href)
 
 const PAYLOADS = [
   'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142',
@@ -52,21 +54,20 @@ const ECCS = ['L', 'M', 'Q', 'H']
 const cases = []
 for (const text of PAYLOADS) for (const ecc of ECCS) cases.push({ text, ecc })
 
-const request = cases.map(({ text, ecc }) => {
-  // 半块终端渲染本身就是最终产物 —— 校验它，而不是裸矩阵：把渲染文本原样
-  // 画出来，等价于"把 /drc pair 的输出截屏拿去扫"。
-  const rendered = (() => {
-    // 复用 qrMatrix（无 ANSI 的裸字符版）保证与 renderTerminalQr 同源
-    return qrMatrix(text, ecc, 2)
-  })()
-  return {
+const request = []
+for (const { text, ecc } of cases) {
+  // 半块终端渲染本身就是最终产物 —— 校验它，而不是裸矩阵：把渲染文本原样画出来，
+  // 等价于"把 /drc pair 的输出截屏拿去扫"。矩阵取无 ANSI 的裸字符版，与
+  // renderTerminalQr 同源。
+  const rendered = await qrMatrix(text, ecc, 2)
+  request.push({
     text,
     ecc,
     matrix: rendered.map((row) => row.map((v) => (v ? 1 : 0))),
     // 图片输出才是主要的配对产物：它不依赖终端对块字符/ANSI 的支持
-    png: qrPng(text, ecc, { scale: 8 }).toString('base64'),
-  }
-})
+    png: (await qrPng(text, { ecc, scale: 8 })).toString('base64'),
+  })
+}
 
 const py = `
 import json, sys, base64, io
