@@ -7,3 +7,9 @@ apps/server/data/
 .tmp/
 # e2e 跑出来的运行期产物（配对码 spike 图等），不是源码
 .dsh/
+
+# 开源四仓：各自就地 git init、已是独立仓，伞仓不再跟踪（文件仍在磁盘上）
+dsh-remote-protocol/
+dsh-remote-server/
+dsh-remote-control/
+dsh-remote-mp/
