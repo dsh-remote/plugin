@@ -1,4 +1,7 @@
-<view class="page-pad">
+<!-- 根容器带 themeClass（深色时是 theme-dark）：深色变量挂在这个 class 上，
+     靠继承铺满整页。挂在**根 view** 上而不是 page —— 变量表的选择器是 .theme-dark，
+     挂在子树深处只能染到那一小片。 -->
+<view class="page-pad {{themeClass}}">
 
   <!-- 未配对：整个页面只留一个动作，外加"接下来会发生什么"的三步说明 -->
   <block wx:if="{{!paired}}">
@@ -53,15 +56,25 @@
       </view>
     </view>
 
+    <!-- 分区标题右侧放「新建会话」：它是这一页的主动作，跟着列表走。
+         不隐藏而是在离线时置灰 —— 一个会突然消失的入口比一个说明白的禁用好懂得多。 -->
     <view class="section-title">
       <text>会话</text>
       <text class="section-count">{{sessions.length}}</text>
+      <view
+        class="section-action {{status === 'online' ? '' : 'off'}} {{creating ? 'busy' : ''}}"
+        hover-class="{{status === 'online' && !creating ? 'pressed' : ''}}"
+        hover-stay-time="80"
+        bindtap="onNewSession">
+        <view wx:if="{{creating}}" class="new-spin"></view>
+        <text>{{creating ? '正在新建…' : '＋ 新建会话'}}</text>
+      </view>
     </view>
 
     <view wx:if="{{sessions.length === 0}}" class="card empty-card">
       <t-empty
         icon="chat"
-        description="{{hiddenArchived ? '这里只有归档会话，已隐藏' : (status === 'online' ? '主机上还没有会话' : '连上主机后，这里会列出它的会话')}}" />
+        description="{{hiddenArchived ? '这里只有归档会话，已隐藏' : (status === 'online' ? '主机上还没有会话。点上面的「＋ 新建会话」开一条' : '连上主机后，这里会列出它的会话')}}" />
     </view>
 
     <view wx:else class="card">
@@ -97,6 +110,14 @@
     <!-- 归档会话被藏起来了，得留一句话，否则用户会以为会话丢了 -->
     <view wx:if="{{hiddenText}}" class="hidden-note">{{hiddenText}}</view>
 
-    <view class="footer-link" hover-class="pressed" bindtap="onGoPair">重新配对 / 高级设置</view>
+    <!-- 外观切换：与「重新配对」并排放在底部，属于同一类"不常用但要能改"的设置。
+         文案写"切到哪个"而不是"当前是哪个"：按钮的语义是动作，用户不用先读一遍状态。 -->
+    <view class="footer-row">
+      <view class="footer-link dim" hover-class="pressed" bindtap="onGoPair">重新配对 / 高级设置</view>
+      <view class="theme-toggle" hover-class="pressed" hover-stay-time="80" bindtap="onToggleTheme">
+        <view class="theme-glyph {{themeName}}"></view>
+        <text>{{themeName === 'dark' ? '浅色' : '深色'}}</text>
+      </view>
+    </view>
   </block>
 </view>

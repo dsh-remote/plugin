@@ -161,6 +161,135 @@ const SHOTS = {
       },
     },
   ],
+  /**
+   * 深色主题。单独成一组而不是给每个场景加 dark 变体：深色要验的是**整套变量
+   * 有没有铺满**，三页各来一张就够（同页的浅/深对比可以自己去比）。
+   *
+   * `theme` 走的是真实路径：写 storage → reLaunch → onLoad 里 theme.applyTo 读出来
+   * → 根容器挂 class。直接 setData 塞 themeClass 会绕过整条链，恰好漏掉"存储读不到"
+   * 这类真会发生的故障。
+   */
+  dark: [
+    {
+      name: 'dark-sessions',
+      url: '/pages/sessions/sessions',
+      theme: 'dark',
+      data: {
+        paired: true,
+        hiddenArchived: 2,
+        hiddenText: '已隐藏 2 个归档会话',
+        hostLabel: 'Linbin 的 MacBook',
+        statusLabel: '在线',
+        statusTheme: 'success',
+        statusText: '已连接到主机',
+        keepAwakeOn: true,
+        keepAwakeText: '当前持锁中 · caffeinate',
+        sessions: [
+          {
+            id: 's-1',
+            title: '重做小程序对话页信息流',
+            workspace: '/Users/linbin/dsh-remote-control',
+            badgeText: '运行中',
+            badgeTheme: 'primary',
+            running: true,
+            updatedAt: '16:04',
+          },
+          {
+            id: 's-2',
+            title: '排查 t-input 真机塌陷',
+            workspace: '/Users/linbin/dsh-remote-control',
+            badgeText: '待审批',
+            badgeTheme: 'warning',
+            running: false,
+            updatedAt: '昨天 22:41',
+          },
+          {
+            id: 's-3',
+            title: '更新 HANDOFF 测试计数',
+            workspace: '/Users/linbin/dsh-remote-control',
+            badgeText: '空闲',
+            badgeTheme: 'default',
+            running: false,
+            updatedAt: '09-28',
+          },
+        ],
+      },
+    },
+    {
+      name: 'dark-pair',
+      url: '/pages/pair/pair',
+      theme: 'dark',
+      data: { server: 'wss://drc.provid.cc', hostLabel: 'Linbin 的 MacBook' },
+    },
+    {
+      // 深色下的 chat 页**有内容**：用户气泡、助手正文、展开的过程组、输入区四处
+      // 是最容易露出浅色块的地方（气泡底色、卡片底色、过程卡描边各是一套变量）。
+      // 空态那张（dark-chat）只验到底色铺满，验不了这些。
+      name: 'dark-chat',
+      url: '/pages/chat/chat',
+      theme: 'dark',
+      data: {
+        title: '重做小程序对话页信息流',
+        running: true,
+        barText: '主机运行中',
+        barTheme: 'primary',
+        foldable: 1,
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '21:20' },
+          { key: 'u1', kind: 'user', text: '把两个测试失败查清楚', confirmed: true },
+          {
+            key: 'x1',
+            kind: 'steps',
+            closed: false,
+            open: true,
+            live: true,
+            tools: 3,
+            label: '正在执行 3 个步骤',
+            tailId: 'sk3',
+            items: [
+              { key: 'k1', type: 'think', msText: '1.2s', done: true },
+              {
+                key: 't1',
+                type: 'tool',
+                phase: 'completed',
+                tool: 'Bash',
+                title: 'pnpm -C e2e test',
+                args: '{"command":"pnpm -C e2e test"}',
+                result: '2 项失败',
+                preview: '2 项失败',
+                open: false,
+              },
+              {
+                key: 't2',
+                type: 'tool',
+                phase: 'running',
+                tool: 'Read',
+                title: 'e2e/mp-client.test.mjs',
+                result: '',
+                preview: '',
+                open: false,
+              },
+            ],
+          },
+          {
+            key: 'm1',
+            kind: 'text',
+            text: '两条都指向同一个原因：断言在断言之后又清了一次表，回执到不了。改掉就行。',
+            done: true,
+          },
+          { key: 'n1', kind: 'note', text: '已批准一次工具调用' },
+        ],
+      },
+    },
+    {
+      // 浅色基准（同一类内容），用来一眼比出哪些地方没跟着变
+      name: 'light-chat-baseline',
+      url: '/pages/chat/chat',
+      theme: 'light',
+      data: { title: '重做小程序对话页信息流' },
+    },
+  ],
   pair: [
     { name: 'pair', url: '/pages/pair/pair' },
     {
@@ -582,6 +711,14 @@ async function main() {
     }
     for (const shot of shots) {
       try {
+        // 主题要在 reLaunch **之前**写好：onLoad 里 theme.applyTo 会从 storage 读，
+        // 写晚了这一轮就是浅色的（截图看起来"深色没生效"，其实是自己写晚了）。
+        if (shot.theme) {
+          miniProgram.evaluate(
+            (t) => wx.setStorageSync('drc.theme.v1', t),
+            shot.theme,
+          )
+        }
         await miniProgram.reLaunch(shot.url)
         await sleep(1500)
         if (shot.data) {

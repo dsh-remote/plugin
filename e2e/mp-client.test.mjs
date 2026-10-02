@@ -375,7 +375,7 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
 
   test('11. cmd.session_history：回帧必须**结算成 promise**（不是把帧收下就算完），且不再当普通事件发一遍', async () => {
     // 为什么占一个用例：`loadHistory` 的结算点是 `done()`，它有一道幂等守卫
-    // （`if (!self._historyWaiters[cmdId]) return`）。收帧那边若顺手先把登记删掉，
+    // （`if (!self._cmdWaiters[cmdId]) return`）。收帧那边若顺手先把登记删掉，
     // 守卫就永远命中 —— promise 永不 resolve，**连 15s 超时也会被同一道守卫吃掉**
     // （超时回调走的也是 done）。表现是首屏历史永远停在 loading、或「加载更早」转圈不动，
     // 而且不发错、不重试。这个 bug 真发生过一次，就是这么漏过去的：本文件当时没有历史用例，
@@ -409,7 +409,13 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
       payloadsBefore,
       '它是**回执**不是事件：不该再当普通事件 emit 一遍，否则页面会走两条路处理同一页历史',
     )
-    assert.equal(Object.keys(client._historyWaiters).length, 0, '结算后登记必须清空，否则每读一页都攒一个')
+    assert.equal(
+      Object.keys(client._cmdWaiters).length,
+      0,
+      '结算后登记必须清空，否则每读一页都攒一个。' +
+        '注意登记在 _cmdWaiters 这张**统一**表上：取历史与新建会话都是"回执靠 cmdId 匹配"，' +
+        '同一套 done()/超时/幂等守卫，没必要分两张表',
+    )
   })
 
   test('12. 解配/断线时挂起的历史请求必须当场结算成 null（否则「正在读取主机上的历史…」永远转下去）', async () => {
@@ -421,7 +427,7 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
     await pairPhone(host, solo, { expectedRelayUrl: relay.url })
     const pending = solo.client.loadHistory(MOCK_SESSION_ID, { limit: 3 })
     assert.equal(
-      Object.keys(solo.client._historyWaiters).length,
+      Object.keys(solo.client._cmdWaiters).length,
       1,
       '请求没登记上 —— 这个用例就没验到东西（登记是结算的前提）',
     )
@@ -429,7 +435,7 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
     const settled = await Promise.race([pending, delay(2000).then(() => '仍在等待')])
     assert.notEqual(settled, '仍在等待', '解配后挂起的取历史请求没被结算：页面会永远停在读取中，不发错也不重试')
     assert.equal(settled, null, '断线/解配时该结算成 null —— 页面据此显示"读不到"并允许重试，而不是"这个会话没内容"')
-    assert.equal(Object.keys(solo.client._historyWaiters).length, 0, '结算后登记必须清空')
+    assert.equal(Object.keys(solo.client._cmdWaiters).length, 0, '结算后登记必须清空')
   })
 
   test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {

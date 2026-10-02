@@ -1,4 +1,7 @@
-<view class="page-pad">
+<!-- 根容器带 themeClass（深色时是 theme-dark）：深色变量挂在这个 class 上，
+     靠继承铺满整页。挂在**根 view** 上而不是 page —— 变量表的选择器是 .theme-dark，
+     挂在子树深处只能染到那一小片。 -->
+<view class="page-pad {{themeClass}}">
 
   <!-- 容器没有 WebSocket 能力时，唯一要说的就是这一句 -->
   <view wx:if="{{!socketReady}}" class="warn card">

@@ -4,10 +4,11 @@
   "type": "module",
   "description": "本地端到端与真实链路取证：真中继 + 真插件运行时（内核面 mock）+ 真小程序客户端代码。",
   "scripts": {
-    "test": "node --test mp-crypto.test.mjs mp-client.test.mjs mp-platform.test.mjs mp-chat-blocks.test.mjs mp-sessions-list.test.mjs multi-pair.test.mjs restart-resume.test.mjs && node run.mjs",
+    "test": "node --test mp-crypto.test.mjs mp-client.test.mjs mp-platform.test.mjs mp-chat-blocks.test.mjs mp-sessions-list.test.mjs mp-theme.test.mjs multi-pair.test.mjs restart-resume.test.mjs && node run.mjs",
     "test:local-chain": "node run.mjs",
     "test:mp-client": "node --test mp-client.test.mjs",
     "test:mp-pages": "node --test mp-chat-blocks.test.mjs mp-sessions-list.test.mjs",
+    "test:mp-theme": "node --test mp-theme.test.mjs",
     "test:multi-pair": "node --test multi-pair.test.mjs",
     "test:restart-resume": "node --test restart-resume.test.mjs",
     "test:protocol-bytes": "node --test protocol.test.mjs",

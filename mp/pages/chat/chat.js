@@ -1,6 +1,7 @@
 'use strict'
 
 var client = require('../../core/client.js')
+var theme = require('../../core/theme.js')
 
 /**
  * chat 页 —— 一条会话渲染成「文档流」，不是一串聊天气泡。
@@ -147,10 +148,14 @@ Page({
     /** 还有更早的内容；点「加载更早」继续往前翻 */
     hasMore: false,
     historyLoadingMore: false,
+    /** 主题。见 sessions 页同名字段的说明。 */
+    themeName: 'light',
+    themeClass: '',
   },
 
   onLoad: function (options) {
     this.client = client.getClient()
+    theme.applyTo(this)
     var id = decodeURIComponent(options.id || '')
     var title = decodeURIComponent(options.title || id)
     this.setData({ sessionId: id, title: title })
@@ -248,6 +253,23 @@ Page({
   _scrollToBottom: function () {
     this._flip = !this._flip
     this.setData({ toView: this._flip ? 'anchor-b' : 'anchor-a' })
+  },
+
+  /**
+   * 折叠之后把外层滚动位置重新对一次。
+   *
+   * 为什么需要：折叠会让内容高度**剧烈**变化 —— 长会话里点一次「收起过程」
+   * 能少两千多像素（实测 4532 → 1876）。开发者工具每次都会把 scrollTop 收进
+   * 新的合法范围，但真机（尤其 iOS）不是每次都重新量：视口停在旧的高度上，
+   * 下面就是一段**滚不到任何内容**的空白 —— 用户看到的就是
+   * 「过程内容不见了，但是所占的位置还在」。
+   * 翻一次尾部锚点等于明确要求它按新的内容高度重新对齐一次。
+   *
+   * **只在贴底时做**：正在往回翻历史的用户不该被这一下甩到底。
+   * 贴在底部时"重新对到底部"本来就是他期望的位置，所以这一步没有副作用。
+   */
+  _afterFold: function () {
+    if (this._autoScroll) this._scrollToBottom()
   },
 
   // ── 键盘：点空白收起 ──────────────────────────────────────────────
@@ -863,6 +885,7 @@ Page({
     var g = this.data.blocks[bi]
     if (!g || g.kind !== 'steps') return
     this.setData({ ['blocks[' + bi + '].open']: !g.open })
+    this._afterFold()
   },
 
   /** 展开/收起某一步的细节（参数与完整结果） */
@@ -872,6 +895,7 @@ Page({
     var g = this.data.blocks[bi]
     if (!g || g.kind !== 'steps' || !g.items[ii]) return
     this.setData({ ['blocks[' + bi + '].items[' + ii + '].open']: !g.items[ii].open })
+    this._afterFold()
   },
 
   /** 一键展开/收起全部步骤组：长会话里这是「我只想看结论」的那一下 */
@@ -884,6 +908,7 @@ Page({
       return c
     })
     this.setData({ expanded: open, blocks: blocks })
+    this._afterFold()
   },
 
   // ── 块流提交：从头部裁剪，绝不在块中间下刀 ────────────────────────

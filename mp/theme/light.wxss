@@ -2,8 +2,8 @@
  *
  * 来源：mp/miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss
  * 作用：把 TDesign 的浅色变量从 @media (prefers-color-scheme:light) 里解放出来，
- *      无条件生效。app.wxss 在 _index.wxss 之后 import 本文件，
- *      靠「同特异性下源码顺序靠后的胜出」压过深色分支 —— 系统是深色也一样是白底深字。
+ *      无条件生效。选择器与 TDesign 一样是 .page,page，所以深色分支也被压掉了 ——
+ *      系统是深色也一样是白底深字。
  *
  * 共 2 段。
  */

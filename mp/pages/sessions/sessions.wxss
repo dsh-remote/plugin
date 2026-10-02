@@ -142,6 +142,51 @@
   color: var(--td-text-color-placeholder, #a0a6b0);
 }
 
+/* 「＋ 新建会话」。它是这一页的主动作，但**不做成实心大按钮** ——
+   一屏里已经有一张主机卡，再放一个实心主按钮就会和它抢注意力（skill 坑位 8），
+   所以用 tonal（浅品牌底 + 品牌字）这一档。 */
+.section-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 56rpx;
+  padding: 0 22rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  background: var(--td-brand-color-1, #f2f3ff);
+  color: var(--td-brand-color, #0052d9);
+}
+
+/* 没连上时置灰：**能看见、能点，点了会说为什么**。
+   直接藏起来看着更干净，但用户不知道去哪找，也不知道为什么没有。 */
+.section-action.off {
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.section-action.busy {
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  color: var(--td-text-color-secondary, #666);
+}
+
+/* 转圈：CSS 画，不引图标字体（图标字体走远程 CDN，拉不到就是空白方块） */
+.new-spin {
+  width: 20rpx;
+  height: 20rpx;
+  margin-right: 10rpx;
+  border: 3rpx solid var(--td-component-border, #dcdcdc);
+  border-top-color: var(--td-brand-color, #0052d9);
+  border-radius: 50%;
+  animation: new-spin 0.8s linear infinite;
+}
+
+@keyframes new-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .empty-card {
   padding: 32rpx 0 16rpx;
 }
@@ -242,4 +287,56 @@
 
 .sess-badge.primary .pulse {
   background: var(--td-brand-color, #0052d9);
+}
+
+/* ── 外观切换（浅色 / 深色）────────────────────────────────────────────
+   放底部而不是顶栏：这是"偶尔改一次"的设置，和「重新配对」同一类；
+   顶栏是窗口控制条，塞设置会让运行态的信息被挤掉。
+   图形用 CSS 画（半边月 / 圆饼），不用 t-icon —— 图标字体走远程 CDN，
+   拉不到就是一堆空白方块且不报错。 */
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24rpx;
+}
+
+.footer-row .footer-link {
+  margin-top: 0;
+  /* 「重新配对」在左边，右边给主题切换，两者视觉上要齐平 */
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.theme-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin-top: 16rpx;
+  padding: 12rpx 22rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  border: 2rpx solid var(--td-component-border, #e7e7e7);
+}
+
+/* 当前是浅色 → 画一个"月牙"，表示"点了变深"；反之画一个"圆饼"。
+   形状与语义对齐：用户看到月亮就知道要去暗色那边。 */
+.theme-glyph {
+  width: 26rpx;
+  height: 26rpx;
+  border-radius: 50%;
+  margin-right: 10rpx;
+}
+
+.theme-glyph.light {
+  background: var(--td-text-color-primary, #1f2329);
+  /* 挖出一个圆：靠 box-shadow 往右偏移投出同色圆盘遮住一部分 */
+  box-shadow: inset -7rpx -3rpx 0 0 var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.theme-glyph.dark {
+  border: 3rpx solid var(--td-text-color-primary, #1f2329);
+  background: transparent;
 }

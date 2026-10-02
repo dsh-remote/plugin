@@ -1,6 +1,6 @@
 <!-- 外层接 tap：点页面任何非输入区域都收起键盘（输入区/面板自己 catchtap 挡住）。
      小程序默认不会因为点到别处而收键盘，键盘会一直盖住半屏。 -->
-<view class="chat-wrap" bindtap="onTapBlank">
+<view class="chat-wrap {{themeClass}}" bindtap="onTapBlank">
 
   <!-- 顶栏：这一页的「窗口控制条」—— 连接/运行状态、过程块一键展开、中断。
        中断放这里而不是输入区：键盘弹起时输入区会被顶走，而中断恰恰是那时候最想按的。 -->
@@ -92,9 +92,13 @@
             <view class="turn-line"></view>
           </view>
 
-          <!-- 你的指令：左侧色条 + 浅底。不套气泡 —— 它是上下文，不是主角 -->
-          <view wx:elif="{{item.kind === 'user'}}" class="user">
-            <view class="user-text">{{item.text}}</view>
+          <!-- 你的指令：靠右的实心气泡（作者的分离靠"位置 + 底色"，见 wxss 里的说明）。
+               外面套一层整宽的 row 来负责"靠哪边"，气泡自己只管长相 —— 
+               这样 .blk 不用改成 flex，其它块的布局一点不受影响。 -->
+          <view wx:elif="{{item.kind === 'user'}}" class="user-row">
+            <view class="user">
+              <view class="user-text">{{item.text}}</view>
+            </view>
           </view>
 
           <!-- 步骤组：「想 → 调工具 → 再想」聚成一条。收起时只占一行，
@@ -176,9 +180,12 @@
             </view>
           </view>
 
-          <!-- 回复正文：不加气泡，整幅宽度阅读 —— 它才是这页的主体 -->
-          <view wx:elif="{{item.kind === 'text'}}" class="reply">
-            <text user-select>{{item.text}}</text><text wx:if="{{!item.done}}" class="caret"></text>
+          <!-- 回复正文：靠左的卡片气泡。它才是这页的主体，所以只留 6% 的缝 —— 
+               足够让人看出它靠左，又几乎不损失长文的可读宽度。 -->
+          <view wx:elif="{{item.kind === 'text'}}" class="reply-row">
+            <view class="reply">
+              <text user-select>{{item.text}}</text><text wx:if="{{!item.done}}" class="caret"></text>
+            </view>
           </view>
 
           <view wx:else class="note">{{item.text}}</view>

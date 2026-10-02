@@ -195,6 +195,62 @@ for (const must of ['node_modules', 'core/package.json', 'package-lock.json']) {
   if (!ignored.includes(must)) problems.push(`project.config.json: packOptions.ignore 少了 ${must}`)
 }
 
+// ⑥ 主题接线：深色靠根容器的 class 生效，这里盯住那条链的每一环。
+//    这些都是"接错一环就整页失效"的地方，而且**全是静默的**——深色变量没命中时
+//    页面照样渲染，只是一块一块露着浅色，肉眼在小屏上很容易看漏。
+{
+  const appWxss = read(path.join(MP_DIR, 'app.wxss'))
+  // **只认真正的 @import 行**。直接 indexOf 会命中注释里的文件名 ——
+  // 上面的说明注释恰好先提到 light.wxss，于是无论顺序怎么颠倒都能匹配到注释那处，
+  // 断言就成了永远为假的死代码（反证时才发现）。
+  const importOf = (name) => {
+    const m = appWxss.match(new RegExp(`^\\s*@import\\s+['"][^'"]*${name.replace('.', '\\.')}['"]`, 'm'))
+    return m ? m.index : -1
+  }
+  const lightIdx = importOf('light.wxss')
+  const darkIdx = importOf('dark.wxss')
+  if (lightIdx < 0) {
+    problems.push('app.wxss: 没有 import theme/light.wxss —— 浅色（默认主题）变量不会生效')
+  }
+  if (darkIdx < 0) {
+    problems.push('app.wxss: 没有 import theme/dark.wxss —— 切了深色也不会变（切了没反应）')
+  } else if (lightIdx >= 0 && darkIdx < lightIdx) {
+    // 顺序是**语义的一部分**：浅色表写在 .page,page 上会向下继承，
+    // 深色表必须靠后用同特异性压掉它。反过来的话深色永远压不住浅色。
+    problems.push('app.wxss: theme/dark.wxss 必须在 theme/light.wxss **之后** import —— ' + '深色表靠"同特异性下源码顺序靠后的胜出"压掉浅色表')
+  }
+
+  // 生成物是否与 TDesign 同步（忘重新生成 = 深色下有变量漏着浅色值）
+  const darkWxss = read(path.join(MP_DIR, 'theme/dark.wxss'))
+  if (!/\.theme-dark/.test(darkWxss)) {
+    problems.push('theme/dark.wxss: 没有 .theme-dark 选择器 —— 深色变量没有生效条件。重新生成：node scripts/gen-mp-theme.mjs')
+  }
+  const lightWxss = read(path.join(MP_DIR, 'theme/light.wxss'))
+  if (!/\.page/.test(lightWxss)) {
+    problems.push('theme/light.wxss: 没有 .page,page 选择器 —— 浅色变量挂不上 page。重新生成：node scripts/gen-mp-theme.mjs')
+  }
+
+  // 每个页面的根容器都要挂 themeClass，否则该页切了主题没反应
+  for (const page of pages) {
+    const wxml = read(path.join(MP_DIR, `${page}.wxml`))
+    if (!/themeClass/.test(wxml)) {
+      problems.push(
+        `${page}.wxml: 根容器没有 {{themeClass}} —— 这一页在深色下不会变。` +
+          '深色变量挂在 .theme-dark 类上，class 只能由根容器给',
+      )
+    }
+    const js = read(path.join(MP_DIR, `${page}.js`))
+    if (!/theme\.applyTo\(/.test(js)) {
+      problems.push(`${page}.js: onLoad 里没有 theme.applyTo(this) —— 导航栏与下拉回弹区不会跟着换色`)
+    }
+  }
+
+  // 默认必须是浅色：用户没选过时
+  if (!/themeName:\s*'light'/.test(read(path.join(MP_DIR, `${pages[0]}.js`)))) {
+    problems.push(`${PAGES[0]}.js: data.themeName 默认值不是 'light' —— 约定是"没选过就是浅色"`)
+  }
+}
+
 if (!quiet) {
   if (notes.length) {
     console.log('提示（不算错）：')

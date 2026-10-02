@@ -33,7 +33,14 @@ function flag(name, fallback) {
   const hit = process.argv.find((a) => a === `--${name}` || a.startsWith(`--${name}=`))
   if (!hit) return fallback
   const eq = hit.indexOf('=')
-  return eq === -1 ? true : hit.slice(eq + 1)
+  if (eq !== -1) return hit.slice(eq + 1)
+  // 空格分隔形式（`--case theme`）：下一个 token 就是值。
+  // 原来这里一律返回 true，于是 `--case theme` 被当成"case = 真"，
+  // 报出 `没有这个探针：true` —— 报错信息完全指不到真正的原因。
+  const i = process.argv.indexOf(hit)
+  const next = process.argv[i + 1]
+  if (next !== undefined && !next.startsWith('--')) return next
+  return true
 }
 
 const PORT = Number(flag('port', process.env.MP_AUTO_PORT || 9420))
@@ -92,6 +99,49 @@ function longBlocks(rounds) {
   return out
 }
 
+/** 一组跑满 steps 步的步骤组；展示字段（label/tools/live）得自己写 —— 走 setData 不经过 decorateSteps */
+function stepsGroup(key, open, steps) {
+  const items = []
+  for (let i = 1; i <= steps; i++) {
+    items.push({
+      key: key + 't' + i,
+      type: 'tool',
+      callId: key + 'c' + i,
+      phase: 'completed',
+      tool: 'read_file',
+      title: `src/a-${i}.tsx`,
+      args: `{"path":"a/${i}"}`,
+      result: `ok ${i}`,
+      open: false,
+      preview: `ok ${i}`,
+    })
+  }
+  return {
+    key,
+    kind: 'steps',
+    open,
+    closed: true,
+    live: false,
+    tools: steps,
+    thinkMs: 0,
+    tailId: '',
+    label: `已完成 ${steps} 个步骤`,
+    items,
+  }
+}
+
+/** 反复用到的长会话：每轮 = 轮次分隔 + 指令 + 步骤组 + 正文。展开态下比一屏长得多 */
+function foldFixture(rounds, open, steps) {
+  const out = []
+  for (let i = 1; i <= rounds; i++) {
+    out.push({ key: 'r' + i, kind: 'turn', label: `第 ${i} 轮`, time: '14:00' })
+    out.push({ key: 'u' + i, kind: 'user', text: `第 ${i} 条指令，说点东西把这一页撑长。`, confirmed: true })
+    out.push(stepsGroup('x' + i, open, steps))
+    out.push({ key: 'm' + i, kind: 'text', text: `第 ${i} 轮回复。` + '撑高用的正文。'.repeat(3), done: true })
+  }
+  return out
+}
+
 const CASES = {
   /**
    * 「回到最新」：滚到底部的浮标点下去，scroll-view 的 scrollTop 必须真的变。
@@ -128,6 +178,114 @@ const CASES = {
       [data.atBottom === true, 'atBottom 要跟着变 true'],
     ]
     return checks
+  },
+
+  /**
+   * 「收起过程不能留下空白」。
+   *
+   * 用户报的是「展开过程后再收起过程，过程内容不见了，但是**所占的位置还在**」。
+   * 那个残留读页面 data 是看不出来的（`open` 老老实实变成了 false），截图也只是一片白，
+   * 只有拿渲染层的数字才说得清：折叠后 scrollTop 必须落在**新的**合法范围里，
+   * 否则下面就是一段滚不到任何内容的空白（`blank > 0`）。
+   *
+   * 判据分两段，缺一不可：
+   *   ① 卡片节点真的没了 + 内容高度真的矮了（"内容不见了"这半句）；
+   *   ② scrollTop 落在新的底部、blank ≈ 0（"位置还在"这半句的反面）。
+   * 只查①的话，一个"内容没了但视口停在旧高度"的 bug 照样全绿。
+   */
+  fold: async (page) => {
+    await page.setData({ blocks: foldFixture(8, true, 6), foldable: 8, expanded: true })
+    await page.waitFor(1200)
+
+    const el = await page.$('.scroll')
+    const cardsBefore = (await page.$$('.steps-card')).length
+    const heightBefore = await el.scrollHeight()
+
+    await page.callMethod('onJumpLatest')
+    await page.waitFor(1500)
+    const topBefore = await el.property('scrollTop')
+
+    await page.callMethod('onToggleAll')
+    await page.waitFor(1800)
+
+    const cardsAfter = (await page.$$('.steps-card')).length
+    const heightAfter = await el.scrollHeight()
+    const topAfter = await el.property('scrollTop')
+    const viewport = (await el.size()).height
+    // 内容比视口高出来的部分 = scrollTop 的合法上限；scrollTop 追不上它 = 底下留白
+    const blank = Math.max(0, Math.round(heightAfter - viewport - topAfter))
+    const data = await page.data()
+    const groups = data.blocks.filter((b) => b.kind === 'steps')
+
+    return [
+      [cardsBefore === 8, `折叠前 8 张过程卡片都在（数到 ${cardsBefore}）`],
+      [topBefore > 100, `折叠前确实贴着底（scrollTop = ${topBefore}）`],
+      [cardsAfter === 0, `折叠后卡片节点必须全部消失（还剩 ${cardsAfter} 张）`],
+      [heightBefore - heightAfter > 1000, `内容要真的矮下来（${Math.round(heightBefore)} → ${Math.round(heightAfter)}）`],
+      [groups.length === 8 && groups.every((g) => !g.open), 'data 里每一组都变成收起的'],
+      [blank <= 4, `底下不许剩空白（blank = ${blank}px，scrollTop ${topAfter} / 上限 ${Math.round(heightAfter - viewport)}）`],
+    ]
+  },
+  /**
+   * 主题切换：点一下浅色/深色，**渲染层真的换了底色**才算过。
+   *
+   * 为什么必须读渲染层：变量挂在一个 class 上，class 加对了、页面 data 也对了，
+   * 仍可能一行都没生效（选择器写错、import 顺序颠倒、变量表没重新生成）。
+   * 这几种都不会报错，页面照常渲染 —— 只是颜色是浅的。所以判据只能看
+   * 元素**实际算出来的** backgroundColor。
+   *
+   * 必须在 sessions 页测：切换按钮在那儿，而按钮能不能点是两件事（这里只管后者）。
+   */
+  theme: async (page, mini) => {
+    await mini.reLaunch('/pages/sessions/sessions')
+    const p = await mini.currentPage()
+    await p.waitFor(600)
+
+    // 默认态：没选过就是浅色
+    const root0 = await p.$('.page-pad')
+    const bg0 = await root0.style('background-color')
+    const data0 = await p.data()
+
+    // 真点一下（不是 setData 塞 themeClass —— 那会绕过整条链，恰好漏掉
+    // "存储读到了吗 / applyTo 调了吗 / class 挂对了吗"这三件事）
+    await p.callMethod('onToggleTheme')
+    await p.waitFor(800)
+
+    const root1 = await p.$('.page-pad')
+    const bg1 = await root1.style('background-color')
+    const data1 = await p.data()
+    const rootClass = (await root1.attribute('class')) || ''
+
+    // 再点回来，验证**双向**（这是本次的核心：之前"固定浅色"只能压住深色、切不回来）
+    await p.callMethod('onToggleTheme')
+    await p.waitFor(800)
+    const bg2 = await (await p.$('.page-pad')).style('background-color')
+    const data2 = await p.data()
+
+    /** #rrggbb → 相对亮度。判"深色底"比判"某个具体值"稳，换 TDesign 版本也不会假红。 */
+    const lum = (c) => {
+      const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(String(c))
+      if (!m) return null
+      const [r, g, b] = [1, 2, 3].map((i) => Number(m[i]) / 255)
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const l0 = lum(bg0)
+    const l1 = lum(bg1)
+    const l2 = lum(bg2)
+
+    return [
+      [data0.themeName === 'light', `默认是浅色（themeName = ${data0.themeName}）`],
+      [l0 !== null && l0 > 0.6, `默认底色是亮的（亮度 ${l0?.toFixed(2)}，${bg0}）`],
+      [data1.themeName === 'dark', `点一下切到深色（themeName = ${data1.themeName}）`],
+      [
+        String(rootClass).includes('theme-dark'),
+        `根容器挂上 theme-dark（class = "${String(rootClass).trim()}"）`,
+      ],
+      [l1 !== null && l1 < 0.25, `底色真的变暗了（亮度 ${l1?.toFixed(2)}，${bg1}）`],
+      [l1 !== null && l0 !== null && l1 < l0 - 0.4, `深浅差得开（亮度 ${l0?.toFixed(2)} → ${l1?.toFixed(2)}）`],
+      [data2.themeName === 'light', '再点一下切回浅色（双向可切）'],
+      [l2 !== null && l0 !== null && Math.abs(l2 - l0) < 0.02, `切回来的底色与初始一致（亮度 ${l2?.toFixed(2)} vs ${l0?.toFixed(2)}）`],
+    ]
   },
 }
 
@@ -166,7 +324,7 @@ async function main() {
       await miniProgram.reLaunch(`/pages/chat/chat?id=probe-${name}`)
       const page = await miniProgram.currentPage()
       await page.waitFor(500)
-      const checks = await CASES[name](page)
+      const checks = await CASES[name](page, miniProgram)
       total += checks.length
       const bad = checks.filter(([ok]) => !ok)
       failed += bad.length

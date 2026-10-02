@@ -1,10 +1,15 @@
 /* 全局样式：TDesign 设计变量 + 页面级骨架（组件内部样式由 TDesign 提供） */
 @import './miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss';
-/* 固定白色主题。**必须在上面那行之后**：两份规则的写的是同一批变量、选择器也一样
-   （.page,page），靠「同特异性下源码顺序靠后的胜出」压掉 _index 里的
-   @media (prefers-color-scheme:dark) 分支 —— 系统开着深色也照样是白底深字。
-   这是生成物，不要手改；重新生成：node scripts/gen-mp-theme.mjs */
-@import './theme/fixed-light.wxss';
+/* 主题变量表。**三份的 import 顺序不能换**，理由逐条：
+   ① _index.wxss —— TDesign 原件，深浅两套都包在 @media (prefers-color-scheme) 里。
+   ② theme/light.wxss —— 浅色（**默认态**）。把浅色变量从 @media 里解放出来、
+      无条件生效，选择器与 TDesign 同为 .page,page，靠「同特异性下源码顺序靠后的胜出」
+      压掉 _index 里的深色分支。所以**系统是深色也是白底深字**。
+   ③ theme/dark.wxss —— 深色。选择器是 .theme-dark，挂在**页面根容器**的 class 上。
+      必须在 light 之后：light 写在 page 上会向下继承，本表靠顺序压掉它。
+   ②③ 两份都是 scripts/gen-mp-theme.mjs 的生成物，不要手改。 */
+@import './theme/light.wxss';
+@import './theme/dark.wxss';
 
 page {
   background: var(--td-bg-color-page, #f3f3f3);
@@ -23,6 +28,13 @@ view, scroll-view, input, textarea, button {
 
 .page-pad {
   padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom));
+  /* 必须自带底色 + 铺满。
+     为什么：深色变量挂在**根容器**的 class 上（.theme-dark），而 `page` 元素自己
+     永远是浅色（浅色表写在 .page,page 上，那是默认态）。根容器不铺满、不画底色的话，
+     深色下会从下边缘 / 短内容处透出那条浅色带 —— 看着像"深色没铺满"。
+     min-height 而不是 height：内容不足一屏时底色也要到底。 */
+  min-height: 100%;
+  background: var(--td-bg-color-page);
 }
 
 /* ── 卡片：三页共用的基础容器 ─────────────────────────────────────────

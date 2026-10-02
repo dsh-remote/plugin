@@ -3,6 +3,7 @@
 var client = require('../../core/client.js')
 var codec = require('../../core/codec.js')
 var env = require('../../core/env.js')
+var theme = require('../../core/theme.js')
 
 function statusView(status) {
   switch (status) {
@@ -40,10 +41,14 @@ Page({
     socketReady: true,
     /** 容器是否有扫码能力；没有就不放一个点了必然报错的按钮 */
     scanReady: true,
+    /** 主题。见 sessions 页同名字段的说明。 */
+    themeName: 'light',
+    themeClass: '',
   },
 
   onLoad: function () {
     this.client = client.getClient()
+    theme.applyTo(this)
     var p = env.probe()
     this.setData({
       server: this.client.server || '',

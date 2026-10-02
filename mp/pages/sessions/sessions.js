@@ -1,6 +1,7 @@
 'use strict'
 
 var client = require('../../core/client.js')
+var theme = require('../../core/theme.js')
 
 /**
  * 会话徽标：状态不可混淆，尤其是「已归档」——
@@ -77,10 +78,17 @@ Page({
     /** 被过滤掉的归档会话数；>0 时列表底部补一句说明 */
     hiddenArchived: 0,
     hiddenText: '',
+    /** 正在让主机新建会话。没有这个状态，连点会真的造出好几条空会话 */
+    creating: false,
+    /** 主题。themeName 用来选文案（"切换到深色" vs "切换到浅色"），
+        themeClass 挂在根容器上（深色时是 theme-dark，浅色时是空串）。 */
+    themeName: 'light',
+    themeClass: '',
   },
 
   onLoad: function () {
     this.client = client.getClient()
+    theme.applyTo(this)
   },
 
   onShow: function () {
@@ -215,5 +223,62 @@ Page({
 
   onGoPair: function () {
     wx.navigateTo({ url: '/pages/pair/pair' })
+  },
+
+  /**
+   * 切换浅色 / 深色。
+   *
+   * 存不下的时候**必须说一句**：界面已经变了，但下次启动会跳回浅色。不提示的话，
+   * 用户会以为设置没生效、或者以为自己记错了。安静地失败是这个功能最坏的形态。
+   */
+  onToggleTheme: function () {
+    var r = theme.toggle(this)
+    if (!r.saved) {
+      wx.showToast({ title: '已切换，但没存住，下次启动会变回浅色', icon: 'none', duration: 2500 })
+    }
+  },
+
+  /**
+   * 让主机新建一条会话。
+   *
+   * 三条纪律：
+   * 1. **不许静默**：每一种失败都要有可读原因（没配对 / 还没连上 / 主机那一代没有这个能力 /
+   *    创建失败 / 超时）。"点了什么都没发生"是这一页最难查的那种坏。
+   * 2. **按钮进入"正在新建"**：创建要往主机跑一个来回，没有可见动静就会被连点，
+   *    而连点会真的造出好几条空会话（主机侧没有去重）。
+   * 3. **成功就直接进去**：新建就是为了马上发第一条指令，停在列表上再点一次是多余的。
+   *    跳过去之后 chat 页会照常去读历史 —— 空会话读到空内容，是正常的。
+   */
+  onNewSession: function () {
+    var self = this
+    if (this.data.creating) return
+    if (!this.client.isPaired()) {
+      wx.showToast({ title: '还没有配对主机', icon: 'none' })
+      return
+    }
+    if (this.data.status !== 'online') {
+      wx.showToast({ title: '还没连上主机，稍后再试', icon: 'none' })
+      return
+    }
+    this.setData({ creating: true })
+    var done = function (res) {
+      self.setData({ creating: false })
+      if (!res || !res.ok || !res.sessionId) {
+        wx.showToast({ title: String((res && res.message) || '新建会话失败').slice(0, 40), icon: 'none' })
+        return
+      }
+      // 新会话此刻还没有名字（主机要等第一条指令之后才起标题）。这里给它一个**诚实的**
+      // 占位而不是编一个假标题：列表那一侧没标题时显示 id，是同一个规矩。
+      self.refresh()
+      wx.navigateTo({
+        url: '/pages/chat/chat?id=' + encodeURIComponent(res.sessionId) + '&title=' + encodeURIComponent('新会话'),
+      })
+    }
+    this.client
+      .newSession()
+      .then(done)
+      .catch(function (e) {
+        done({ ok: false, message: (e && e.message) || '新建会话失败' })
+      })
   },
 })
