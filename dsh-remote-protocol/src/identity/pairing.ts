@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto'
 export interface PairingInfo {
   /** 版本；小程序恒返回 1，不做校验。 */
   v: number
-  /** 中继地址，如 `wss://drc.provid.cc`。 */
+  /** 中继地址，如 `wss://drc.example.com`。 */
   server: string
   /** 主机展示名，缺省 `'dsh'`。 */
   hostLabel: string

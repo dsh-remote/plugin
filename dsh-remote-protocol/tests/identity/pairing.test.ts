@@ -19,12 +19,12 @@ import { generatePsk } from '../../src/crypto/keys.js'
 const PSK = generatePsk()
 
 test('构造→解析 往返一致（含内嵌配对码）', () => {
-  const uri = buildPairingUri({ server: 'wss://drc.provid.cc', psk: PSK, hostLabel: 'bins-macbook', token: '123456' })
+  const uri = buildPairingUri({ server: 'wss://drc.example.com', psk: PSK, hostLabel: 'my-macbook', token: '123456' })
   assert.ok(uri.startsWith('dshr:/p?'))
   assert.deepEqual(parsePairingUri(uri), {
     v: 1,
-    server: 'wss://drc.provid.cc',
-    hostLabel: 'bins-macbook',
+    server: 'wss://drc.example.com',
+    hostLabel: 'my-macbook',
     psk: PSK,
     token: '123456',
   })
