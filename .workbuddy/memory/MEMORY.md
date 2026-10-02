@@ -30,6 +30,11 @@ env -u NODE_OPTIONS pnpm -C e2e test  # mp/协议/多配对/重启恢复 + run.m
 
 （别在记忆里写死测试条数 —— 换过几轮了，以实际跑出来为准。）
 
+**plugin 单跑要用路径 filter**：根 `package.json` 与 `packages/plugin/package.json`
+**包名相同**（都叫 `dsh-remote-control`），所以 `pnpm --filter dsh-remote-control test`
+会同时命中两个（第一个跑的是根包的 `pnpm -r test`）。要单跑插件用
+`pnpm -C packages/plugin test`，别用名字 filter。
+
 **各包测试引的是 `dist/` 产物**（`apps/server/tests` 就是 `import '../dist/src/server.js'`）。
 所以只 `node --test tests/*.mjs` 会**假红** —— 包自己的 `test` 脚本里带 `pnpm build`，
 要么走它，要么先手动 build。今天在 relay 上白排查了一轮就是这个。
@@ -123,10 +128,22 @@ env -u NODE_OPTIONS pnpm -C e2e test  # mp/协议/多配对/重启恢复 + run.m
   2026-10-02 真机截图里同一页 4 个 `t-input` 全塌成一条缝，隔壁 `t-button` 正常；
   断点至今没定位到（变量/选择器/`classPrefix` 都查过是好的）。
   **输入框一律原生 `input` + 写死 `height`/`line-height`**，`clearable` 用自绘 `✕`。
+- **滚动锚点必须是两个静态 id**：chat 页用 `id="anchor-a"` + `id="anchor-b"` 两个元素，
+  靠切 `scroll-into-view` 指哪个来滚到底。**绝不能写成一个元素跟着值改名**
+  （`<view id="{{toView}}">`）—— `scroll-into-view` 要按 id 查节点，改名与生效谁先
+  落到渲染层是竞态，赌输就是**静默不滚**（不报错、不重试，`data.toView` 还是对的）。
+  实证：「回到最新」点了没反应就是这个，反证过（动态 id 时 scrollTop 0→0，
+  静态 id 时 0→907）。
+- **要"限高 + 内部滚动"只能用 `scroll-view`**：小程序里 `view` 的 CSS `overflow: auto`
+  在**真机上不生效**（开发者工具里可能看起来能滚）。限高用 `max-height`（不是 `height`，
+  短内容不该留空白）。chat 页的步骤组 `.steps-scroll` 就是这么做的，滚动落点 `tailId`
+  **只给还在跑的组**，否则回看的用户会被新内容反复拽回组尾。
 - 改完界面按顺序验证：`pnpm check:mp-ui`（结构自检，含注入配置）→
   `pnpm mp:shots`（连开发者工具自动化端口截图，**自己能看渲染结果**，同时捕获运行时错误，
   有错非零退出；不必等用户扫码反馈。端口要 `cli quit` 后再 `cli auto --auto-port 9420`
   才会监听；`cli auto` 报 `wait IDE port timeout` 就原样再跑一次同一条命令）→
+  `pnpm mp:probe`（**交互探针**：真的"点一下"再读渲染层真实状态，判"点了有没有用"。
+  截图只证明长得对、页面单测只证明逻辑算得对，而"点了没反应"两样都抓不到）→
   `cli preview --project $PWD/mp --qr-format image --qr-output .tmp/mp-preview-qr.png`
   （真编译 + 真机二维码。**`--project` 必须绝对路径**，写 `mp` 会报
   "project.config.json 不存在 code 19"）。

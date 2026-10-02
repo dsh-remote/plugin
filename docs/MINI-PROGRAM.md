@@ -124,8 +124,18 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
 就是 12 个块，用户要翻 6 屏才读到那句结论。
 
 - 组内条目按时间序排，两种：`think`（只有阶段与耗时）和 `tool`（可展开看参数与完整结果）。
+- **实时新开的组默认展开，历史回放的默认收起**（`_stepsPush(blocks, item, forceOpen)`）。
+  收起时只有一行"正在执行 1 个步骤"，用户会以为**根本没有工具列表** —— 而那正是他此刻
+  最想看的东西。历史那一侧必须反过来：一屏全是过程就没法读正文了。`allowThink` 这个
+  既有的"实时 or 历史"开关正好复用成 `forceOpen`，不再多引一个参数。
+- **过程窗口限高 + 组内自己滚**：`.steps-scroll` 是 `max-height: 44vh` 的 `scroll-view`，
+  `scroll-into-view` 指向组尾那一条（`id="s{{it.key}}"`）。展开一个跑了 6 步的组不该把
+  正文顶出屏幕 —— 这一页的主体是正文，过程不该赢。
+  两个细节：① `tailId` **只给还在跑的组**，跑完的组不给，否则用户回看老组时每来一条
+  新内容就被拽回组尾；② 必须用 `scroll-view`，小程序里 `view` 的 CSS `overflow: auto`
+  在**真机上不生效**（开发者工具里可能"看起来能滚"），写成 CSS 滚动等于真机根本不动。
 - **组的开合**（`onToggleSteps`）与**某一步的开合**（`onToggleTool`）是两个层级；顶栏的
-  「展开过程」是全局开关，之后新开的组会继承它。
+  「展开过程」是全局开关，管的是历史组与一键全开全关，不改变"实时组默认展开"这条。
 - **封口**：一旦有正文 / 轮次 / 指令出现，这一组就 `closed`，之后新的工具调用必须另起一组
   （`_sealSteps`）。漏了这条会把新调用插进上一段已经读完的过程里 —— 有测试锁着。
 - 组的展示字段（`label` / `tools` / `live`）在 `_commit` 里由 `decorateSteps()` 统一派生，
@@ -136,7 +146,7 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
 「思考」的时长是**推断**出来的 —— 它从出现到下一条内容之间的间隔。协议里没有"思考开始了"
 这种事件，「思考」正文更是按 M28 红线根本不出站（见上）。
 
-`e2e/mp-chat-blocks.test.mjs`（18 项）锁着这些时序，改块流一定要跑。
+`e2e/mp-chat-blocks.test.mjs`（22 项）锁着这些时序，改块流一定要跑。
 
 ## 打开会话时读到主机上的历史
 
@@ -180,6 +190,14 @@ mp: chat._replayPage() → 走**与实时流同一套**落块函数
   这个 bug 真发生过一次，而且两头的测试都看不见它（页面测试用的是桩 client，
   闭环测试当时一条历史用例都没有）—— 现在由 `e2e/mp-client.test.mjs` 第 11/12 条按住。
 - **往前插内容不许自动跟底**：用锚点把用户刚读到的那一块滚回视口，否则页面会原地跳动。
+- **滚动锚点必须是两个静态 id**（`id="anchor-a"` + `id="anchor-b"`，靠翻转
+  `scroll-into-view` 在两者之间指，两个都在内容末尾所以指哪个都是"到底"）。
+  曾经写成 `<view id="{{toView}}">` —— 同一个元素跟着 `toView` 改名。那要赌"元素改名"与
+  "`scroll-into-view` 生效"谁先落到渲染层上，赌输了 scroll-view 就查不到目标节点、
+  **静默不滚**（不报错、不重试），表现就是「回到最新」点了没反应。
+  这个 bug 截图看不见、页面单测也看不见（它读 `data.toView`，逻辑层完全正确，
+  反证时 `toView` 照样变成 `anchor-b`），**只有真的点一下并读 scroll-view 自己的
+  `scrollTop` 才发现** —— `pnpm mp:probe` 就是为这件事写的。
 
 界面上「历史读取」有四种状态，必须长得不一样：`loading`（转圈）/ `ok`（外加一句
 "以上是主机上已有的历史"；还有更早时给一个可点的「加载更早的内容」）/ `error`
@@ -226,11 +244,22 @@ pnpm -r test                          # 含下面几项
 node --test e2e/mp-crypto.test.mjs    # 11 项：base64/UTF-8/密钥派生/seal-open/篡改检测
 node --test e2e/mp-client.test.mjs    # 13 项：真实 client.js + wx shim 跑完整闭环（含取历史的结算语义）
 node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
-node --test e2e/mp-chat-blocks.test.mjs   # 19 项：chat 页块流时序 + 历史回放
+node --test e2e/mp-chat-blocks.test.mjs   # 22 项：chat 页块流时序 + 历史回放 + 过程窗口
 node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
 pnpm check:mp-ui                      # wxml 引用的组件/类名是否都有声明与定义
 pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
+
+**需要开发者工具**（人工触发，不进 CI）的那两个：
+
+```sh
+pnpm mp:shots                         # 截模拟器渲染（改完界面自己看得见结果）
+pnpm mp:probe                         # 交互探针：点一下到底有没有用（读 scrollTop 等真实状态）
+```
+
+`mp:probe` 补的是另外两者都覆盖不到的一层：`mp:shots` 只证明"长得对"，
+`mp-chat-blocks` 只证明"逻辑算得对"，而「点了没反应」发生在渲染层 ——
+`scroll-into-view` 找不到目标节点时不报错、不重试，只是不滚。改滚动或交互之后跑它。
 
 `e2e/mp-sim.mjs` 提供了一个最小 `wx` shim（storage + `connectSocket` 走 `ws` 包），
 所以**小程序客户端代码可以在 Node 里被真实驱动**。改了 `core/client.js` 一定要跑它。
