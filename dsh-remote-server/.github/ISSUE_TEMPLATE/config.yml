@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/providcc/dsh-remote-server/security/advisories/new
+    about: 私下报告安全问题——请不要开公开 issue。
+  - name: 提问 / 讨论
+    url: https://github.com/providcc/dsh-remote-server/discussions
+    about: 与社区一起提问、讨论想法。

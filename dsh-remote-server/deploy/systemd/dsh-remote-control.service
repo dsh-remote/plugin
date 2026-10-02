@@ -1,0 +1,55 @@
+# systemd unit for the dsh-remote-control relay.
+#
+#   /etc/systemd/system/dsh-remote-control.service
+#   /etc/dsh-remote-control.env      (chmod 600, DRC_HOST_TOKEN=...)
+#
+# The relay binds 127.0.0.1 by default — nginx terminates TLS and proxies wss
+# to it. (Override with DRC_BIND in the env file if it must be the edge.)
+#
+# What actually runs is ONE self-contained file. `pnpm --filter @dsh-rc/server build`
+# emits apps/server/dist/bundle/main.js with `ws` and the protocol layer inlined, so the
+# deployment is "copy that file" — no node_modules, no `npm install --omit=dev`, and
+# therefore no way for the server's dependency tree to drift from CI's.
+# The old unit ran `src/main.mjs`; that entry point is gone, and `dist/src/main.js`
+# (the unbuilt-tree form) needs devDependencies to resolve @dsh-rc/protocol —
+# the bundle is the only supported production entry.
+
+[Unit]
+Description=DSH Remote Control relay (zero-knowledge WebSocket relay)
+Documentation=file:///opt/dsh-remote-control/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dsh-remote-control/server
+EnvironmentFile=/etc/dsh-remote-control.env
+ExecStart=/usr/bin/node /opt/dsh-remote-control/server/relay.mjs
+Restart=always
+RestartSec=3
+
+# The relay already handles SIGTERM gracefully (drain sockets, exit 0);
+# give it room, then be firm.
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# --- hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dsh-remote-control
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+
+# --- logging ---
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dsh-remote-control
+
+[Install]
+WantedBy=multi-user.target

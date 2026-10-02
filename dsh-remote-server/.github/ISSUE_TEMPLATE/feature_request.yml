@@ -1,0 +1,33 @@
+name: 功能建议
+description: 提出一个新能力或一处改进。
+title: 'feat: '
+labels: ['enhancement', 'triage']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题
+      description: 你想做什么，而中继现在不支持？
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 你希望看到什么？如果会改动环境变量或端点，请列出。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        提醒：中继是**零知识**的——它没有载荷密钥，新能力不应要求它触碰明文。
+        `/healthz` 的字段与日志的 `level` / `msg` 是运维契约，新增可以，删改要慎重。

@@ -1,0 +1,12 @@
+# pnpm 11 把设置搬到了 pnpm-workspace.yaml（写在 package.json 的 `pnpm` 字段已不再被读取）。
+# 本仓不是 monorepo，这个文件只用来承载设置。
+packages:
+  - '.'
+
+# 允许执行安装脚本的依赖必须显式放行：esbuild 的安装脚本要落下平台二进制，
+# 而打包单文件产物那一步就要用它。
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

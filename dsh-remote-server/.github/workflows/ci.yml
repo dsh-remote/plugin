@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的重复推送取消旧运行，节省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      # 本仓刻意**不带 lockfile**（它把协议作为 git 依赖消费，本地锁不住 GitHub 上的 ref），
+      # 所以这里不是 `--frozen-lockfile`。
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Build + tests
+        run: pnpm test
+
+  # 部署形态的机械防线：在**最低支持版本**上把单文件产物拷进一个空目录，真起一次，
+  # 断言 /healthz 的 version 等于包版本、SIGTERM 退出码为 0。这条独立于测试套件，
+  # 因为它是"生产只有一个文件"这句话的可执行版本。
+  relay-smoke:
+    name: relay smoke (single-file artifact, node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build the single-file artifact
+        run: pnpm build
+
+      - name: Run it from an empty directory
+        run: |
+          set -e
+          # 先把包版本读进环境变量，再 cd 走——否则会去读空目录里并不存在的 package.json。
+          WANT_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          export WANT_VERSION
+
+          mkdir -p /tmp/drc-smoke
+          cp dist/bundle/main.js /tmp/drc-smoke/relay.mjs
+          cd /tmp/drc-smoke
+          DRC_HOST_TOKEN=smoke-token-0123456789abcdef DRC_PORT=0 \
+            node relay.mjs > smoke.log 2>&1 &
+          pid=$!
+          # 等它打印出真实端口（DRC_PORT=0 时由系统分配）。
+          for _ in $(seq 1 50); do
+            grep -q 'relay listening' smoke.log && break
+            sleep 0.2
+          done
+          port="$(sed -n 's/.*"msg":"relay listening","port":\([0-9]*\).*/\1/p' smoke.log | head -1)"
+          test -n "$port" || { echo "没有从启动日志里读到端口"; cat smoke.log; exit 1; }
+
+          got="$(curl -s "http://127.0.0.1:$port/healthz" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+          echo "healthz version=$got  package version=$WANT_VERSION"
+          [ "$got" = "$WANT_VERSION" ] || { echo "version 不匹配（出现 0.0.0 说明 define 没进去）"; exit 1; }
+
+          kill -TERM "$pid"
+          code=0
+          wait "$pid" || code=$?
+          echo "exit code=$code"
+          [ "$code" = "0" ] || exit 1
+          cat smoke.log
