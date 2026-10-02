@@ -101,6 +101,10 @@ function decorateSteps(g) {
   c.tools = tools
   c.thinkMs = thinkMs
   c.live = live
+  // 组内自动滚的落点（对应 wxml 里 `id="s{{it.key}}"`）。
+  // **只给还在跑的组**：跑完的组不给，否则用户回看老组时，每来一条新内容
+  // 就被拽回组尾，根本读不了。live 变 false 时置空，滚动自然停住。
+  c.tailId = live && g.items.length ? 's' + g.items[g.items.length - 1].key : ''
   if (live) c.label = tools ? '正在执行 ' + tools + ' 个步骤' : '思考中'
   else if (tools) c.label = '已完成 ' + tools + ' 个步骤'
   else c.label = '思考了 ' + fmtMs(thinkMs)
@@ -628,7 +632,9 @@ Page({
 
     // 工具开始 = 上一段思考结束（思考的时长就是它到下一条内容之间的间隔）
     var next = this._closeThink(blocks)
-    next = found ? this._replaceTool(next, found, item) : this._stepsPush(next, item)
+    // allowThink 同时就是"这是实时还是历史"：实时新组展开（能看见工具在跑什么），
+    // 历史回放收起（一屏全是过程就没法读了）。
+    next = found ? this._replaceTool(next, found, item) : this._stepsPush(next, item, allowThink)
 
     // 结果到手了模型要接着想 —— 但两条边界：
     // ① 工具还在跑（started/args）时不补思考，那会儿在跑的是工具，不是模型；
@@ -720,9 +726,11 @@ Page({
 
   /**
    * 往队尾的步骤组里塞一条；没有开放的组就新开一个。
-   * 新组继承当前的「展开过程」状态，用户一键展开之后不必每组再点一次。
+   * `forceOpen` 决定新组是展开还是收起：实时来的组**默认展开** —— 用户正是要看
+   * "它现在在调什么工具"，只给一行"正在执行 1 个步骤"会让人以为没有工具列表。
+   * 历史回放给 false（一屏全是过程就没法读了）。不传则继承顶栏的「展开过程」开关。
    */
-  _stepsPush: function (blocks, item) {
+  _stepsPush: function (blocks, item, forceOpen) {
     var last = blocks[blocks.length - 1]
     var out = blocks.slice()
     if (last && last.kind === 'steps' && !last.closed) {
@@ -735,7 +743,7 @@ Page({
       key: 'x' + this._counter++,
       kind: 'steps',
       items: [item],
-      open: !!this.data.expanded,
+      open: forceOpen === undefined ? !!this.data.expanded : forceOpen,
       closed: false,
     })
     return out
@@ -778,13 +786,18 @@ Page({
       if (tail && tail.type === 'think' && !tail.done) return blocks
     }
     this._startThinkTick()
-    return this._stepsPush(blocks, {
-      key: 'k' + this._counter++,
-      type: 'think',
-      startedAt: Date.now(),
-      msText: '',
-      done: false,
-    })
+    // 这里只会在运行时走到（上面已 return），所以是实时新建的组 → 展开
+    return this._stepsPush(
+      blocks,
+      {
+        key: 'k' + this._counter++,
+        type: 'think',
+        startedAt: Date.now(),
+        msText: '',
+        done: false,
+      },
+      true,
+    )
   },
 
   /** 按 callId 在步骤组里找那一条 */

@@ -114,50 +114,65 @@
             </view>
 
             <view wx:if="{{item.open}}" class="steps-card">
-              <block wx:for="{{item.items}}" wx:for-item="it" wx:for-index="ii" wx:key="key">
+              <!-- 过程窗口：**限高 + 组内自己滚到最新**。
+                   展开一个跑了 8 步的组不该把整页正文顶出屏幕 —— 所以这里是个有界的窗口，
+                   而不是让它无限长高。scroll-into-view 指向组尾那一条，只有**还在跑**的组
+                   才给 tailId（跑完的组不再拽人，否则用户回看老组会被反复拉走）。
+                   注意小程序里 CSS `overflow: auto` 对 view 不生效，要滚只能用 scroll-view。 -->
+              <scroll-view
+                class="steps-scroll"
+                scroll-y
+                enable-flex
+                scroll-with-animation
+                scroll-into-view="{{item.tailId}}">
+                <block wx:for="{{item.items}}" wx:for-item="it" wx:for-index="ii" wx:key="key">
+                  <!-- 每条包一个带 id 的壳：就是上面 scroll-into-view 的落点 -->
+                  <view id="s{{it.key}}">
 
-                <!-- 思考：只有阶段与耗时。思维链正文按 host-plugin-runtime.md 的 M28 红线
-                     不得跨 E2E 边界，宿主侧就被丢掉了 —— 这不是界面层能改的。 -->
-                <view wx:if="{{it.type === 'think'}}" class="step-think">
-                  <view class="step-think-mark {{it.done ? '' : 'live'}}"></view>
-                  <text class="step-think-text">{{it.done ? '思考' : '思考中'}} {{it.msText}}</text>
-                </view>
+                    <!-- 思考：只有阶段与耗时。思维链正文按 host-plugin-runtime.md 的 M28 红线
+                         不得跨 E2E 边界，宿主侧就被丢掉了 —— 这不是界面层能改的。 -->
+                    <view wx:if="{{it.type === 'think'}}" class="step-think">
+                      <view class="step-think-mark {{it.done ? '' : 'live'}}"></view>
+                      <text class="step-think-text">{{it.done ? '思考' : '思考中'}} {{it.msText}}</text>
+                    </view>
 
-                <!-- 工具调用：一行名称 + 结果预览，点开看参数与完整结果 -->
-                <view
-                  wx:else
-                  class="step-tool {{it.phase}}"
-                  hover-class="pressed"
-                  hover-stay-time="80"
-                  data-b="{{index}}"
-                  data-i="{{ii}}"
-                  bindtap="onToggleTool">
-                  <view class="step-tick {{it.phase}}">
-                    <text wx:if="{{it.phase === 'completed'}}">✓</text>
-                    <text wx:elif="{{it.phase === 'failed'}}">✕</text>
-                    <text wx:else>·</text>
-                  </view>
-                  <view class="step-main">
-                    <view class="step-head">
-                      <text class="step-name">{{it.tool}}</text>
-                      <text wx:if="{{it.title}}" class="step-title ellipsis">{{it.title}}</text>
-                    </view>
-                    <view wx:if="{{it.open}}" class="step-detail">
-                      <view wx:if="{{it.args}}" class="step-sec">
-                        <view class="step-k">参数</view>
-                        <view class="step-v mono">{{it.args}}</view>
+                    <!-- 工具调用：一行名称 + 结果预览，点开看参数与完整结果 -->
+                    <view
+                      wx:else
+                      class="step-tool {{it.phase}}"
+                      hover-class="pressed"
+                      hover-stay-time="80"
+                      data-b="{{index}}"
+                      data-i="{{ii}}"
+                      bindtap="onToggleTool">
+                      <view class="step-tick {{it.phase}}">
+                        <text wx:if="{{it.phase === 'completed'}}">✓</text>
+                        <text wx:elif="{{it.phase === 'failed'}}">✕</text>
+                        <text wx:else>·</text>
                       </view>
-                      <view wx:if="{{it.result}}" class="step-sec">
-                        <view class="step-k">结果</view>
-                        <view class="step-v mono">{{it.result}}</view>
+                      <view class="step-main">
+                        <view class="step-head">
+                          <text class="step-name">{{it.tool}}</text>
+                          <text wx:if="{{it.title}}" class="step-title ellipsis">{{it.title}}</text>
+                        </view>
+                        <view wx:if="{{it.open}}" class="step-detail">
+                          <view wx:if="{{it.args}}" class="step-sec">
+                            <view class="step-k">参数</view>
+                            <view class="step-v mono">{{it.args}}</view>
+                          </view>
+                          <view wx:if="{{it.result}}" class="step-sec">
+                            <view class="step-k">结果</view>
+                            <view class="step-v mono">{{it.result}}</view>
+                          </view>
+                          <view wx:if="{{!it.args && !it.result}}" class="step-v mono">（还没有输出）</view>
+                        </view>
+                        <view wx:elif="{{it.preview}}" class="step-preview mono ellipsis">{{it.preview}}</view>
                       </view>
-                      <view wx:if="{{!it.args && !it.result}}" class="step-v mono">（还没有输出）</view>
+                      <view class="step-chev">{{it.open ? '▾' : '▸'}}</view>
                     </view>
-                    <view wx:elif="{{it.preview}}" class="step-preview mono ellipsis">{{it.preview}}</view>
                   </view>
-                  <view class="step-chev">{{it.open ? '▾' : '▸'}}</view>
-                </view>
-              </block>
+                </block>
+              </scroll-view>
             </view>
           </view>
 
@@ -170,8 +185,12 @@
         </view>
       </block>
 
-      <!-- 滚动锚点：id 与 scroll-into-view 共用同一个值，翻转即"滚到底" -->
-      <view id="{{toView}}" class="anchor"></view>
+      <!-- 滚动锚点：**两个静态 id** 轮流指，而不是"同一个元素换 id"。
+           后者要赌"元素改名"与"scroll-into-view 生效"谁先落到渲染层上，
+           赌输了 scroll-view 会查不到目标节点、静默不滚 —— 「回到最新」点了没反应
+           就是这么来的。两个锚点都在内容末尾，指哪个都是"到底"。 -->
+      <view id="anchor-a" class="anchor"></view>
+      <view id="anchor-b" class="anchor"></view>
     </view>
   </scroll-view>
 

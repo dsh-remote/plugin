@@ -190,8 +190,10 @@ const SHOTS = {
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
     {
-      // 运行中的一轮：步骤组收成一行，正文正在流式写入。
-      // 展示字段（label/tools/live）要自己写 —— 走 setData 摆状态时不会经过
+      // 运行中的一轮，且步骤组**很长**（6 步工具）。
+      // 这是专门用来验「过程窗口限高」的：展开后不该把下面的正文顶出屏幕 ——
+      // 截图里正文必须还露在窗口下面，否则限高就没生效。
+      // 展示字段（label/tools/live/tailId）要自己写 —— 走 setData 摆状态时不会经过
       // _commit，页面里那层派生逻辑跑不到。
       name: 'chat-live',
       url: '/pages/chat/chat',
@@ -203,17 +205,18 @@ const SHOTS = {
         turn: 1,
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '15:02' },
-          { key: 'u1', kind: 'user', text: '看下 git status，然后跑一遍测试', confirmed: true },
+          { key: 'u1', kind: 'user', text: '把 mp-client 那两项失败查清楚', confirmed: true },
           {
             key: 'x1',
             kind: 'steps',
             closed: false,
-            open: false,
+            open: true, // 实时新组默认展开 —— 收起的一行会让人以为没有工具列表
             live: true,
-            tools: 2,
-            label: '正在执行 2 个步骤',
+            tools: 6,
+            label: '正在执行 6 个步骤',
+            tailId: 'sk7', // 组内自动滚到这一条（setData 摆状态时得手写）
             items: [
-              { key: 'k1', type: 'think', msText: '2.4s', done: true },
+              { key: 'k1', type: 'think', msText: '1.2s', done: true },
               {
                 key: 't1',
                 type: 'tool',
@@ -221,30 +224,123 @@ const SHOTS = {
                 tool: 'Bash',
                 title: 'git status --short',
                 args: '{"command":"git status --short"}',
-                result: 'M mp/pages/chat/chat.js\nM mp/pages/sessions/sessions.js',
-                preview: 'M mp/pages/chat/chat.js M mp/pages/sessions/sessions.js',
+                result: 'M mp/pages/chat/chat.js',
+                preview: 'M mp/pages/chat/chat.js',
                 open: false,
               },
-              { key: 'k2', type: 'think', msText: '1.1s', done: true },
+              { key: 'k2', type: 'think', msText: '0.8s', done: true },
               {
                 key: 't2',
                 type: 'tool',
-                phase: 'failed',
+                phase: 'completed',
+                tool: 'Read',
+                title: 'e2e/mp-client.test.mjs',
+                result: '13 项，其中 2 项失败',
+                preview: '13 项，其中 2 项失败',
+                open: false,
+              },
+              { key: 'k3', type: 'think', msText: '2.1s', done: true },
+              {
+                key: 't3',
+                type: 'tool',
+                phase: 'completed',
                 tool: 'Bash',
-                title: 'pnpm -r test',
-                args: '{"command":"pnpm -r test"}',
+                title: 'node --test e2e/mp-client.test.mjs',
+                args: '{"command":"node --test e2e/mp-client.test.mjs"}',
                 result: 'e2e/mp-client.test.mjs — 2 项失败',
                 preview: 'e2e/mp-client.test.mjs — 2 项失败',
                 open: false,
               },
-              { key: 'k3', type: 'think', msText: '4.8s', done: false },
+              { key: 'k4', type: 'think', msText: '3.4s', done: true },
+              {
+                key: 't4',
+                type: 'tool',
+                phase: 'completed',
+                tool: 'Grep',
+                title: 'settleHistory',
+                result: 'mp/core/client.js:404 / 412',
+                preview: 'mp/core/client.js:404 / 412',
+                open: false,
+              },
+              { key: 'k5', type: 'think', msText: '1.7s', done: true },
+              {
+                key: 't5',
+                type: 'tool',
+                phase: 'completed',
+                tool: 'Edit',
+                title: 'mp/core/client.js',
+                result: '已更新 1 个文件',
+                preview: '已更新 1 个文件',
+                open: false,
+              },
+              { key: 'k6', type: 'think', msText: '0.9s', done: true },
+              {
+                key: 't6',
+                type: 'tool',
+                phase: 'started',
+                tool: 'Bash',
+                title: 'pnpm -C e2e test',
+                args: '{"command":"pnpm -C e2e test"}',
+                preview: '',
+                open: false,
+              },
+              { key: 'k7', type: 'think', msText: '', done: false },
             ],
           },
           {
             key: 'm1',
             kind: 'text',
-            text: '工作区有 2 处未提交改动，都在 mp 端。测试跑完了，mp-client 有 2 项失败，我看一下是环境还是真的坏了。',
+            text: '工作区有 2 处未提交改动，都在 mp 端。mp-client 那两项失败我定位到结算点了，正在重跑。',
             done: false,
+          },
+        ],
+      },
+    },
+    {
+      // 浮标态：用户往上回看过 → 「回到最新」浮在输入区上方。
+      // 它**点下去真的会滚**这件事由 e2e/mp-chat-blocks.test.mjs 的锚点结构断言守着
+      // （两个静态 id，不许再写成 id="{{toView}}"）；截图只管它长得对不对。
+      name: 'chat-jump',
+      url: '/pages/chat/chat',
+      data: {
+        running: false,
+        barText: '空闲',
+        barTheme: 'success',
+        atBottom: false,
+        historyState: 'ok',
+        hasMore: true,
+        turn: 2,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '14:37' },
+          { key: 'u1', kind: 'user', text: '数一下各套测试的用例数', confirmed: true },
+          {
+            key: 'x1',
+            kind: 'steps',
+            closed: true,
+            open: false,
+            live: false,
+            tools: 2,
+            label: '已完成 2 个步骤',
+            tailId: '',
+            items: [
+              { key: 'k1', type: 'think', msText: '3.2s', done: true },
+              {
+                key: 't1',
+                type: 'tool',
+                phase: 'completed',
+                tool: 'Bash',
+                title: 'grep -c "^test(" e2e/*.test.mjs',
+                result: 'mp-crypto:11 mp-client:11',
+                preview: 'mp-crypto:11 mp-client:11',
+                open: false,
+              },
+            ],
+          },
+          {
+            key: 'm1',
+            kind: 'text',
+            text: '数完了，已经写进 HANDOFF。',
+            done: true,
           },
         ],
       },

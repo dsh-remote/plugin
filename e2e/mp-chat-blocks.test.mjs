@@ -298,7 +298,7 @@ test('宿主回传的用户消息要与本地回显去重', () => {
   assert.equal(p.data.blocks.at(-1).text, '另一个客户端发的话', '对不上的用户消息要照常追加')
 })
 
-test('折叠：组的开合与「展开过程」两个层级', () => {
+test('折叠：实时新组默认展开（否则看不见工具列表），历史回放的组默认收起', () => {
   const p = makePage()
   send(p, {
     t: 'ev.tool_event',
@@ -309,12 +309,15 @@ test('折叠：组的开合与「展开过程」两个层级', () => {
     resultPreview: 'ok',
   })
   assert.equal(p.data.blocks[0].kind, 'steps')
-  assert.equal(p.data.blocks[0].open, false, '新步骤组默认收起 —— 这是这一页的窗口管理')
-  assert.equal(p.data.blocks[0].items[0].open, false, '组内某一步也默认收起')
+  assert.equal(
+    p.data.blocks[0].open,
+    true,
+    '实时新组默认展开 —— 只给一行"正在执行 1 个步骤"会让人以为根本没有工具列表',
+  )
+  assert.equal(p.data.blocks[0].items[0].open, false, '组内某一步的参数/结果仍默认收起')
 
   p.onToggleSteps({ currentTarget: { dataset: { idx: 0 } } })
-  assert.equal(p.data.blocks[0].open, true, '点一下展开这一组')
-  assert.equal(p.data.blocks[0].items[0].open, false, '展开组不等于展开某一步的细节')
+  assert.equal(p.data.blocks[0].open, false, '点一下可以手动收起这一组')
 
   p.onToggleTool({ currentTarget: { dataset: { b: 0, i: 0 } } })
   assert.equal(p.data.blocks[0].items[0].open, true, '再点展开这一步的参数与完整结果')
@@ -326,6 +329,68 @@ test('折叠：组的开合与「展开过程」两个层级', () => {
   p.onToggleAll() // -> false
   assert.equal(p.data.expanded, false)
   assert.equal(p.data.blocks[0].open, false)
+})
+
+test('展开策略只对实时生效：历史回放的步骤组默认收起', () => {
+  const p = makePage()
+  const blocks = p._replayPage([
+    { t: 'ev.tool_event', callId: 'h1', tool: 'Read', phase: 'completed', resultPreview: 'x' },
+  ])
+  assert.equal(blocks[0].kind, 'steps')
+  assert.equal(blocks[0].open, false, '历史里的组默认收起 —— 一屏全是过程就没法读正文了')
+})
+
+test('过程窗口：组内自动滚到组尾，但只有还在跑的组才给 -- 跑完的组不许拽人', () => {
+  const p = makePage()
+  // 起跑：run_state 让 _ensureThinkOpen 建一个组并补思考段
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  send(p, {
+    t: 'ev.tool_event',
+    sessionId: 's1',
+    callId: 'c1',
+    tool: 'Bash',
+    phase: 'started',
+  })
+  const g = p.data.blocks[0]
+  assert.equal(g.live, true, '工具还在跑')
+  assert.equal(g.tailId, 's' + g.items[g.items.length - 1].key, 'live 组的尾巴要给 tailId')
+
+  // 收尾 + 这一轮结束：组不再 live，tailId 必须清空 —— 否则用户回看老组时
+  // 每来一条新内容就被拽回组尾，读不了
+  send(p, {
+    t: 'ev.tool_event',
+    sessionId: 's1',
+    callId: 'c1',
+    tool: 'Bash',
+    phase: 'completed',
+    resultPreview: 'ok',
+  })
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  const done = p.data.blocks[0]
+  assert.equal(done.live, false, '这一轮结束了')
+  assert.equal(done.tailId, '', '跑完的组不许再自动滚')
+  p._stopThinkTick()
+})
+
+test('「回到最新」的锚点必须是两个静态 id；过程窗口必须限高且用 scroll-view', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxss'), 'utf8')
+
+  // 锚点曾写成 <view id="{{toView}}"> —— 同一个元素跟着 toView 改名。那要赌
+  // "元素改名"与"scroll-into-view 生效"谁先落到渲染层上，赌输了 scroll-view 会
+  // 查不到目标节点、**静默不滚**（不报错、不重试）。「回到最新」点了没反应就是这么来的。
+  assert.match(wxml, /id="anchor-a"/, '需要第一个静态锚点')
+  assert.match(wxml, /id="anchor-b"/, '需要第二个静态锚点')
+  assert.ok(!/id="\{\{toView\}\}"/.test(wxml), '锚点 id 不许跟着 toView 变')
+
+  // 过程窗口：限高 + 组内滚动。小程序里 view 的 overflow:auto 在**真机上不生效**，
+  // 要滚只能用 scroll-view —— 写成 CSS overflow 会在开发者工具里"看起来能滚"。
+  const card = wxml.slice(wxml.indexOf('class="steps-card"'), wxml.indexOf('</scroll-view>'))
+  assert.match(card, /class="steps-scroll"/, '过程内容要包在限高容器里')
+  assert.match(card, /scroll-y/, '限高容器必须是 scroll-view，否则真机不滚')
+  assert.match(card, /scroll-into-view="\{\{item\.tailId\}\}"/, '要滚到组尾那一条')
+  assert.match(card, /id="s\{\{it\.key\}\}"/, '每条要有落点 id，否则 scroll-into-view 无处可去')
+  assert.match(wxss, /\.steps-scroll\s*\{[^}]*max-height/, '限高要写在 .steps-scroll 上')
 })
 
 test('点空白收起键盘；输入区自己 catch 住不误收', () => {

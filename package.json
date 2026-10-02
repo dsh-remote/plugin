@@ -14,6 +14,7 @@
     "mp:lazyload": "node scripts/mp-lazyload-report.mjs",
     "mp:theme": "node scripts/gen-mp-theme.mjs",
     "mp:shots": "node scripts/mp-shots.mjs",
+    "mp:probe": "node scripts/mp-probe.mjs",
     "mp:upload": "node scripts/mp-upload.mjs"
   },
   "devDependencies": {
