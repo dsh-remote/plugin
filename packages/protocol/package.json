@@ -1,8 +1,9 @@
 {
   "name": "@dsh-rc/protocol",
-  "version": "0.1.0",
-  "description": "Wire protocol + payload-level E2E crypto shared by the DSH Remote Control host plugin, relay server and clients.",
+  "version": "2.0.0",
+  "description": "Wire protocol for DSH Remote Control: sealed-record crypto, KDF, pairing URI, control frames, payload catalog, keep-awake command builder. Pure functions — no I/O, no timers, no platform symbols.",
   "type": "module",
+  "license": "MIT",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
@@ -12,14 +13,13 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm build && node --test dist/tests/crypto.test.js dist/tests/keepawake.test.js"
+    "test": "pnpm build && node --test dist/tests/keys.test.js dist/tests/record.test.js dist/tests/pairing.test.js dist/tests/frames.test.js dist/tests/payloads.test.js dist/tests/sleep.test.js dist/tests/ids.test.js"
   },
   "dependencies": {
-    "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1"
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/node": "^22.9.0"
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
   }
 }
