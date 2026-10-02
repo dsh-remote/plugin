@@ -1,7 +1,7 @@
 # HANDOFF — dsh-remote-control
 
 > 交接给下一位开发 agent。**先读本文，再读代码。**
-> 最后更新：2026-10-03（新增开源四仓改造，见 §7；协议层改发 npm）。
+> 最后更新：2026-10-03（新增开源四仓改造，见 §7；协议层改发 npm，包名 `dsh-remote-wire`）。
 
 ## 0. 一句话状态
 
@@ -270,7 +270,7 @@ cat ~/.dsh/dsh-remote-control/status.json                      # 插件侧真相
 
 | 目录 | 内容 | 发 npm？ |
 |---|---|---|
-| `dsh-remote-protocol/` | 线协议纯函数库（`dsh-remote-protocol`） | **发** |
+| `dsh-remote-protocol/` | 线协议纯函数库（**npm 包名 `dsh-remote-wire`**，仓名仍 `dsh-remote-protocol`） | **发** |
 | `dsh-remote-server/` | 零知识中继（self-hosted 单文件产物） | 不发 |
 | `dsh-remote-control/` | 宿主插件 monorepo（`packages/plugin`=主插件、`packages/presentation`=右栏呈现） | 发 2 个包 |
 | `dsh-remote-mp/` | 微信小程序客户端（WeChat 官方目录布局，`miniprogramRoot: "miniprogram/"`） | 不发 |
@@ -279,9 +279,20 @@ cat ~/.dsh/dsh-remote-control/status.json                      # 插件侧真相
 `dsh-remote-control/packages/plugin/**`，反之亦然——两边会漂移。要同步就用
 `git archive HEAD <path> | tar -x -C <目标>` 取已提交快照。
 
+### 7.0 包名冲突：仓名 ≠ 包名
+
+协议层的 **npm 包名是 `dsh-remote-wire`，GitHub 仓名/目录名仍是 `dsh-remote-protocol`**。
+原因：`dsh-remote-protocol` 这个名字在 npm 上**已被第三方占用**（发布者 `weijf14-gmail`，
+v0.1.0，2026-08-14），我们无法发。按用户定的「`dsh-remote-` 开头 + 一个单词」约定改成
+`dsh-remote-wire`（npm `dsh-remote-wire` 当时查得 404 = 未被占）。
+
+- 源码、依赖声明、文档里凡是**消费这个 npm 包**的地方都写 `dsh-remote-wire`；
+- 凡是**指仓库**的地方（GitHub URL、`git clone`、链接文字、目录名）都写 `dsh-remote-protocol`；
+- `dsh-remote-protocol/README.md` 顶部有一段说明两者的区别。
+
 ### 7.1 一次性引导顺序（推送前必须知道）
 
-1. **先推 `dsh-remote-protocol` 并打 `v1.0.0`**，走它的 Release 把包发到 npm。
+1. **先推 `dsh-remote-protocol` 仓并打 `v1.0.0`**，走它的 Release 把 **`dsh-remote-wire`** 包发到 npm。
 2. 再推 `dsh-remote-server` / `dsh-remote-control`，各跑一次 `pnpm install`，
    把生成的 `pnpm-lock.yaml` 提交，然后把 CI/release 里的 `--no-frozen-lockfile`
    改成 `--frozen-lockfile`（`^1.0.0` 在协议包发布前解析不出来，所以现在只能非冻结）。
@@ -306,3 +317,7 @@ git 包的 `prepare` 必须靠 `pnpm-workspace.yaml` 的 `allowBuilds` 放行，
 - 协议 `pnpm pack` 产物只含 `dist/src`（30 文件）+ LICENSE/README/package.json；把该 tgz 装进空
   project 后 `seal/open`、`dshr:/p?` 构造解析、根入口 108 导出全部正常。
 - 消费侧用同一个 tgz 验过：server 74 项、control 271 项（plugin 221 + presentation 50）全绿。
+- **改名 `dsh-remote-wire` 后又复验了一轮**：协议 82 项全绿；重新 `pnpm pack` 得到
+  `dsh-remote-wire-1.0.0.tgz`，临时把 server/control 的依赖指到该 tgz 再跑——server 74、
+  control 271（plugin 221 + presentation 50）全绿；随后已还原临时的 `file:` 依赖并删掉
+  临时 tgz / node_modules / lockfile。改名提交：协议 `2ac160d`、server `fc05db6`、control `9119f33`。
