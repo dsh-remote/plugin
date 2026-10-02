@@ -205,8 +205,16 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
    `apiProxy` 等旧名只出现在**改名表与"旧 vs 新"偏离表**里（那是刻意留的迁移说明），
    正文讲的是重写后的实现；`MINI-PROGRAM.md` 里的 `pair-begin-client` 是小程序**现在仍在发**的帧名。
    这条可以划掉。
-5. 慢消费者 1008 与小程序 12s 超时/30s 退避可能形成循环（阈值的取值来自参考实现，
-   不是实测；DESIGN-REVIEW 🟡11）。
+5. **慢消费者 1008 与小程序退避可能形成循环**（DESIGN-REVIEW 🟡11）——**机制已核清，缺的是实测**：
+   中继按角色给窗口（`apps/server/src/limits.ts:96,109`：host `10s`、client `45s`；阈值
+   `DRC_MAX_BUFFERED_BYTES` 默认 1 MiB）。client 侧给到 **45s** 是刻意的：mp 的退避是
+   1s→30s 指数且 `onOpen` 清零（`mp/core/socket.js:19,20,267`），窗口短于它的重连周期就会
+   变成永不升级的抖动。重连后 `bufferedAmount` 归零、窗口重算，所以**只有当手机在连续
+   45s 窗口里都排不空积压时才会循环**——那意味着这台手机真的持续跟不上。
+   **结论**：这不是已知缺陷，是"阈值来自参考实现、没在生产上量过"。要收口只能拿真实慢消费者
+   观测：看 `journalctl -u dsh-relay` 的 `slow consumer disconnected` 与 `/healthz` 的
+   `slowConsumers` 计数是否在**同一台设备上反复**出现。别凭猜改这 45s——它同时是
+   "手机在后台被系统冻结时不误杀"的唯一余量。
 
 ## 6. 命令速查
 
