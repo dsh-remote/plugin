@@ -332,10 +332,34 @@ node --test e2e/mp-chat-blocks.test.mjs   # 25 项：chat 页块流时序 + 历�
 node --test e2e/mp-sessions-list.test.mjs # 3 项：会话列表的归档过滤与空态
 node --test e2e/mp-pairing.test.mjs       # 18 项：首页内联的配对（扫码即连、失败可重试、解除配对）
 node --test e2e/mp-theme.test.mjs         # 9 项：浅/深主题（默认、双向、跨启动、导航栏、存不下）
-pnpm check:mp-ui                      # 组件/类名声明 + 主题接线 + 配对入口在位 + 分支链兜底 else
+pnpm check:mp-ui                      # 组件/类名声明 + 主题接线 + 配对入口在位 + 分支链兜底 else + 配色对比度
 pnpm mp:theme --check                 # 两份变量表是否还与 TDesign 同步（含深浅覆盖对账）
 pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（不需要开发者工具）
 ```
+
+## 配色：先算对比度，别靠看截图
+
+**TDesign 的深色值不能直接拿来用** —— 它是给大屏 Web 调的，手机屏字号更小、
+底色更深，几个变量真机上明显偏暗。2026-10-02 实测：238 组前景/背景里 **45 组
+不达标**，`placeholder` 压卡片底只有 3.16:1，晚上看会话的时间戳与路径基本靠猜。
+
+`check:mp-ui` 里的 `check-mp-contrast.mjs` 会展开两套变量表、算真实的前景/背景、
+按 WCAG 判阈值（正文 4.5，大字与图形 3）。**改任何颜色前先跑它**，
+调整后的值与实测前后对比写在 `gen-mp-theme.mjs` 的
+`DARK_READABILITY` / `LIGHT_READABILITY` 两张表里。
+
+**一个颜色变量不要同时当前景和背景用。** `--td-brand-color` 就同时扛两个互斥角色：
+当**底色**（用户气泡、`t-button--primary`）要够暗才压得住白字；当**字色**
+（`.pill.primary` 压 `--td-brand-color-1` 浅底）要够亮 —— 这两条**数学上无解**
+（需亮度 ≤0.163 与 ≥0.304）。所以另有 `--td-brand-color-on-tint` 专管
+"压在品牌浅底上的字色"，浅色下同值所以观感不变，9 处字色改用它。
+
+**做法：先算出两个角色各自的可行区间，无解就拆变量，别找折中值。**
+
+生成期还有两个护栏（都在 `gen-mp-theme.mjs`）：
+`checkCssSanity` 验拼出的 CSS 合法 —— **一段非法声明会让整条规则作废**，
+同规则里其他修正跟着静默失效；`checkReadabilityOrder` 验灰阶序，判据用
+**对比度递减**而不是亮度（深色白字越往后越暗、浅色黑字越往后越**亮**，方向相反）。
 
 `pnpm mp:probe` 有四组：`jump`（回到最新真的滚了）、`plain`（过程默认不渲染，
 且没掉进 note 分支变成空提示条）、`fold`（**显式 `showSteps: true`** 后折叠仍不留空白）、

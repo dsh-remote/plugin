@@ -97,6 +97,20 @@ protocol 产物复制到 `dist/protocol/` 并把裸 specifier 改写成相对路
 - 两份 wxss 是**生成物**（`pnpm mp:theme` / `--check`）；脚本会对账变量覆盖，
   `DARK_ONLY_FIXUPS` 补 TDesign 浅色分支独有的几个（否则深色下继承浅色阴影）。
   **升级 TDesign 后先跑 `--check`**。
+- **TDesign 的深色值不能直接用**：它是给大屏 Web 调的，本项目是小屏手机屏，
+  字号更小、底色更深，几个变量真机上明显偏暗（首跑体检 238 组里 45 组不达标）。
+  改配色**先跑 `pnpm check:mp-ui`**（含 `scripts/check-mp-contrast.mjs`：
+  展开变量表算真实对比度，WCAG 阈值正文 4.5 / 大字与图形 3）。
+  调整量在 `DARK_READABILITY` / `LIGHT_READABILITY` 两张表里，都标了实测前后值。
+- **一个颜色变量别同时当前景和背景用**。`--td-brand-color` 就同时扛两个互斥角色：
+  作底色（用户气泡）要够暗压白字，作字色（`.pill.primary` 压浅底）要够亮 ——
+  **数学上无解**（需亮度 ≤0.163 与 ≥0.304）。所以有 `--td-brand-color-on-tint`
+  专管字色（浅色同值，观感不变）。**先算区间，无解就拆变量，别找折中值。**
+- 生成期两个护栏（都在 `gen-mp-theme.mjs`，都因为真踩过才加）：
+  ① `checkCssSanity` 验拼出的 CSS 合法 —— 一段非法声明会让**整条规则作废**，
+  同规则里其他修正跟着静默失效（三元组 vs 三元组**数组**展开行为不同）；
+  ② `checkReadabilityOrder` 验灰阶序，判据用**对比度递减**不是亮度 ——
+  深色白字越往后越暗、浅色黑字越往后越**亮**，方向相反。
 - 写 import 顺序断言**别用 `indexOf`**——会命中注释里的文件名，变成永远为假的死代码。
 
 ## chat 页信息流 + 命令回执
