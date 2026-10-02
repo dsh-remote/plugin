@@ -1,0 +1,73 @@
+<view class="page-pad">
+
+  <!-- 容器没有 WebSocket 能力时，唯一要说的就是这一句 -->
+  <view wx:if="{{!socketReady}}" class="warn-card">
+    <view class="warn-title">当前环境无法连接</view>
+    <view class="muted">
+      这个运行环境没有 WebSocket（{{diagGlobal}}.connectSocket 不存在）。
+      请用微信开发者工具或真机调试运行。
+    </view>
+    <view class="footer-link" bindtap="onCopyDiag">复制诊断信息</view>
+  </view>
+
+  <!-- 状态 -->
+  <t-cell-group theme="card">
+    <t-cell title="连接状态" description="{{statusText || '尚未连接'}}">
+      <t-tag slot="note" theme="{{statusTheme}}" variant="light">{{statusLabel}}</t-tag>
+    </t-cell>
+    <t-cell wx:if="{{hostLabel}}" title="主机" description="{{hostLabel}}" />
+  </t-cell-group>
+
+  <!-- 已配对 -->
+  <block wx:if="{{online}}">
+    <view class="btn-gap">
+      <t-button theme="primary" size="large" block bindtap="onGoSessions">进入会话列表</t-button>
+    </view>
+    <view class="btn-gap">
+      <t-button theme="danger" variant="outline" size="large" block bindtap="onUnpair">解除配对</t-button>
+    </view>
+  </block>
+
+  <!-- 未配对：两步走 -->
+  <block wx:else>
+    <view class="section-title">第一步 · 获取密钥</view>
+    <t-cell-group theme="card">
+      <t-input
+        borderless
+        placeholder="粘贴二维码内容 dshr:/p?…"
+        value="{{pasteText}}"
+        clearable
+        bind:change="onPaste" />
+    </t-cell-group>
+    <view class="btn-gap" wx:if="{{scanReady}}">
+      <t-button theme="primary" variant="outline" size="large" block bindtap="onScan">扫码配对</t-button>
+    </view>
+    <view class="muted hint" wx:else>当前环境没有扫码能力，请粘贴上面的二维码内容</view>
+    <view class="muted hint ok" wx:if="{{hasPsk}}">已获取密钥 ✓，再输入配对码</view>
+
+    <view class="section-title">第二步 · 输入配对码</view>
+    <t-cell-group theme="card">
+      <t-input
+        borderless
+        type="number"
+        maxlength="{{6}}"
+        placeholder="主机上显示的 6 位配对码"
+        value="{{token}}"
+        bind:change="onTokenInput" />
+    </t-cell-group>
+    <view class="btn-gap">
+      <t-button theme="primary" size="large" block loading="{{busy}}" disabled="{{busy}}" bindtap="onPair">
+        {{busy ? '处理中…' : '开始配对'}}
+      </t-button>
+    </view>
+
+    <view class="footer-link" bindtap="toggleAdvanced">{{showAdvanced ? '收起高级设置' : '高级设置'}}</view>
+    <t-cell-group theme="card" wx:if="{{showAdvanced}}">
+      <t-input borderless label="中继" placeholder="wss://…" value="{{server}}" bind:change="onServerInput" />
+      <t-input borderless label="密钥" placeholder="配对密钥 PSK" value="{{psk}}" bind:change="onPskInput" />
+    </t-cell-group>
+
+    <!-- 出问题时要能一句话说清环境有什么，但平时不该占版面 -->
+    <view class="footer-link dim" bindtap="onCopyDiag">复制环境自检</view>
+  </block>
+</view>

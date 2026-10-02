@@ -3,7 +3,7 @@
  * live-e2e — 真实链路的端到端闭环测试（不 mock）。
  *
  * 三个真实：
- *   1. 真实的小程序客户端代码（mp/utils/drc.js，靠 wx shim 在 Node 里跑）；
+ *   1. 真实的小程序客户端代码（mp/core/client.js，靠 wx shim 在 Node 里跑）；
  *   2. 真实的中继（默认线上 wss://drc.provid.cc，nginx + TLS）；
  *   3. 真实的内核载体 —— 本机 DSH Harness 里运行的插件（carrier=services）。
  *

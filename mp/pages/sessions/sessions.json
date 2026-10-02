@@ -1,6 +1,12 @@
 {
-  "navigationBarTitleText": "会话",
+  "navigationBarTitleText": "DSH 远程控制",
   "enablePullDownRefresh": true,
-  "backgroundTextStyle": "dark",
-  "usingComponents": {}
+  "usingComponents": {
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
+    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
+    "t-tag": "/miniprogram_npm/tdesign-miniprogram/tag/tag",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
+  }
 }

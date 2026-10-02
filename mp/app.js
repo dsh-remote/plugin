@@ -1,4 +1,6 @@
-var drc = require('./utils/drc.js')
+'use strict'
+
+var client = require('./core/client.js')
 
 App({
   globalData: {
@@ -6,12 +8,12 @@ App({
   },
 
   onLaunch: function () {
-    // One client for the whole app lifetime: pages read getApp().drc
-    this.drc = drc.getClient()
+    // 整个 app 生命周期共用一个客户端：页面从这里取
+    this.drc = client.getClient()
   },
 
   onShow: function () {
-    // Coming back from the background: if we were paired, try to resume.
+    // 从后台回来：如果已配对且 socket 断了，尝试恢复
     if (this.drc && this.drc.isPaired() && !this.drc.sock) {
       this.drc.connect()
     }

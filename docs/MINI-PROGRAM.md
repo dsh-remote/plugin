@@ -1,6 +1,8 @@
 # 微信小程序客户端
 
-目录：`mp/`，原生小程序（无框架、无构建步骤、无 npm 依赖）。
+目录：`mp/`，原生小程序。UI 组件用 **TDesign**（腾讯开源，`miniprogram_npm/` 里是
+按依赖闭包裁剪过的预构建产物，**无需在开发者工具里构建 npm**）；加密用 vendored
+**tweetnacl**，UTF-8/base64 用 vendored **js-base64**——不自己造轮子。
 
 ## 用微信开发者工具打开
 
@@ -12,22 +14,32 @@
    （开发期连 `ws://127.0.0.1:8787` 必需）。
 4. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
 
+> `miniprogram_npm/tdesign-miniprogram` 已按依赖闭包裁剪（约 1.5MB，含 tslib）。
+> 升级 TDesign 后需要重新裁剪：`npm i tdesign-miniprogram@latest` 然后把
+> `node_modules/tdesign-miniprogram/miniprogram_dist` 里的相关目录拷过来
+> （保留 common/mixins/transition/locale/config-provider 与内嵌的 tslib）。
+> `node_modules/` 已在 packOptions.ignore 里，不会打进包。
+
 ## 目录
 
 ```
 mp/
-  app.js / app.json / app.wxss      全局：持有 DrcClient 单例
-  project.config.json
-  utils/
-    nacl-fast.js      移植的 tweetnacl（已打补丁，见下）
-    drc-crypto.js     base64/UTF-8/KDF/seal/open/计数器 nonce/QR 解析
-    store.js          wx.setStorageSync 持久化（PSK / 会话 id / nonce 计数器）
-    ws.js             wx.connectSocket 封装 + 指数退避重连
-    drc.js            客户端核心：握手、配对、指令、事件分发
-    package.json      仅用于把该目录标记为 CommonJS（Node 侧测试用）
+  app.js / app.json / app.wxss      全局：持有 DrcClient 单例 + TDesign 主题变量
+  project.config.json / package.json
+  miniprogram_npm/tdesign-miniprogram/   裁剪版 TDesign（开源 UI 组件库）
+  core/
+    vendor/
+      nacl-fast.js      vendored tweetnacl（已打小程序补丁，见下）
+      js-base64.js      vendored js-base64（MIT）：UTF-8 + base64
+    codec.js            线格式编解码：KDF/seal/open/计数器 nonce/QR 解析
+    env.js              运行环境能力探测 + 一行可复制的环境自检
+    socket.js           wx.connectSocket 封装：双路径 + 超时 + 指数退避重连
+    session-store.js    wx.setStorageSync 持久化（PSK / 会话 id / nonce 计数器）
+    client.js           客户端核心：握手、配对、指令、事件分发（DrcClient）
+    package.json        仅用于把该目录标记为 CommonJS（Node 侧测试用）
   pages/
-    index/     配对：扫码 + 6 位配对码
-    sessions/  会话列表 + 防休眠开关
+    sessions/  入口页：主机状态 + 防休眠开关 + 会话列表（含已归档徽标）
+    pair/      配对：扫码/粘贴二维码 + 6 位配对码 + 高级设置 + 环境自检
     chat/      对话：流式输出、审批卡、提问卡、中断
 ```
 
@@ -53,18 +65,19 @@ kH2C = derivePskKey(psk,'h2c',sessionId)   // 主机 → 小程序
 - 如果哪天误用了，宁可抛错，也不要悄悄用弱随机。
 
 别的文件改动请同步跑 `pnpm -r test`，`e2e/mp-crypto.test.mjs` 会把
-`mp/utils/*` 拉到 Node 里和 `packages/protocol` 逐字节对拍。
+`mp/core/*` 拉到 Node 里和 `packages/protocol` 逐字节对拍。
 
 ## 开发期自测（不用开开发者工具）
 
 ```sh
-pnpm -r test                        # 含下面两项
-node --test e2e/mp-crypto.test.mjs  # 10 项：base64/UTF-8/密钥派生/seal-open/篡改检测
-node --test e2e/mp-client.test.mjs  # 8 项：真实 drc.js + wx shim 跑完整闭环
+pnpm -r test                          # 含下面几项
+node --test e2e/mp-crypto.test.mjs    # 11 项：base64/UTF-8/密钥派生/seal-open/篡改检测
+node --test e2e/mp-client.test.mjs    # 8 项：真实 client.js + wx shim 跑完整闭环
+node --test e2e/mp-platform.test.mjs  # 3 项：环境探测 + 双路径 socket
 ```
 
 `e2e/mp-sim.mjs` 提供了一个最小 `wx` shim（storage + `connectSocket` 走 `ws` 包），
-所以**小程序客户端代码可以在 Node 里被真实驱动**。改了 `utils/drc.js` 一定要跑它。
+所以**小程序客户端代码可以在 Node 里被真实驱动**。改了 `core/client.js` 一定要跑它。
 
 ## 常见故障
 
@@ -84,7 +97,7 @@ node --test e2e/mp-client.test.mjs  # 8 项：真实 drc.js + wx shim 跑完整�
 压根不提供 `connectSocket`，这时任何配对尝试都会以一句 TypeError 告终，
 用户既不知道缺什么也不知道怎么办。
 
-`utils/platform.js` 会先探测能力，`utils/ws.js` 按探测结果走两条路：
+`core/env.js` 会先探测能力，`core/socket.js` 按探测结果走两条路：
 
 1. **SocketTask**（基础库 1.7.0+）：`connectSocket()` 返回带 `onOpen/onMessage` 的任务对象；
 2. **旧式全局回调**：`onSocketOpen/onSocketMessage/...`（全局监听器只绑一次，避免叠加）。
@@ -114,7 +127,7 @@ node --test e2e/mp-client.test.mjs  # 8 项：真实 drc.js + wx shim 跑完整�
 
 ## 真实链路端到端测试
 
-`e2e/live-e2e.mjs` 跑的是**三个真实**：真实的小程序客户端代码（`utils/drc.js` + wx shim）、
+`e2e/live-e2e.mjs` 跑的是**三个真实**：真实的小程序客户端代码（`core/client.js` + wx shim）、
 真实的中继（默认 `wss://drc.provid.cc`）、真实的内核（本机 Harness 里的插件）。
 
 与 `scripts/verify-deployment.mjs` 的关键区别：**它绝不退化成 mock 主机** ——

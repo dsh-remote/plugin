@@ -1,9 +1,9 @@
 /**
- * mp-sim — run the REAL WeChat Mini Program client code (mp/utils/*.js) in
+ * mp-sim — run the REAL WeChat Mini Program client code (mp/core/*.js) in
  * Node by providing a minimal `wx` shim.
  *
  * We cannot open the WeChat devtools in CI, so this is how the client gets
- * verified: the exact files that ship in mp/utils are loaded (CommonJS) and
+ * verified: the exact files that ship in mp/core are loaded (CommonJS) and
  * driven through the full loop against a real relay server + HostRuntime.
  *
  * Only the APIs the client core actually uses are shimmed:
@@ -67,12 +67,12 @@ export function installWxShim() {
   return { storage, sockets }
 }
 
-/** Load mp/utils/* fresh (busting the require cache) after the shim is in place. */
+/** Load mp/core/* fresh (busting the require cache) after the shim is in place. */
 export function loadMpModules() {
   const require = createRequire(import.meta.url)
-  const crypto = require(path.join(mpDir, 'utils/drc-crypto.js'))
-  const store = require(path.join(mpDir, 'utils/store.js'))
-  const drc = require(path.join(mpDir, 'utils/drc.js'))
+  const crypto = require(path.join(mpDir, 'core/codec.js'))
+  const store = require(path.join(mpDir, 'core/session-store.js'))
+  const drc = require(path.join(mpDir, 'core/client.js'))
   return { crypto, store, drc }
 }
 

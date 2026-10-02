@@ -43,7 +43,15 @@
   "packOptions": {
     "ignore": [
       {
-        "value": "utils/package.json",
+        "value": "core/package.json",
+        "type": "file"
+      },
+      {
+        "value": "node_modules",
+        "type": "folder"
+      },
+      {
+        "value": "package-lock.json",
         "type": "file"
       }
     ],
@@ -54,7 +62,7 @@
       "list": [
         {
           "name": "配对页",
-          "pathName": "pages/index/index",
+          "pathName": "pages/pair/pair",
           "query": "",
           "scene": null
         }

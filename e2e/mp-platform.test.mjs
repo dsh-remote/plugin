@@ -20,9 +20,9 @@ import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
-const mpUtils = path.join(here, '..', 'mp', 'utils')
-const platform = require(path.join(mpUtils, 'platform.js'))
-const ws = require(path.join(mpUtils, 'ws.js'))
+const mpCore = path.join(here, '..', 'mp', 'core')
+const env = require(path.join(mpCore, 'env.js'))
+const sock = require(path.join(mpCore, 'socket.js'))
 
 function withGlobal(name, value, fn) {
   const had = Object.prototype.hasOwnProperty.call(globalThis, name)
@@ -38,10 +38,10 @@ function withGlobal(name, value, fn) {
 
 test('a container without connectSocket reports a described error, not a TypeError', () => {
   withGlobal('wx', { getStorageSync: () => '' }, () => {
-    platform.probe(true) // drop the cache that earlier tests warmed
+    env.probe(true) // drop the cache that earlier tests warmed
     const errors = []
     let threw = null
-    const socket = ws.createSocket({
+    const socket = sock.createSocket({
       url: 'wss://example.invalid',
       onError: (e) => errors.push(e),
     })
@@ -93,10 +93,10 @@ test('a container with only the legacy global socket still connects and sends', 
       },
     },
     () => {
-      platform.probe(true)
+      env.probe(true)
       const opened = []
       const got = []
-      const socket = ws.createSocket({
+      const socket = sock.createSocket({
         url: 'wss://example.invalid',
         onOpen: () => opened.push('open'),
         onMessage: (d) => got.push(d),
@@ -125,7 +125,7 @@ test('a container with only the legacy global socket still connects and sends', 
 test('the probe names the host global it found', () => {
   withGlobal('my', { connectSocket: () => ({}), onSocketOpen: () => {}, onSocketMessage: () => {}, sendSocketMessage: () => {} }, () => {
     withGlobal('wx', undefined, () => {
-      const p = platform.probe(true)
+      const p = env.probe(true)
       // Alipay-style containers expose `my`; the transport must not hard-code `wx`
       assert.equal(p.global, 'my')
       assert.equal(p.connectSocket, true)

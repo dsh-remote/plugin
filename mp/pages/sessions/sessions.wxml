@@ -1,48 +1,45 @@
-<view class="container">
+<view class="page-pad">
 
-  <view class="card">
-    <view class="row-between">
-      <text class="card-title">主机状态</text>
-      <text wx:if="{{status === 'online'}}" class="tag tag-ok">在线</text>
-      <text wx:else class="tag tag-idle">{{statusText || '离线'}}</text>
+  <!-- 未配对：整个页面只剩一个动作 -->
+  <block wx:if="{{!paired}}">
+    <view class="pair-landing">
+      <t-empty icon="link" description="还没有配对主机" />
+      <t-button theme="primary" size="large" block bindtap="onGoPair">去配对</t-button>
     </view>
-    <view class="switch-row">
-      <text class="label">防休眠（运行中保持不睡）</text>
-      <switch checked="{{keepAwake && keepAwake.enabled}}" bindchange="onToggleKeepAwake" color="#2b6cf6" />
-    </view>
-    <view wx:if="{{keepAwake}}" class="muted" style="margin-top:8rpx;">
-      {{keepAwake.active ? '当前持锁中' : '当前未持锁'}} · {{keepAwake.backend}}
-    </view>
-  </view>
+  </block>
 
-  <!-- 标题行单独成卡是浪费：它只是标签，不是内容容器 -->
-  <view class="section">
-    <text class="card-title">会话</text>
-    <text class="refresh" bindtap="refresh">{{refreshing ? '刷新中…' : '刷新'}}</text>
-  </view>
+  <block wx:else>
+    <!-- 主机状态 -->
+    <t-cell-group theme="card">
+      <t-cell title="{{hostLabel || '主机'}}" description="{{statusText}}">
+        <t-tag slot="note" theme="{{statusTheme}}" variant="light">{{statusLabel}}</t-tag>
+      </t-cell>
+      <t-cell title="防休眠" description="{{keepAwakeText}}">
+        <t-switch slot="note" value="{{keepAwakeOn}}" bind:change="onToggleKeepAwake" disabled="{{status !== 'online'}}" />
+      </t-cell>
+    </t-cell-group>
 
-  <view wx:if="{{sessions.length === 0}}" class="card">
-    <view class="muted hint-empty">暂无会话。主机端有会话时会显示在这里。</view>
-  </view>
+    <view class="section-title">会话 · {{sessions.length}} 个</view>
 
-  <view
-    wx:for="{{sessions}}"
-    wx:key="id"
-    class="card session-item"
-    data-id="{{item.id}}"
-    data-title="{{item.title}}"
-    bindtap="onOpen">
-    <view class="session-head">
-      <text wx:if="{{item.title}}" class="session-title">{{item.title}}</text>
-      <text wx:else class="session-id">{{item.id}}</text>
-      <text class="tag {{item.badgeCls}}">{{item.badgeText}}</text>
-    </view>
-    <view wx:if="{{item.workspace}}" class="session-meta">
-      <text class="muted mono">{{item.workspace}}</text>
-    </view>
-    <view class="session-foot">
-      <text class="mono">{{item.id}}</text>
-      <text wx:if="{{item.updatedAt}}">{{item.updatedAt}}</text>
-    </view>
-  </view>
+    <t-empty wx:if="{{sessions.length === 0}}" icon="chat" description="暂无会话。主机端有会话时会显示在这里。" />
+
+    <t-cell-group wx:else theme="card">
+      <t-cell
+        wx:for="{{sessions}}"
+        wx:key="id"
+        title="{{item.title}}"
+        description="{{item.workspace || item.id}}"
+        hover arrow
+        data-id="{{item.id}}"
+        data-title="{{item.title}}"
+        bindtap="onOpen">
+        <view slot="note" class="cell-note">
+          <t-tag theme="{{item.badgeTheme}}" variant="light" size="small">{{item.badgeText}}</t-tag>
+          <view wx:if="{{item.updatedAt}}" class="cell-time muted">{{item.updatedAt}}</view>
+        </view>
+      </t-cell>
+    </t-cell-group>
+
+    <view class="footer-link" bindtap="onGoPair">重新配对 / 高级设置</view>
+  </block>
 </view>

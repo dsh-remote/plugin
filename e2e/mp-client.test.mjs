@@ -1,7 +1,7 @@
 /**
  * Full-loop test of the WeChat Mini Program client code.
  *
- * Drives mp/utils/drc.js (via the wx shim in mp-sim.mjs) against a real relay
+ * Drives mp/core/client.js (via the wx shim in mp-sim.mjs) against a real relay
  * server and a HostRuntime backed by MockHarnessBridge — i.e. exactly the
  * production path, minus the WeChat renderer.
  */
@@ -23,7 +23,7 @@ const URL = `ws://127.0.0.1:${PORT}`
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// The shim must exist before mp/utils is loaded.
+// The shim must exist before mp/core is loaded.
 installWxShim()
 const { crypto: mpCrypto, drc } = loadMpModules()
 // Import the compiled plugin output (NOT the stale lib/ dir that used to
@@ -199,7 +199,7 @@ test('nonce counter never repeats across many sends', async () => {
   for (let i = 0; i < 30; i++) {
     const pairing = client._resume
     const nonce = loadStoreNextNonce(pairing)
-    const b64 = mpCrypto.encodeBase64(nonce)
+    const b64 = mpCrypto.bytesToBase64(nonce)
     assert.ok(!seen.has(b64), 'nonce repeated!')
     seen.add(b64)
   }

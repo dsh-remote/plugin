@@ -1,62 +1,33 @@
-/* 全局基础样式 —— 浅色主题 */
+/* 全局样式：TDesign 设计变量 + 页面级骨架（组件内部样式由 TDesign 提供） */
+@import './miniprogram_npm/tdesign-miniprogram/common/style/theme/_index.wxss';
+
 page {
-  background: #f5f6f8;
-  color: #1f2329;
+  background: var(--td-bg-color-page, #f3f3f3);
+  color: var(--td-text-color-primary, #1f2329);
   font-size: 28rpx;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
-  /* 页面自身高度由系统给出：用 % 而不是 100vh，否则 iOS 上会把导航栏高度也算进去，
-     底部输入区被顶到屏幕外（这是移动端「排版错乱」最常见的成因）。 */
+  /* 页面自身高度由系统给出：用 % 而不是 100vh，否则 iOS 上会把导航栏高度
+     也算进去，底部输入区被顶出屏幕（移动端「排版错乱」最常见的成因）。 */
   height: 100%;
   -webkit-text-size-adjust: 100%;
 }
 
-view,
-scroll-view,
-input,
-textarea,
-button {
+view, scroll-view, input, textarea, button {
   box-sizing: border-box;
 }
 
-.container {
-  padding: 24rpx 28rpx calc(48rpx + env(safe-area-inset-bottom));
+.page-pad {
+  padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom));
 }
 
-.card {
-  background: #ffffff;
-  border-radius: 20rpx;
-  padding: 28rpx;
-  margin-bottom: 24rpx;
-  box-shadow: 0 2rpx 12rpx rgba(31, 35, 41, 0.06);
-  /* 长内容必须在本卡片内换行，绝不允许把卡片撑宽 */
-  overflow: hidden;
+/* 区块标题：不算内容，只是标签 */
+.section-title {
+  font-size: 26rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+  padding: 24rpx 16rpx 12rpx;
 }
 
-.card-title {
-  font-size: 30rpx;
-  font-weight: 600;
-  margin-bottom: 16rpx;
-}
-
-.muted {
-  color: #8a9099;
-  font-size: 24rpx;
-  line-height: 36rpx;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-}
-
-.row-between {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16rpx;
-}
-
-/* 一行内可省略的文本：会话标题、路径这类长度不可控的内容 */
+/* 单行可省略文本：会话标题、路径这类长度不可控的内容 */
 .ellipsis {
   overflow: hidden;
   white-space: nowrap;
@@ -64,92 +35,14 @@ button {
   min-width: 0;
 }
 
-.clamp-2 {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  word-break: break-word;
-}
-
-.input {
-  background: #f5f6f8;
-  border-radius: 12rpx;
-  padding: 20rpx 24rpx;
-  font-size: 28rpx;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.btn {
-  background: #2b6cf6;
-  color: #ffffff;
-  border-radius: 12rpx;
-  padding: 22rpx 0;
-  text-align: center;
-  font-size: 30rpx;
-  font-weight: 500;
-}
-
-.btn-ghost {
-  background: #ffffff;
-  color: #2b6cf6;
-  border: 2rpx solid #2b6cf6;
-}
-
-.btn-danger {
-  background: #ffffff;
-  color: #d93026;
-  border: 2rpx solid #d93026;
-}
-
-.btn-disabled {
-  background: #c9cdd4;
-  color: #ffffff;
-}
-
-.btn + .btn {
-  margin-top: 20rpx;
-}
-
-.tag {
-  display: inline-block;
-  padding: 4rpx 14rpx;
-  border-radius: 999rpx;
-  font-size: 22rpx;
-  line-height: 34rpx;
-  flex-shrink: 0;
-}
-
-.tag-running { background: #e8f0fe; color: #2b6cf6; }
-.tag-idle { background: #f0f1f3; color: #8a9099; }
-.tag-wait { background: #fff4e5; color: #d97706; }
-.tag-ok { background: #e6f7ed; color: #18a058; }
-/* 归档会话：宿主会拒绝它的每一步，必须一眼可辨 */
-.tag-archived { background: #f0f1f3; color: #6b7280; }
-
-.divider {
-  height: 2rpx;
-  background: #eef0f3;
-  margin: 24rpx 0;
-}
-
 .mono {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 24rpx;
   word-break: break-all;
 }
 
-/* 诊断信息：需要能整段复制给开发者 */
-.diag {
-  background: #f5f6f8;
-  border-radius: 12rpx;
-  padding: 16rpx 20rpx;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 22rpx;
-  line-height: 34rpx;
-  color: #5c6470;
-  word-break: break-all;
-  user-select: text;
-  -webkit-user-select: text;
+/* 弱化的辅助文字 */
+.muted {
+  color: var(--td-text-color-secondary, #5c6470);
+  font-size: 24rpx;
+  line-height: 36rpx;
 }

@@ -1,16 +1,16 @@
-var drc = require('../../utils/drc.js')
+'use strict'
+
+var client = require('../../core/client.js')
 
 /**
- * Windowing on the phone.
- *
- * Two separate problems, two separate fixes:
- *  - the transcript array must not grow forever in a long session (memory);
- *  - one setData() per streamed delta is what makes the UI stutter, so deltas
- *    are merged and flushed on a timer instead (frames).
+ * 手机上的窗口管理。两个独立的问题，两个独立的解法：
+ *  - 长会话里 transcript 不能无限增长（内存）；
+ *  - 每条流式 delta 一次 setData 会让界面卡顿，所以 delta 先合并、按帧刷出。
  */
 var MAX_MESSAGES = 300
 var MAX_TEXT_PER_MESSAGE = 20000
 var DELTA_FLUSH_MS = 100
+var DELTA_FLUSH_CHARS = 4096
 
 var TOOL_ICON = {
   started: '▶',
@@ -29,12 +29,11 @@ Page({
     pendingPermission: null,
     pendingQuestion: null,
     toView: '',
-    status: 'idle',
     statusText: '',
   },
 
   onLoad: function (options) {
-    this.client = drc.getClient()
+    this.client = client.getClient()
     var id = decodeURIComponent(options.id || '')
     var title = decodeURIComponent(options.title || id)
     this.setData({ sessionId: id, title: title })
@@ -48,35 +47,44 @@ Page({
 
   onShow: function () {
     this._off = this.client.on(this._onEvent.bind(this))
-    this.setData({ status: this.client.status, statusText: this.client.statusText })
+    this.setData({ statusText: this.client.statusText })
     this.client.listSessions()
   },
 
   onHide: function () {
-    if (this._deltaTimer) { clearTimeout(this._deltaTimer); this._deltaTimer = null }
+    if (this._deltaTimer) {
+      clearTimeout(this._deltaTimer)
+      this._deltaTimer = null
+    }
     this._flushDelta()
-    if (this._off) { this._off(); this._off = null }
+    if (this._off) {
+      this._off()
+      this._off = null
+    }
   },
 
   onUnload: function () {
-    if (this._off) { this._off(); this._off = null }
+    if (this._off) {
+      this._off()
+      this._off = null
+    }
   },
 
-  // ── inbound events ────────────────────────────────────────────────
+  // ── 入站事件 ──────────────────────────────────────────────────────
   _onEvent: function (evt) {
     if (evt.kind === 'status') {
-      this.setData({ status: evt.status, statusText: evt.text })
+      this.setData({ statusText: evt.text })
       return
     }
     if (evt.kind === 'error') {
-      wx.showToast({ title: evt.message.slice(0, 40), icon: 'none' })
+      wx.showToast({ title: String(evt.message || '').slice(0, 40), icon: 'none' })
       return
     }
     if (evt.kind !== 'payload') return
     var p = evt.payload
-    if (p.sessionId && p.sessionId !== this.data.sessionId) return // not our session
+    if (p.sessionId && p.sessionId !== this.data.sessionId) return // 不是本会话
 
-    if (p.t === 'ev.message_delta') return this._onDelta(p)
+    if (p.t === 'ev.message_delta') return this._queueDelta(p)
     if (p.t === 'ev.tool_event') return this._onTool(p)
     if (p.t === 'ev.permission_request') return this._onPermission(p)
     if (p.t === 'ev.question_request') return this._onQuestion(p)
@@ -87,115 +95,9 @@ Page({
     }
   },
 
-  _onDelta: function (p) {
-    this._queueDelta(p)
-  },
-
-  _applyDelta: function (messageId, text, done) {
-    var msgs = this.data.messages.slice()
-    var idx = this._msgIndex[messageId]
-    if (idx === undefined) {
-      idx = msgs.length
-      this._msgIndex[messageId] = idx
-      msgs.push({ key: 'm' + this._counter++, kind: 'assistant', text: text, done: done })
-    } else if (idx >= msgs.length) {
-      // the transcript was trimmed out from under this message
-      this._msgIndex[messageId] = msgs.length
-      msgs.push({ key: 'm' + this._counter++, kind: 'assistant', text: text, done: done })
-    } else {
-      var next = (msgs[idx].text + text)
-      if (next.length > MAX_TEXT_PER_MESSAGE) next = '…' + next.slice(next.length - MAX_TEXT_PER_MESSAGE)
-      msgs[idx] = { key: msgs[idx].key, kind: 'assistant', text: next, done: done || msgs[idx].done }
-    }
-    if (done) this.setData({ running: false })
-    this._commit(msgs)
-  },
-
-  _onTool: function (p) {
-    var msgs = this.data.messages.slice()
-    var text = (TOOL_ICON[p.phase] || '·') + ' ' + (p.tool || 'tool') + (p.title ? ' — ' + p.title : '')
-    if (p.phase === 'completed' && p.resultPreview) text += ' → ' + p.resultPreview
-    if (p.phase === 'failed' && p.resultPreview) text += ' → ' + p.resultPreview
-    var idx = this._toolIndex[p.callId]
-    if (idx === undefined) {
-      idx = msgs.length
-      this._toolIndex[p.callId] = idx
-      msgs.push({ key: 't' + this._counter++, kind: 'tool', text: text })
-    } else {
-      msgs[idx] = { key: msgs[idx].key, kind: 'tool', text: text }
-    }
-    this._commit(msgs)
-  },
-
-  _onPermission: function (p) {
-    this.setData({
-      pendingPermission: {
-        requestId: p.requestId,
-        action: p.action || '操作',
-        resource: p.resource || '',
-        reason: p.reason || '',
-        options: (p.options && p.options.length ? p.options : [
-          { id: 'approve', label: '允许' },
-          { id: 'reject', label: '拒绝' },
-        ]),
-      },
-      running: false,
-    })
-    wx.vibrateLong && wx.vibrateLong()
-  },
-
-  _onQuestion: function (p) {
-    var qs = (p.questions || []).map(function (q) {
-      return {
-        id: q.id,
-        question: q.question,
-        multi: !!q.multi,
-        options: (q.options || []).map(function (o) {
-          return { id: o.id, label: o.label, checked: false }
-        }),
-      }
-    })
-    this.setData({ pendingQuestion: { requestId: p.requestId, questions: qs, freeText: '' }, running: false })
-    wx.vibrateLong && wx.vibrateLong()
-  },
-
-  _onRunState: function (p) {
-    this.setData({ running: p.state === 'running' })
-    if (p.state === 'running') {
-      // the host resumed the run — any card we were showing has been answered
-      this.setData({ pendingPermission: null, pendingQuestion: null })
-    }
-    if (p.state === 'idle') {
-      this.setData({ pendingPermission: null, pendingQuestion: null })
-    }
-  },
-
-  /** Trim from the front, never mid-message, and tell the user we did. */
-  _trim: function (msgs) {
-    if (msgs.length <= MAX_MESSAGES) return msgs
-    var dropped = msgs.length - MAX_MESSAGES
-    var kept = msgs.slice(dropped)
-    kept.unshift({ key: 'trim', kind: 'tool', text: '…已省略较早的 ' + dropped + ' 条消息（仅保留最近 ' + MAX_MESSAGES + ' 条）' })
-    return kept
-  },
-
-  _commit: function (msgs) {
-    var self = this
-    var trimmed = this._trim(msgs)
-    this.setData({ messages: trimmed }, function () {
-      if (trimmed.length) self.setData({ toView: 'm' + (trimmed.length - 1) })
-    })
-  },
-
-  /**
-   * Merge streamed deltas and flush on a timer. Without this every delta is a
-   * separate setData + re-render, which is the usual cause of a janky chat.
-   */
+  // ── 流式 delta：先合并，按帧刷 ────────────────────────────────────
   _queueDelta: function (p) {
     var buf = this._deltaBuf
-    if (!buf) {
-      buf = this._deltaBuf = {}
-    }
     var e = buf[p.messageId]
     if (!e) {
       e = buf[p.messageId] = { text: '', done: false }
@@ -209,7 +111,7 @@ Page({
     }
     e.text += p.delta || ''
     e.done = e.done || !!p.done
-    if (e.text.length >= 4096 || p.done) this._flushDelta()
+    if (e.text.length >= DELTA_FLUSH_CHARS || p.done) this._flushDelta()
   },
 
   _flushDelta: function () {
@@ -224,7 +126,107 @@ Page({
     }
   },
 
-  // ── outbound ──────────────────────────────────────────────────────
+  _applyDelta: function (messageId, text, done) {
+    var msgs = this.data.messages.slice()
+    var idx = this._msgIndex[messageId]
+    if (idx === undefined || idx >= msgs.length) {
+      // 新消息，或 transcript 被裁剪后旧消息又来 delta：追加在末尾
+      idx = msgs.length
+      this._msgIndex[messageId] = idx
+      msgs.push({ key: 'm' + this._counter++, kind: 'assistant', text: text, done: done })
+    } else {
+      var next = msgs[idx].text + text
+      if (next.length > MAX_TEXT_PER_MESSAGE) next = '…' + next.slice(next.length - MAX_TEXT_PER_MESSAGE)
+      msgs[idx] = { key: msgs[idx].key, kind: 'assistant', text: next, done: done || msgs[idx].done }
+    }
+    if (done) this.setData({ running: false })
+    this._commit(msgs)
+  },
+
+  // ── 工具事件：按 callId 原地更新一行 ──────────────────────────────
+  _onTool: function (p) {
+    var msgs = this.data.messages.slice()
+    var text = (TOOL_ICON[p.phase] || '·') + ' ' + (p.tool || 'tool') + (p.title ? ' — ' + p.title : '')
+    if ((p.phase === 'completed' || p.phase === 'failed') && p.resultPreview) {
+      text += ' → ' + p.resultPreview
+    }
+    var idx = this._toolIndex[p.callId]
+    if (idx === undefined || idx >= msgs.length) {
+      idx = msgs.length
+      this._toolIndex[p.callId] = idx
+      msgs.push({ key: 't' + this._counter++, kind: 'tool', text: text })
+    } else {
+      msgs[idx] = { key: msgs[idx].key, kind: 'tool', text: text }
+    }
+    this._commit(msgs)
+  },
+
+  // ── 审批 / 提问 ───────────────────────────────────────────────────
+  _onPermission: function (p) {
+    this.setData({
+      pendingPermission: {
+        requestId: p.requestId,
+        action: p.action || '操作',
+        resource: p.resource || '',
+        reason: p.reason || '',
+        options:
+          p.options && p.options.length
+            ? p.options
+            : [
+                { id: 'approve', label: '允许' },
+                { id: 'reject', label: '拒绝' },
+              ],
+      },
+      running: false,
+    })
+    if (wx.vibrateLong) wx.vibrateLong()
+  },
+
+  _onQuestion: function (p) {
+    var qs = (p.questions || []).map(function (q) {
+      return {
+        id: q.id,
+        question: q.question,
+        multi: !!q.multi,
+        options: (q.options || []).map(function (o) {
+          return { id: o.id, label: o.label, checked: false }
+        }),
+      }
+    })
+    this.setData({ pendingQuestion: { requestId: p.requestId, questions: qs, freeText: '' }, running: false })
+    if (wx.vibrateLong) wx.vibrateLong()
+  },
+
+  _onRunState: function (p) {
+    this.setData({ running: p.state === 'running' })
+    if (p.state === 'running' || p.state === 'idle') {
+      // 主机恢复运行/归于空闲：挂着的卡片要么已回答要么已失效
+      this.setData({ pendingPermission: null, pendingQuestion: null })
+    }
+  },
+
+  // ── transcript 提交：从头部裁剪，绝不在消息中间下刀 ──────────────
+  _trim: function (msgs) {
+    if (msgs.length <= MAX_MESSAGES) return msgs
+    var dropped = msgs.length - MAX_MESSAGES
+    var kept = msgs.slice(dropped)
+    kept.unshift({
+      key: 'trim',
+      kind: 'tool',
+      text: '…已省略较早的 ' + dropped + ' 条消息（仅保留最近 ' + MAX_MESSAGES + ' 条）',
+    })
+    return kept
+  },
+
+  _commit: function (msgs) {
+    var self = this
+    var trimmed = this._trim(msgs)
+    this.setData({ messages: trimmed }, function () {
+      if (trimmed.length) self.setData({ toView: trimmed[trimmed.length - 1].key })
+    })
+  },
+
+  // ── 出站 ──────────────────────────────────────────────────────────
   onInput: function (e) {
     this.setData({ inputText: e.detail.value })
   },
@@ -294,9 +296,5 @@ Page({
     }
     this.setData({ pendingQuestion: null, running: true })
     this.client.answer(this.data.sessionId, q.requestId, answers)
-  },
-
-  onRefresh: function () {
-    this.client.listSessions()
   },
 })

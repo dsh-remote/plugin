@@ -66,7 +66,7 @@ Host                            Relay                         小程序
   而 X25519 密钥生成必须有 CSPRNG；
 - 小程序里没有成熟、体积可接受的纯 JS x25519 实现，tweetnacl 的
   `box.keyPair()` 依赖 `randombytes`，我们已把它**主动禁用**（见
-  `mp/utils/nacl-fast.js` 末尾的补丁注释）——宁可让 PRNG 调用抛错，
+  `mp/core/vendor/nacl-fast.js` 末尾的补丁注释）——宁可让 PRNG 调用抛错，
   也不要悄悄退化成 `Math.random()`。
 
 PSK 方案在这里是安全的，因为：

@@ -1,5 +1,0 @@
-{
-  "//": "Scopes the vendored crypto utils to CommonJS so they can also be loaded by Node during cross-runtime conformance tests (e2e/mp-crypto.test.mjs). The WeChat Mini Program itself is agnostic — this file is inert there.",
-  "private": true,
-  "type": "commonjs"
-}

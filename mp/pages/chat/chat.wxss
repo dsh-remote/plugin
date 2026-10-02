@@ -1,12 +1,13 @@
-/* chat page —— 三段式：滚动区 / 卡片区 / 输入区
+/* chat 页 —— 三段式：滚动区 / 卡片区 / 输入区
    关键：flex 列里的滚动子项必须能「收缩」，否则它按内容高度撑开，
-   把底部的输入区推出屏幕 —— 这正是「手机排版错乱」的表现。 */
+   把底部输入区推出屏幕 —— 这正是「手机排版错乱」的表现。 */
+
 .chat-wrap {
   display: flex;
   flex-direction: column;
   /* 用 100% 而不是 100vh：100vh 在 iOS 上含导航栏高度 */
   height: 100%;
-  background: #f5f6f8;
+  background: var(--td-bg-color-page, #f3f3f3);
 }
 
 .scroll {
@@ -32,13 +33,8 @@
   min-width: 0;
 }
 
-.msg-row.user {
-  justify-content: flex-end;
-}
-
-.msg-row.assistant {
-  justify-content: flex-start;
-}
+.msg-row.user { justify-content: flex-end; }
+.msg-row.assistant { justify-content: flex-start; }
 
 .bubble {
   max-width: 80%;
@@ -52,22 +48,22 @@
 }
 
 .bubble.user {
-  background: #2b6cf6;
+  background: var(--td-brand-color, #0052d9);
   color: #ffffff;
   border-bottom-right-radius: 6rpx;
 }
 
 .bubble.assistant {
   background: #ffffff;
-  color: #1f2329;
+  color: var(--td-text-color-primary, #1f2329);
   border-bottom-left-radius: 6rpx;
   box-shadow: 0 2rpx 10rpx rgba(31, 35, 41, 0.05);
 }
 
 .tool-line {
   width: 100%;
-  background: #eef1f5;
-  color: #5c6470;
+  background: var(--td-bg-color-secondarycontainer, #eef1f5);
+  color: var(--td-text-color-secondary, #5c6470);
   border-radius: 12rpx;
   padding: 12rpx 18rpx;
   font-size: 24rpx;
@@ -80,7 +76,7 @@
   display: inline-block;
   width: 8rpx;
   height: 26rpx;
-  background: #2b6cf6;
+  background: var(--td-brand-color, #0052d9);
   margin-left: 6rpx;
   vertical-align: -3rpx;
   animation: blink 1s steps(2, start) infinite;
@@ -95,7 +91,7 @@
 .panel {
   flex: 0 0 auto;
   background: #ffffff;
-  border-top: 2rpx solid #eef0f3;
+  border-top: 2rpx solid var(--td-component-border, #e7e7e7);
   padding: 24rpx 28rpx;
   max-height: 52vh;
   overflow-y: auto;
@@ -113,54 +109,76 @@
   margin-bottom: 8rpx;
 }
 
-.panel-body .mono {
-  overflow-wrap: anywhere;
-}
+.panel-body .mono { overflow-wrap: anywhere; }
 
-.panel-actions {
+.reason { margin-top: 8rpx; }
+
+.chip-row {
   display: flex;
   flex-wrap: wrap;
+  margin-top: 16rpx;
 }
 
 .chip {
   padding: 12rpx 24rpx;
   border-radius: 999rpx;
-  background: #f0f1f3;
-  color: #1f2329;
+  background: var(--td-bg-color-secondarycontainer, #f0f1f3);
+  color: var(--td-text-color-primary, #1f2329);
   font-size: 26rpx;
   margin: 0 16rpx 12rpx 0;
 }
 
 .chip-primary {
-  background: #2b6cf6;
+  background: var(--td-brand-color, #0052d9);
   color: #ffffff;
 }
 
 .chip-danger {
-  background: #fdeceb;
-  color: #d93026;
+  background: var(--td-error-color-1, #fdeceb);
+  color: var(--td-error-color-6, #d54941);
 }
+
+.panel-input {
+  margin-top: 16rpx;
+  background: var(--td-bg-color-page, #f3f3f3);
+  border-radius: 12rpx;
+  /* input 必须显式 height：靠 padding 撑高会让文字被垂直裁掉 */
+  height: 80rpx;
+  line-height: 80rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+}
+
+.btn-gap { margin-top: 16rpx; }
 
 /* 输入区 —— 固定在底部，带安全区 */
 .composer {
   flex: 0 0 auto;
   background: #ffffff;
-  border-top: 2rpx solid #eef0f3;
+  border-top: 2rpx solid var(--td-component-border, #e7e7e7);
   padding: 20rpx 28rpx calc(20rpx + env(safe-area-inset-bottom));
 }
 
-.composer .row {
+.composer-row {
+  display: flex;
+  align-items: center;
   gap: 16rpx;
 }
 
-.composer .input {
+.composer-input {
   flex: 1 1 auto;
   min-width: 0;
+  background: var(--td-bg-color-page, #f3f3f3);
+  border-radius: 12rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
 }
 
 .send {
   flex: 0 0 auto;
-  background: #2b6cf6;
+  background: var(--td-brand-color, #0052d9);
   color: #ffffff;
   border-radius: 12rpx;
   padding: 0 32rpx;
@@ -169,11 +187,18 @@
 }
 
 .send-disabled {
-  background: #c9cdd4;
+  background: var(--td-bg-color-component-disabled, #c9cdd4);
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14rpx;
 }
 
 .stop {
-  color: #d93026;
+  color: var(--td-error-color-6, #d54941);
   font-size: 26rpx;
   padding: 6rpx 16rpx;
 }

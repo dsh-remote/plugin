@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "comment": "只为把这个目录标成 CommonJS 供 Node 侧 e2e 测试 require 用；小程序运行时无视它。"
+}

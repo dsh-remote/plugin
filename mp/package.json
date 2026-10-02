@@ -1,0 +1,10 @@
+{
+  "name": "dsh-remote-control-mp",
+  "version": "2.0.0",
+  "private": true,
+  "description": "DSH Remote Control —— 微信小程序控制端",
+  "dependencies": {
+    "tdesign-miniprogram": "^1.10.0",
+    "js-base64": "^3.7.7"
+  }
+}

@@ -47,13 +47,20 @@ node e2e/run.mjs
 
 **改了 protocol 之后必须重新 build plugin**，否则 `dist/protocol/` 是旧的。
 
-## 小程序（mp/）约束
+## 小程序（mp/）约束（2026-10-02 重写后）
 
-- 无 Buffer / 无 CSPRNG / 无 crypto 模块 → base64 与 UTF-8 全手写；nonce 用计数器。
-- `mp/utils/nacl-fast.js` 已打过补丁（移除 `require('crypto')` PRNG 探测），
+- 结构：`mp/core/`（codec / env / socket / session-store / client）+ `mp/core/vendor/`
+  （nacl-fast.js + js-base64.js）+ `mp/miniprogram_npm/tdesign-miniprogram/`（裁剪版
+  TDesign，无需构建 npm）。旧 `mp/utils/` 已删除。
+- 无 Buffer / 无 CSPRNG / 无 crypto 模块 → UTF-8/base64 用 vendored js-base64；
+  nonce 用计数器。
+- `mp/core/vendor/nacl-fast.js` 已打过补丁（移除 `require('crypto')` PRNG 探测），
   升级 tweetnacl 时要重新打。
-- `mp/utils/package.json` 只为把该目录标成 commonjs 供 Node 侧测试用，小程序无视它。
-- 改 `mp/utils/*.js` 必须跑 `e2e/mp-crypto.test.mjs` + `e2e/mp-client.test.mjs`。
+- `mp/core/package.json` 只为把该目录标成 commonjs 供 Node 侧测试用，小程序无视它。
+- 改 `mp/core/*.js` 必须跑 `e2e/mp-crypto.test.mjs` + `e2e/mp-client.test.mjs`
+  （+ `e2e/mp-platform.test.mjs`）。
+- 页面入口是 `pages/sessions/sessions`（未配对显示「去配对」），pair 页配对成功自动返回。
+- socket.js 连接超时看 `_opened` 标志，不是「已绑定」——旧版的超时是死代码。
 
 ## 已安装到 desktop profile
 
