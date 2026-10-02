@@ -264,16 +264,21 @@ node scripts/read-session-log.mjs <sessionId> --tail 20      # 内核侧真相
 cat ~/.dsh/dsh-remote-control/status.json                      # 插件侧真相
 ```
 
-## 7. 开源四仓（2026-10-03，**只做了本地改造，未建仓未推送**）
+## 7. 开源四仓（2026-10-03；**四仓已建、已推送**，发布仍差 npm token）
 
-用户拍板：开源到 GitHub（账号 `providcc`）、MIT、拆 4 仓，**都是平行顶层目录、统一 `dsh-remote-` 前缀**：
+用户拍板：开源到 GitHub（账号 `providcc`）、MIT、拆 4 仓，**都是平行顶层目录、统一 `dsh-remote-` 前缀**。
+四仓已就地 `git init` 并推到 `providcc/*`；伞仓把四个目录 detrack（见 `.gitignore`）。
 
 | 目录 | 内容 | 发 npm？ |
 |---|---|---|
 | `dsh-remote-protocol/` | 线协议纯函数库（**npm 包名 `dsh-remote-wire`**，仓名仍 `dsh-remote-protocol`） | **发** |
 | `dsh-remote-server/` | 零知识中继（self-hosted 单文件产物） | 不发 |
-| `dsh-remote-control/` | 宿主插件 monorepo（`packages/plugin`=主插件、`packages/presentation`=右栏呈现） | 发 2 个包 |
+| `dsh-remote-control/` | 宿主插件 monorepo（`packages/plugin`=主插件、`packages/presentation`=右栏呈现） | **只发 1 个**：`dsh-remote-control` |
 | `dsh-remote-mp/` | 微信小程序客户端（WeChat 官方目录布局，`miniprogramRoot: "miniprogram/"`） | 不发 |
+
+**`dsh-remote-control-presentation` 不单独发 npm**（2026-10-03 用户拍板）：`packages/presentation`
+标 `private: true`、去掉 `publishConfig`，仍随 `scripts/install-to-profile.sh` 以 bundle 装进 profile。
+所以 `pnpm -r publish` 只挑出插件包一个（可用 `pnpm -r publish --dry-run` 复核）。
 
 **这是拷贝出来的独立目录，不是链接。** 改 `packages/plugin/**`（并行会话常改的地方）**不会**同步到
 `dsh-remote-control/packages/plugin/**`，反之亦然——两边会漂移。要同步就用
@@ -340,3 +345,6 @@ git 包的 `prepare` 必须靠 `pnpm-workspace.yaml` 的 `allowBuilds` 放行，
   `dsh-remote-wire-1.0.0.tgz`，临时把 server/control 的依赖指到该 tgz 再跑——server 74、
   control 271（plugin 221 + presentation 50）全绿；随后已还原临时的 `file:` 依赖并删掉
   临时 tgz / node_modules / lockfile。改名提交：协议 `2ac160d`、server `fc05db6`、control `9119f33`。
+- **control 只发 1 个包**：`packages/presentation` 标 `private: true` 后，
+  `pnpm -r publish --dry-run` 只列出 `dsh-remote-control@1.0.0`（提交 `bc2ca9b`）。
+  presentation 的测试仍照跑，只是不进 npm。
