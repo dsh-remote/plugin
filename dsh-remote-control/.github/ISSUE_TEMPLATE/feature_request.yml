@@ -1,0 +1,48 @@
+name: 功能建议
+description: 提议一个新能力或改进。
+title: 'feat: '
+labels: ['enhancement', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提需求前先看一眼 [README](https://github.com/providcc/dsh-remote-control#readme) 与
+        [docs/DESIGN.md](https://github.com/providcc/dsh-remote-control/blob/main/docs/DESIGN.md)，
+        了解既有边界（尤其是"插件对内核面软探测、不写 inject 闸门"这条）。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题？
+      description: 描述痛点，而不是直接给方案。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的做法
+      description: 有想法就说，没有可以留空。
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 涉及哪一端？
+      multiple: true
+      options:
+        - 主插件（配对 / 中继 / 会话 / 审批 / 防休眠）
+        - 右栏二维码（presentation）
+        - 安装脚本 / profile
+        - 中继服务
+        - 小程序客户端
+        - 不确定
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: 已知边界确认
+      options:
+        - label: 这个改动不会把凭据写进配置文件、日志或 status.json
+        - label: 这个改动不依赖给插件加 inject 闸门

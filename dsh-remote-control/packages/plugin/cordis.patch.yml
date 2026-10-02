@@ -1,0 +1,21 @@
+# 随插件分发的默认配置行（profile 自己的 cordis.patch.yml 会覆盖这里的值）。
+#
+# 刻意**不写 inject 闸门**：本插件对每个内核面都做软探测，
+# 写闸门只会让"某一代宿主缺某个服务"时整行不激活、插件静默不加载——
+# 那比带着次优配置跑起来更难排查（取证 docs/legacy-spec/host-plugin-cordis.md §2.2/§2.3）。
+- insert:
+    - id: dsh-remote-control
+      name: dsh-remote-control
+      config:
+        enabled: true
+        serverUrl: ws://127.0.0.1:8787
+        hostTokenEnv: DRC_HOST_TOKEN
+        hostLabel: dsh-host
+        unarchiveOnPrompt: true
+        takeOverQuestions: false
+        listingRefreshSec: 15
+        approvalTimeoutSec: 180
+        keepAwake:
+          enabled: true
+          idleReleaseSec: 300
+          keepDisplay: false

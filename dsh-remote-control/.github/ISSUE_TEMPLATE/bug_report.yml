@@ -1,0 +1,74 @@
+name: Bug 报告
+description: 插件行为不对（装不上、配不上、右栏不弹码、指令/审批不通）。
+title: 'bug: '
+labels: ['bug', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提交 bug。**请勿在此报告安全漏洞**——见
+        [SECURITY.md](https://github.com/providcc/dsh-remote-control/blob/main/SECURITY.md)。
+
+        贴日志或 `status.json` 前请**先脱敏**：把 host token、PSK、配对码替换成
+        `fake-…`。真实值一旦贴出就等于泄漏。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 对 bug 的清晰简洁描述。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望的是什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 从安装/配对到出错的完整步骤。有命令就贴命令。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      placeholder: 例如 dsh-remote-control 1.0.0 或某个 commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: 环境
+      placeholder: 例如 DSH 版本 / Node 22.23.3 / macOS 15 / 微信真机
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: status.json（脱敏后）
+      description: 关键字段是 carrier / relay / relayProblem。**务必先把凭据换成 fake-…**。
+      render: json
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 涉及哪一端？
+      multiple: true
+      options:
+        - 主插件（配对 / 中继 / 会话 / 审批 / 防休眠）
+        - 右栏二维码（presentation）
+        - 安装脚本 / profile
+        - 中继服务
+        - 小程序客户端
+        - 不确定
+    validations:
+      required: true

@@ -1,0 +1,70 @@
+{
+  "name": "dsh-remote-control-presentation",
+  "version": "1.0.0",
+  "description": "DSH Remote Control presentation half: keeps the current pairing QR rendered on disk and answers a same-origin route so the right sidebar opens it automatically — no manual click, no workspace switch.",
+  "type": "module",
+  "license": "MIT",
+  "author": "providcc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/providcc/dsh-remote-control.git",
+    "directory": "packages/presentation"
+  },
+  "homepage": "https://github.com/providcc/dsh-remote-control/tree/main/packages/presentation#readme",
+  "bugs": "https://github.com/providcc/dsh-remote-control/issues",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "remote-control",
+    "cordis",
+    "plugin",
+    "qrcode",
+    "sidebar"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/bundle/index.js",
+  "exports": {
+    ".": "./dist/bundle/index.js",
+    "./client": "./dist/bundle/client.cjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p client/tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p client/tsconfig.json && node ../../scripts/bundle-presentation.mjs",
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/qrcode": "^1.5.5",
+    "esbuild": "^0.27.7",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

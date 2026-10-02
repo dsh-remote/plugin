@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的重复推送取消旧运行，节省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      # 本仓不随源码提交 pnpm-lock.yaml：协议层是 git 依赖（github:providcc/dsh-remote-protocol），
+      # 仓库公开前无法在本地解析，锁文件也就无法生成。故用 --no-frozen-lockfile。
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Format check
+        run: pnpm format:check
+
+      # 各包的 test 脚本会先 build（tsc + esbuild 打包），再对 dist/tests 跑 node --test。
+      # 打包脚本自带产物断言（外壳形状、体积上限、sidebarRight 存在）。
+      - name: Build + tests
+        run: pnpm test
+
+      - name: Verify the bundles are self-contained single files
+        run: |
+          set -e
+          for f in packages/plugin/dist/bundle/index.js \
+                   packages/presentation/dist/bundle/index.js \
+                   packages/presentation/dist/bundle/client.cjs; do
+            test -s "$f" || { echo "缺少产物：$f"; exit 1; }
+            printf '  %-56s %s KB\n' "$f" "$(( $(wc -c < "$f") / 1024 ))"
+          done
+          # 浏览器面必须是宿主能识别的模块外壳，否则整页 web boot 失败。
+          head -c 32 packages/presentation/dist/bundle/client.cjs | grep -q 'window.__ModuleLoader__.load' \
+            || { echo "client.cjs 外壳不对"; exit 1; }

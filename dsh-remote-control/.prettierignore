@@ -1,0 +1,12 @@
+dist/
+node_modules/
+coverage/
+pnpm-lock.yaml
+CHANGELOG.md
+
+# 重写期间的设计文档：正文里带 `文件:行号` 引用锚点，且写于旧仓库布局。
+# 让 prettier 重排会挪动行号、把锚点全部打偏——它们是历史记录，刻意保持原样。
+# 名字换算见 docs/README.md。
+docs/DESIGN.md
+docs/DESIGN-REVIEW.md
+docs/SECURITY.md

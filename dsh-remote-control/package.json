@@ -1,0 +1,30 @@
+{
+  "name": "dsh-remote-control-workspace",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Workspace for the DSH Remote Control host-side plugin: the pairing/relay plugin plus the presentation half that renders the pairing QR in the right sidebar.",
+  "type": "module",
+  "license": "MIT",
+  "author": "providcc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/providcc/dsh-remote-control.git"
+  },
+  "homepage": "https://github.com/providcc/dsh-remote-control#readme",
+  "bugs": "https://github.com/providcc/dsh-remote-control/issues",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "install:profile": "sh scripts/install-to-profile.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

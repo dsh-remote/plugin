@@ -1,0 +1,12 @@
+packages:
+  - packages/*
+
+# pnpm 11 把设置搬到了 pnpm-workspace.yaml（写在 package.json 的 `pnpm` 字段已不再被读取，
+# .npmrc 的 `only-built-dependencies[]` 同样被忽略）。
+# esbuild 需要它的安装脚本落下平台二进制，而两个包的打包步骤都要用它。
+# 注意 `allowBuilds` 的值必须是布尔：pnpm 报错时给的模板是 "set this to true or false"。
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild
