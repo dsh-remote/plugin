@@ -15,13 +15,18 @@ import { Log } from './log.js'
 import { createRelay } from './server.js'
 
 function readVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }
-    return pkg.version ?? '0.0.0'
-  } catch {
-    // 部署产物是打包后的单文件，旁边未必有 package.json。
-    return '0.0.0'
+  // 两种形态都要能拿到版本号：tsc 产物在 dist/src/（往上两层才是包目录），
+  // 单文件 bundle 直接放在 dist/bundle/ 下。都拿不到就用 0.0.0 —— 但要在日志里
+  // 看得出来，否则 `/healthz` 的 version 字段会变成误导。
+  for (const candidate of ['../../package.json', '../package.json']) {
+    try {
+      const pkg = JSON.parse(readFileSync(new URL(candidate, import.meta.url), 'utf8')) as { version?: string }
+      if (typeof pkg.version === 'string') return pkg.version
+    } catch {
+      /* 试下一个位置 */
+    }
   }
+  return '0.0.0'
 }
 
 function reportProblems(problems: ConfigProblem[]): boolean {

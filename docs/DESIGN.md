@@ -314,6 +314,25 @@ node scripts/validate-qr.mjs              # 28 组 zxing-cpp 真实解码（含 
 | 生产切换 | **本地全绿后直接切** | D1 改了 `pair-begin` 字段 → 旧 host 插件与新中继不兼容，**切换与插件重装必须同一次完成**；回滚 = 换回上一版产物目录 + restart |
 | 本机 Harness 重启 | **授权按需重启** | 阶段 C/D 我需要重启使插件生效，重启后从 `status.json` 取证 `carrier=services` |
 
+### 4.5 实现期新增的偏离（需一并记账，复核 R6 指出 §8 原本漏登记）
+
+| 编号 | 变更 | 为什么 | 手机端影响 |
+|---|---|---|---|
+| D5 | `auth`/`auth-ok`/`auth-fail` 并入 `hello`/`hello-ok`，鉴权失败统一 `error{code:'bad_token'}` | 旧中继里 host 与 client 各有一套注册路径，是同一件事的两份代码 | 无：小程序只发 `hello{role:'client'}`，`hello-ok` 上多出的 `role` 字段它不读 |
+| D6 | 主机 socket 断开先进**宽限期**（`DRC_HOST_GRACE_MS`，默认 120s），超时才向客户端发 `peer-left` | 没有它，一次网络抖动就逼用户回电脑前重新扫码 | 无：`peer-left` 的语义收窄为"主机真的走了"，正是客户端已有的解读方式 |
+| D6b | 新错误码 `host_unavailable`（会话在、主机暂时不接） | 与 `unknown_session` 必须区分：后者会让客户端**丢掉配对**，前者只是"稍后再试" | 正向：避免把"暂时没人接"升级成"你得重新扫码" |
+| D7 | 新增帧 `resync{sessionIds}` + 允许主机发 `session-leave{sessionId}` 作废会话 | 复核 R1：D3/D6 之后出现新死角——**主机重启**丢了 PSK 而中继仍保留会话，手机会对着没有钥匙的对端永远转圈，且 `unknown_session` 永不发生 | 正向：两条路径都保证手机最终拿到中文的"请重新配对"提示 |
+| D8 | 删除 `session-list` 帧、`cmd.subscribe` 载荷、`enc-batch` 的 `unknown_frame` 命运（中继现在真的支持批量） | 前者从未被发送/处理/消费，后者是 no-op | 无 |
+| D9 | 移除 `apiProxy` 与 `typert` 两个载体 | 桌面态从未注册 `apiProxy`，旧实现那条路的参数信封整个是错的（读 `res.sessions` 而平台返回 `result.items`；发指令缺 `payload` 包装）；`typert` 只有 `invoke()`，不能列会话也不能发指令 | 无（这两条路在真机上从未成功执行过）；代价是"若未来某代宿主只提供 apiProxy"需要重新实现——那时按取证表写对信封即可 |
+
+### 2.4 F1 的准确口径（复核指出 F1 与 D5 冲突，改写为两侧分别冻结）
+
+- **消费面冻结**：`mp/core/client.js:208-250` 的 `case` 白名单（9 个帧名 + `enc`/`enc-batch` + `default` 忽略）
+  一个都不许改语义——这是小程序实际会解释的东西。
+- **生产面可退役**：`auth`/`auth-ok`/`auth-fail` 不在小程序的 case 表里（它从不发送也从不消费），
+  随 D5 退役；新增帧名（`resync`）只出现在 host↔relay 之间，落进小程序的 `default` 分支被忽略。
+- 判别依据很简单：**一个帧名如果出现在 `mp/core/client.js` 的 switch 里，它就是冻结的**；否则是我的内部协议。
+
 ## 9. 执行日志（按日期追加，只记实测结果，不记计划）
 
 ### 2026-10-02 · 阶段 A 完成

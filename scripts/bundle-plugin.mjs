@@ -48,6 +48,12 @@ const result = await esbuild.build({
   minify: false,
   // 宿主注入的东西绝不能打进包。
   external: ['cordis', '@deepseek-ai/*', 'bufferutil', 'utf-8-validate'],
+  // 产物是 ESM，而内联进来的 tweetnacl / ws 是 CJS：esbuild 会把它们的
+  // `require('crypto')` 之类换成"运行期抛错"的兜底函数（Dynamic require is not supported）。
+  // 补一句真 require。这条不是可选优化——烟测里插件加载即崩过一次。
+  banner: {
+    js: "import { createRequire as __drcCreateRequire } from 'node:module';const require = __drcCreateRequire(import.meta.url);",
+  },
   logLevel: 'warning',
   metafile: true,
 })

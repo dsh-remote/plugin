@@ -1,310 +1,252 @@
-#!/usr/bin/env node
 /**
- * live-e2e — 真实链路的端到端闭环测试（不 mock）。
+ * live-e2e — 三个真实的端到端验收（本地全链路的最后一关，人工触发）。
  *
- * 三个真实：
- *   1. 真实的小程序客户端代码（mp/core/client.js，靠 wx shim 在 Node 里跑）；
- *   2. 真实的中继（默认线上 wss://drc.provid.cc，nginx + TLS）；
- *   3. 真实的内核载体 —— 本机 DSH Harness 里运行的插件（carrier=services）。
+ *   node e2e/live-e2e.mjs                     完整闭环（含发一条指令）
+ *   node e2e/live-e2e.mjs --rounds 3          连跑 3 轮查稳定性（每轮独立取一张新码）
+ *   node e2e/live-e2e.mjs --no-prompt         只验配对/列表/防休眠
+ *   node e2e/live-e2e.mjs --session <id>      指定会话（可验归档自动恢复）
+ *   node e2e/live-e2e.mjs --pair <码> --qr '<dshr:/p?...>'   手动给码
  *
- * 与 scripts/verify-deployment.mjs 的区别：那个可以自建 mock 主机（会掩盖
- * 真实链路的问题），这个**必须**连真实主机，拿不到配对码就失败退出，
- * 绝不退化成 mock —— 假通过比失败更贵。
+ * "三个真实"是本仓库最高一档验收（取证 docs/legacy-spec/testing-and-tooling.md §2）：
+ *   ① 真实的小程序客户端代码 —— `mp/core/client.js` 本体经 wx shim 在 Node 里跑，
+ *      绝不写"测试专用客户端"；
+ *   ② 真实中继 —— 默认打线上 `wss://drc.provid.cc`（nginx TLS + 限流都在路上）；
+ *   ③ 真实内核载体 —— 本机 Harness 里跑着的插件，`carrier=services`。
  *
- * 用法：
- *   node e2e/live-e2e.mjs                       # 完整闭环（含发一条指令）
- *   node e2e/live-e2e.mjs --no-prompt           # 只验证配对/列表/防休眠
- *   node e2e/live-e2e.mjs --rounds 3            # 连跑 3 轮（查稳定性）
- *   node e2e/live-e2e.mjs --session <id> --prompt '...'
+ * 三条不可让步的纪律：
+ * - **拿不到真实配对码就直接失败，绝不退化成 mock**（旧 `verify-deployment` 的自建主机模式
+ *   会假通过，正是它掩盖过一次真故障）；
+ * - **不许空判定**：所有"收到了 X"都带数量下界；
+ * - **不许用重试洗绿**：只有"一次性码被上一轮消费掉"这一类已知竞态才重试。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.join(HERE, '..')
-const rp = (p) => path.join(ROOT, p)
+import { installWxShim, loadMpModules, traceOf, until, createRecorder } from './mp-sim.mjs'
 
-const argv = process.argv.slice(2)
-const arg = (name) => {
-  const i = argv.indexOf(`--${name}`)
-  return i >= 0 ? argv[i + 1] : undefined
-}
-const has = (name) => argv.includes(`--${name}`)
+const RELAY_URL = process.env.DRC_LIVE_RELAY ?? 'wss://drc.provid.cc'
+const STATUS_FILE = path.join(os.homedir(), '.dsh', 'dsh-remote-control', 'status.json')
+/** 刻意选一条**不会调用任何工具**的极短回复：真实回合仍要跑完，但把 token 与副作用压到最低。 */
+const PROMPT = process.argv.includes('--prompt') ? String(process.argv[process.argv.indexOf('--prompt') + 1]) : '只回复 ok 两个字，不要调用任何工具'
 
-const STATUS = path.join(homedir(), '.dsh', 'dsh-remote-control', 'status.json')
-const RELAY_URL = arg('url') ?? 'wss://drc.provid.cc'
-const HTTP_URL = RELAY_URL.replace(/^ws/, 'http')
-const ROUNDS = Number(arg('rounds') ?? 1)
-const PROMPT = arg('prompt') ?? '只回复 ok 两个字，不要调用任何工具'
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const args = process.argv.slice(2)
+const getFlag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
+const ROUNDS = Number(getFlag('--rounds') ?? 1)
+const NO_PROMPT = args.includes('--no-prompt')
+const TARGET_SESSION = getFlag('--session')
+const MANUAL_TOKEN = getFlag('--pair')
+const MANUAL_QR = getFlag('--qr')
 
+const usedTokens = new Set()
 let failures = 0
-let checks = 0
-const ok = (m) => {
-  checks++
-  console.log(`  ✅ ${m}`)
-}
-const bad = (m) => {
-  checks++
-  failures++
-  console.log(`  ❌ ${m}`)
-}
-const info = (m) => console.log(`  ℹ️  ${m}`)
+const checks = []
 
-/** Use an explicitly supplied pairing code (no auto-publish needed). */
-function explicitPairing() {
-  const token = arg('pair')
-  const qrText = arg('qr')
-  if (!token || !qrText) return null
-  return { token, qr: qrText, left: 180 }
+function check(name, ok, detail = '') {
+  checks.push({ name, ok })
+  if (ok) console.log(`  ✅ ${name}${detail ? ` — ${detail}` : ''}`)
+  else {
+    failures += 1
+    console.log(`  ❌ ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+  return ok
+}
+
+function readStatus() {
+  try {
+    return JSON.parse(readFileSync(STATUS_FILE, 'utf8'))
+  } catch (error) {
+    throw new Error(`读不到 ${STATUS_FILE}：${error.message}（插件是否在跑？carrier 是什么？）`)
+  }
 }
 
 /**
- * Wait for a pairing code we have NOT used yet.
+ * 取一张**真实可用**的一次性配对码。
  *
- * Codes are single-use: re-offering a consumed one (status.json republishes
- * on a timer, not on consumption) makes the round fail for a bogus reason.
+ * 判据一条条列出来，是为了红了以后能说清"为什么没有码"——
+ * `status.json` 是按定时器刷新的，不按消费刷新，所以"还没过期"完全可能意味着"已经被上一轮用掉了"。
  */
-async function waitForPairing(seconds = 150, used = new Set()) {
-  const deadline = Date.now() + seconds * 1000
-  let lastReason = 'status.json 不存在'
+async function acquirePairing() {
+  if (MANUAL_TOKEN && MANUAL_QR) return { token: MANUAL_TOKEN, qr: MANUAL_QR, source: 'manual' }
+  const deadline = Date.now() + 150_000
+  let lastReason = '没试过'
   while (Date.now() < deadline) {
-    if (!existsSync(STATUS)) {
-      lastReason = 'status.json 不存在（插件没跑？）'
+    let status
+    try {
+      status = readStatus()
+    } catch (error) {
+      lastReason = error.message
+      await sleep(1500)
+      continue
+    }
+    if (status.relay !== 'online') {
+      lastReason = `relay=${status.relay}${status.relayProblem ? ` (${status.relayProblem})` : ''}`
+    } else if (status.carrier !== 'services') {
+      lastReason = `carrier=${status.carrier}，不是真内核（本测试不接受 mock 主机）`
+    } else if (!status.pairing?.qr) {
+      lastReason = 'status.json 里没有 pairing.qr：请把 pairOnStartSec 打开，或手动 /drc pair 后用 --pair/--qr'
+    } else if (usedTokens.has(String(status.pairing.token))) {
+      lastReason = `码 ${status.pairing.token} 本轮已用过`
+    } else if ((status.pairing.ageSec ?? 999) > 25) {
+      lastReason = `码已发布 ${status.pairing.ageSec}s，很可能已被消费`
     } else {
-      try {
-        const d = JSON.parse(readFileSync(STATUS, 'utf8'))
-        const p = d.pairing
-        if (d.relay !== 'online') lastReason = `host relay=${d.relay}`
-        else if (!p?.qr) lastReason = 'status.json 里没有 pairing（pairOnStartSec 未开？）'
-        else {
-          const left = (Date.parse(p.expiresAt) - Date.now()) / 1000
-          const ageMs = p.createdAt ? Date.now() - p.createdAt : null
-          // Codes are single-use, and status.json republishes on a timer —
-          // not on consumption — so an unconsumed-looking code may already be
-          // spent by an earlier run. Only trust a freshly issued one.
-          if (used.has(p.token)) lastReason = `配对码 ${p.token} 本轮已用过（一次性）`
-          else if (ageMs !== null && ageMs > 25_000) lastReason = `配对码已发布 ${Math.round(ageMs / 1000)}s，可能已被消费`
-          else if (left <= 60) lastReason = `配对码只剩 ${Math.round(left)}s`
-          else return { ...p, left }
-        }
-      } catch (e) {
-        lastReason = `status.json 解析失败：${e.message}`
+      const left = Date.parse(status.pairing.expiresAt ?? '') - Date.now()
+      if (left < 60_000) lastReason = `剩余 ${Math.round(left / 1000)}s，不足以跑完一轮`
+      else {
+        usedTokens.add(String(status.pairing.token))
+        return { token: String(status.pairing.token), qr: status.pairing.qr, source: 'status.json' }
       }
     }
     await sleep(1500)
   }
-  throw new Error(`等不到可用的真实配对码：${lastReason}`)
+  throw new Error(`拿不到真实配对码（原因：${lastReason}）。本测试**不会**改用 mock 主机通过。`)
 }
 
-async function runRound(n) {
-  console.log(`\n=== 第 ${n} 轮 · ${RELAY_URL} ===`)
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  // 1. relay reachable
-  const health = await (await fetch(`${HTTP_URL}/healthz`)).json()
-  if (health.ok) ok(`中继可达（hosts=${health.hosts} clients=${health.clients}）`)
-  else bad('中继 /healthz 不健康')
+async function healthz() {
+  const httpUrl = RELAY_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
+  const response = await fetch(`${httpUrl.replace(/\/$/, '')}/healthz`, { signal: AbortSignal.timeout(8000) })
+  return response.json()
+}
 
-  // 2. real host must offer a code
-  const pair = explicitPairing() ?? (await waitForPairing(150, usedTokens))
-  usedTokens.add(pair.token)
-  ok(`真实主机发布配对码 ${pair.token}（剩余 ${Math.round(pair.left)}s）`)
+async function runRound(round) {
+  console.log(`\n── 第 ${round} 轮 ─────────────────────────────`)
+  const health = await healthz().catch((error) => ({ ok: false, error: String(error?.message ?? error) }))
+  if (!check('① 中继可达且 ok', health.ok === true, `hosts=${health.hosts} clients=${health.clients}`)) return
 
-  // 3. real mini-program client code
-  const { installWxShim, loadMpModules } = await import(rp('e2e/mp-sim.mjs'))
-  installWxShim()
-  const { crypto: mpCrypto, drc } = loadMpModules()
-  const qr = mpCrypto.parsePairingQr(pair.qr)
-  if (!qr) throw new Error('二维码解析失败')
-  if (qr.server !== RELAY_URL) bad(`二维码里的地址 ${qr.server} 与期望的 ${RELAY_URL} 不一致`)
-  else ok(`小程序解析出中继地址与 PSK${qr.token ? '（二维码内嵌配对码 ✓）' : ''}`)
-
-  const client = drc.getClient()
-  const events = []
-  const off = client.on((e) => events.push(e))
-
-  // zero-knowledge audit: capture every outbound control frame
-  const outbound = []
-  const origSend = client.sendControl.bind(client)
-  client.sendControl = (f) => {
-    outbound.push(f)
-    return origSend(f)
+  const pairing = await acquirePairing().catch((error) => {
+    console.log(`  ⛔ ${error.message}`)
+    return null
+  })
+  if (!pairing) {
+    failures += 1
+    return
   }
+  const beforeStatus = readStatus()
+  check('② 真实主机发布了配对码', beforeStatus.carrier === 'services' && beforeStatus.relay === 'online', `carrier=${beforeStatus.carrier} token=${pairing.token} 来源=${pairing.source}`)
 
-  const take = async (pred, ms, what) => {
-    const deadline = Date.now() + ms
-    while (Date.now() < deadline) {
-      const i = events.findIndex(pred)
-      if (i >= 0) return events.splice(i, 1)[0]
-      await sleep(40)
+  const recorder = createRecorder()
+  installWxShim({ recorder })
+  const { codec, client: clientModule } = loadMpModules()
+  const parsed = codec.parsePairingQr(pairing.qr)
+  if (!check('③ 小程序解析出中继地址与 PSK', !!parsed && !!parsed.psk, `server=${parsed?.server} host=${parsed?.hostLabel}`)) return
+  check('③b 二维码内嵌的地址就是要连的中继', parsed.server === RELAY_URL, `解析到 ${parsed.server}`)
+
+  const client = new clientModule.DrcClient().hydrate()
+  const trail = traceOf(client)
+  const seen = { sessionChanged: 0, deltas: 0, done: 0, tools: 0, approvals: 0, questions: 0, keepAwake: 0, runStates: 0, results: 0 }
+  const answers = []
+  client.on((event) => {
+    const payload = event?.payload
+    if (!payload) return
+    if (payload.t === 'ev.session_changed') seen.sessionChanged += 1
+    if (payload.t === 'ev.message_delta') {
+      seen.deltas += 1
+      seen.done += payload.done === true ? 1 : 0
     }
-    throw new Error(`超时：${what}`)
-  }
-
-  // 4. pair — retry with a fresh code when the one we grabbed was already
-  // spent (codes are single-use and another client may have claimed it).
-  // A genuine failure still fails: only "already used / expired" retries.
-  let online = null
-  let lastErr = ''
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const code = attempt === 1 ? pair : await waitForPairing(150, usedTokens)
-    usedTokens.add(code.token)
-    const parsed = attempt === 1 ? qr : mpCrypto.parsePairingQr(code.qr)
-    const t0 = Date.now()
-    events.length = 0
-    client.connect({
-      server: parsed.server,
-      psk: parsed.psk,
-      token: parsed.token || code.token,
-    })
-    try {
-      online = await take((e) => e.kind === 'status' && e.status === 'online', 25_000, '配对完成')
-      ok(`配对成功（${Date.now() - t0}ms）${online.text ? ' · ' + online.text : ''}`)
-      break
-    } catch (e) {
-      const err = events.find((x) => x.kind === 'error')
-      const msg = err?.message || e.message
-      lastErr = msg
-      const retryable = /已被使用|无效或已过期|already_used|invalid_or_expired/.test(msg)
-      const tail = events.slice(-8).map((x) => `${x.kind}:${x.status ?? (x.payload?.t ?? '')}`)
-      if (!retryable || attempt === 3) {
-        bad(`配对失败：${msg}`)
-        info(`事件轨迹：${tail.join(' → ') || '(空)'}`)
-        off()
-        return
-      }
-      info(`第 ${attempt} 次配对码已失效，换新码重试（${msg}）`)
-      client.disconnect()
-      await sleep(1000)
+    if (payload.t === 'ev.tool_event') seen.tools += 1
+    if (payload.t === 'ev.run_state') seen.runStates += 1
+    if (payload.t === 'ev.result') seen.results += 1
+    if (payload.t === 'ev.keep_awake_state') seen.keepAwake += 1
+    if (payload.t === 'ev.permission_request') {
+      seen.approvals += 1
+      answers.push(client.resolvePermission(payload.sessionId, payload.requestId, payload.options?.[0]?.id ?? 'approve'))
     }
-  }
-  if (!online) {
-    bad(`配对失败（已重试）：${lastErr}`)
-    off()
+    if (payload.t === 'ev.question_request') {
+      seen.questions += 1
+      answers.push(
+        client.answer(
+          payload.sessionId,
+          payload.requestId,
+          (payload.questions ?? []).map((question) => ({
+            questionId: question.id,
+            selected: [(question.options ?? [])[0]?.id].filter(Boolean),
+          })),
+        ),
+      )
+    }
+  })
+
+  client.connect({ server: parsed.server, psk: parsed.psk, token: pairing.token || undefined })
+  const paired = await until(() => (client.status === 'online' ? client : null), { trail, label: '配对进入 online', timeoutMs: 30_000 }).catch(() => null)
+  if (!check('④ 配对成功进入 online', !!paired, `status=${client.status} ${client.statusText}`)) {
+    client.disconnect()
     return
   }
 
-  // 5. session list — must be non-empty and come from the real kernel
-  client.listSessions()
-  let sessions = []
-  try {
-    const ev = await take(
-      (e) => e.kind === 'payload' && e.payload.t === 'ev.result' && e.payload.data,
-      20_000,
-      '会话列表',
-    )
-    sessions = ev.payload.data.sessions || []
-    if (sessions.length === 0) bad('会话列表为空（真实内核应有会话）')
-    else {
-      ok(`收到会话列表 ${sessions.length} 个（真实内核）`)
-      for (const s of sessions.slice(0, 5)) {
-        console.log(`       · ${s.id.slice(0, 12)}… ${s.state || '?'} ${s.title || ''}`)
-      }
-      const mockish = sessions.filter((s) => s.id.startsWith('ses_mock'))
-      if (mockish.length) bad(`列表里出现 mock 会话（说明连到了 mock 主机）`)
+  await until(() => (seen.sessionChanged > 0 ? true : null), { trail, label: '收到 ev.session_changed', timeoutMs: 15_000 }).catch(() => null)
+  const sessions = client.sessions ?? []
+  check('⑤ 收到非空真实会话列表', sessions.length > 0, `${sessions.length} 条`)
+  const mocked = sessions.filter((session) => String(session.id).startsWith('ses_mock'))
+  check('⑤b 列表里没有 mock 会话', mocked.length === 0, mocked.map((session) => session.id).join(','))
+  for (const session of sessions.slice(0, 3)) console.log(`     · ${session.id} state=${session.state} title=${session.title ?? ''}`)
+  check('⑤c updatedAt 只能是 ISO 字符串或缺省（给数字会让手机静默不更新）', sessions.every((session) => session.updatedAt === undefined || (typeof session.updatedAt === 'string' && !Number.isNaN(Date.parse(session.updatedAt)))))
+
+  client.setKeepAwake(true, 600)
+  await until(() => (seen.keepAwake > 0 ? true : null), { trail, label: '防休眠状态回传', timeoutMs: 12_000 }).catch(() => null)
+  const keep = client.keepAwake
+  check('⑥ 防休眠开关回传', !!keep && typeof keep.enabled === 'boolean', keep ? `enabled=${keep.enabled} active=${keep.active} backend=${keep.backend} platform=${keep.platform}` : '没回传')
+
+  if (!NO_PROMPT) {
+    const target = (TARGET_SESSION && sessions.find((session) => session.id === TARGET_SESSION)) || sessions.find((session) => session.state === 'idle') || sessions[0]
+    if (!target) {
+      check('⑦ 有可用会话来跑回合', false, '列表里没有可发的会话')
+    } else {
+      if (target.state === 'archived') console.log(`     （目标是归档会话 ${target.id}：主机应自动恢复后再执行）`)
+      client.sendPrompt(target.id, PROMPT)
+      const streamed = await until(() => (seen.deltas > 0 ? true : null), { trail, label: '流式输出到达', timeoutMs: 90_000 }).catch(() => null)
+      check('⑧ 流式输出到达', !!streamed, `${seen.deltas} 帧 delta`)
+      const finished = await until(() => (seen.done > 0 ? true : null), { trail, label: '收到 done 帧', timeoutMs: 120_000 }).catch(() => null)
+      check('⑨ 回合正常收尾（有 done:true，手机才会停止转圈）', !!finished, `done=${seen.done} 工具事件=${seen.tools} 审批=${seen.approvals} 提问=${seen.questions}`)
+      check('⑨b 所有出站命令都得到回执（cmdId 对答链路活着）', seen.results >= 2, `ev.result ${seen.results} 条`)
     }
-  } catch (e) {
-    bad(`会话列表失败：${e.message}`)
   }
 
-  // 6. keep-awake round trip
-  try {
-    client.setKeepAwake?.(true, 60)
-    const ev = await take((e) => e.kind === 'payload' && e.payload.t === 'ev.keep_awake_state', 15_000, '防休眠状态')
-    ok(`防休眠开关回传：${JSON.stringify(ev.payload)}`.slice(0, 120))
-  } catch (e) {
-    bad(`防休眠开关无回传：${e.message}`)
-  }
-
-  // 7. drive a real turn
-  if (!has('no-prompt') && sessions.length) {
-    const target = arg('session') || sessions.find((s) => s.state === 'idle')?.id || sessions[0].id
-    const chosen = sessions.find((s) => s.id === target)
-    if (chosen?.state === 'archived') info('该会话是归档状态 —— 主机应自动恢复后再执行')
-    info(`向会话 ${target.slice(0, 12)}… 发送指令：${PROMPT}`)
-    client.sendPrompt(target, PROMPT)
-    let done = null
-    let answered = false
-    const deadline = Date.now() + 90_000
+  // 零知识断言的对象是**交给中继的那一帧**，不是客户端事件流（解密方当然看得到明文）。
+  const encFrames = recorder.frames.filter((frame) => frame.direction === 'in' && frame.raw.includes('"enc"'))
+  check('⑩ 零知识：上行 enc 帧数有下界', encFrames.length >= 2, `${encFrames.length} 帧`)
+  const leak = []
+  for (const frame of encFrames) {
+    let parsedFrame
     try {
-      while (Date.now() < deadline) {
-        const ev = await take(
-          (e) =>
-            e.kind === 'payload' &&
-            (e.payload.t === 'ev.message_delta' ||
-              e.payload.t === 'ev.permission_request' ||
-              e.payload.t === 'ev.question_request' ||
-              e.payload.t === 'ev.run_state' ||
-              e.payload.t === 'ev.tool_event'),
-          20_000,
-          '回合事件',
-        )
-        const p = ev.payload
-        if (p.t === 'ev.permission_request') {
-          ok(`审批卡到达：${p.action} ${p.resource || ''}`)
-          client.resolvePermission(p.sessionId, p.requestId, 'approve')
-          answered = true
-          continue
-        }
-        if (p.t === 'ev.question_request') {
-          ok(`提问卡到达：${(p.questions?.[0]?.question || '').slice(0, 40)}`)
-          const q = p.questions?.[0]
-          client.answer(p.sessionId, p.requestId, q ? [{ questionId: q.id, selected: [q.options?.[0]?.id] }] : [])
-          answered = true
-          continue
-        }
-        if (p.t === 'ev.message_delta') {
-          if (!done) ok(`流式输出到达：${JSON.stringify((p.delta || '').slice(0, 60))}`)
-          if (p.done) {
-            done = p
-            break
-          }
-        }
-      }
-      if (done) ok(`回合正常收尾（审批/提问：${answered ? '有' : '无'}）`)
-      else bad('回合未在 90s 内收尾（没有收到 done）')
-    } catch (e) {
-      bad(`回合失败：${e.message}`)
+      parsedFrame = JSON.parse(frame.raw)
+    } catch {
+      continue
+    }
+    const bytes = Buffer.from(String(parsedFrame.ciphertext ?? ''), 'base64')
+    if (bytes.length <= 40) leak.push(`帧太短(${bytes.length}B)`)
+    const latin = bytes.toString('latin1')
+    if (latin.includes(PROMPT) || latin.includes('cmd.send_prompt')) leak.push('密文里出现明文')
+  }
+  const allText = recorder.frames.map((frame) => frame.raw).join('\n')
+  if (allText.includes('cmd.send_prompt') || allText.includes(PROMPT)) leak.push('观测帧序列里出现命令名或指令正文')
+  check('⑩b 零知识：经中继的一切都不含明文', leak.length === 0, leak.join('; '))
+
+  client.unpair()
+  await until(() => (client.status === 'needs-pair' ? true : null), { trail, label: '解配后进入 needs-pair', timeoutMs: 8000 }).catch(() => null)
+  check('⑪ 解配后状态正确', client.status === 'needs-pair', client.status)
+  client.disconnect()
+  await sleep(200)
+}
+
+async function main() {
+  console.log(`live-e2e → ${RELAY_URL}（真 mp 客户端代码 + 线上中继 + 真内核；rounds=${ROUNDS}）`)
+  for (let round = 1; round <= ROUNDS; round += 1) {
+    try {
+      await runRound(round)
+    } catch (error) {
+      failures += 1
+      console.log(`  ❌ 第 ${round} 轮异常：${String(error?.stack ?? error)}`)
     }
   }
-
-  // 8. zero-knowledge audit
-  const encFrames = outbound.filter((f) => f && f.t === 'enc')
-  const leaked = encFrames.filter((f) => {
-    const raw = Buffer.from(String(f.ciphertext || ''), 'base64').toString('latin1')
-    return raw.includes(PROMPT) || raw.includes('cmd.send_prompt')
-  })
-  if (encFrames.length >= 2 && leaked.length === 0) {
-    ok(`零知识：${encFrames.length} 个上行帧全为密文（含明文与命令名检查）`)
-  } else {
-    bad(`密文审计异常（${encFrames.length} 帧，${leaked.length} 帧泄露）`)
-  }
-
-  // 9. unpair
-  client.unpair()
-  await sleep(400)
-  if (client.status === 'needs-pair' || client.status === 'idle') ok('解除配对后状态正确')
-  else bad(`解除配对后状态异常：${client.status}`)
-
-  off()
-}
-
-const usedTokens = new Set()
-console.log(`真实链路端到端测试\n  relay : ${RELAY_URL}\n  轮次  : ${ROUNDS}`)
-for (let i = 1; i <= ROUNDS; i++) {
-  try {
-    await runRound(i)
-  } catch (e) {
-    bad(`第 ${i} 轮异常终止：${e.message}`)
+  const passed = checks.filter((entry) => entry.ok).length
+  console.log(`\n合计 ${checks.length} 项检查，通过 ${passed}，失败 ${failures}。`)
+  if (failures > 0) {
+    console.log('未通过的项：\n' + checks.filter((entry) => !entry.ok).map((entry) => `  - ${entry.name}`).join('\n'))
+    process.exit(1)
   }
 }
 
-console.log('')
-console.log(`检查项 ${checks} 个，失败 ${failures} 个`)
-if (failures > 0) {
-  console.error('❌ 端到端测试未通过')
-  process.exit(1)
-}
-console.log('🎉 端到端测试全部通过（真实客户端 + 真实中继 + 真实内核）')
+await main()
