@@ -1,7 +1,8 @@
 # HANDOFF — dsh-remote-control
 
 > 交接给下一位开发 agent。**先读本文，再读代码。**
-> 最后更新：2026-10-03（新增开源四仓改造，见 §7；协议层改发 npm，包名 `dsh-remote-wire`）。
+> 最后更新：2026-10-03 深夜（开源四仓已建已推；`dsh-remote-wire`、`dsh-remote-control` 两个包
+> 已上 npm；CI 的 node 20 腿修好了，原因与改法见 §7.4）。
 
 ## 0. 一句话状态
 
@@ -264,7 +265,7 @@ node scripts/read-session-log.mjs <sessionId> --tail 20      # 内核侧真相
 cat ~/.dsh/dsh-remote-control/status.json                      # 插件侧真相
 ```
 
-## 7. 开源四仓（2026-10-03；**四仓已建、已推送**，发布仍差 npm token）
+## 7. 开源四仓（2026-10-03；**四仓已建已推，两个 npm 包与三个 GitHub Release 都已发出**）
 
 用户拍板：开源到 GitHub（账号 `providcc`）、MIT、拆 4 仓，**都是平行顶层目录、统一 `dsh-remote-` 前缀**。
 四仓已就地 `git init` 并推到 `providcc/*`；伞仓把四个目录 detrack（见 `.gitignore`）。
@@ -295,12 +296,12 @@ v0.1.0，2026-08-14），我们无法发。按用户定的「`dsh-remote-` 开�
 - 凡是**指仓库**的地方（GitHub URL、`git clone`、链接文字、目录名）都写 `dsh-remote-protocol`；
 - `dsh-remote-protocol/README.md` 顶部有一段说明两者的区别。
 
-### 7.1 一次性引导顺序（推送前必须知道）
+### 7.1 一次性引导顺序（**已全部走完**，留作升版与 fork 的说明）
 
-1. **先推 `dsh-remote-protocol` 仓并打 `v1.0.0`**，走它的 Release 把 **`dsh-remote-wire`** 包发到 npm。
+1. **先推 `dsh-remote-protocol` 仓并打 `v1.0.0`**，走它的 Release 把 **`dsh-remote-wire`** 包发到 npm。✅
 2. 再推 `dsh-remote-server` / `dsh-remote-control`，各跑一次 `pnpm install`，
    把生成的 `pnpm-lock.yaml` 提交，然后把 CI/release 里的 `--no-frozen-lockfile`
-   改成 `--frozen-lockfile`（`^1.0.0` 在协议包发布前解析不出来，所以现在只能非冻结）。
+   改成 `--frozen-lockfile`（`^1.0.0` 在协议包发布前解析不出来，所以现在只能非冻结）。✅
 3. 两个仓的 release 工作流都需要仓库 secret **`NPM_TOKEN`**。**这个 token 必须是能 bypass 2FA 的**
    ——npm 现在发布强制「2FA 或 bypass-2FA 的 token」，CI 里做不了 2FA。颗粒度 token 要
    **勾上 "Bypass 2FA"**（且账号本身已开 2FA），或直接用 **Classic 的 Automation token**。
@@ -348,3 +349,57 @@ git 包的 `prepare` 必须靠 `pnpm-workspace.yaml` 的 `allowBuilds` 放行，
 - **control 只发 1 个包**：`packages/presentation` 标 `private: true` 后，
   `pnpm -r publish --dry-run` 只列出 `dsh-remote-control@1.0.0`（提交 `bc2ca9b`）。
   presentation 的测试仍照跑，只是不进 npm。
+
+### 7.4 发布已完成（2026-10-03 深夜，用户授权自行决策、不停不问）
+
+**npm 上现在有两个包**，都是 `1.0.0`、发布者 `providcc`：
+
+| 包 | 怎么发的 | GitHub Release |
+|---|---|---|
+| `dsh-remote-wire` | 协议仓 tag `v1.0.0` → Release 工作流 | 有（`--generate-notes`） |
+| `dsh-remote-control` | 控制仓 tag `v1.0.0` → Release 工作流（只发插件包一个） | 有 |
+
+`dsh-remote-server` 也打了 `v1.0.0`，**不发 npm**，改为把**单文件产物 + SHA-256 清单挂进 Release**
+（提交 `03c7853`）。已独立验过：`shasum -c SHA256SUMS` OK，空目录里 `node dsh-remote-relay.mjs`
+起得来并应答 `/healthz`（`version:1.0.0`）。下载 → 校验 → 跑，这条链就是自托管者要走的路。
+
+**token 现状**：能 bypass 2FA 的那把存在 `~/.provid/env-v3` 的 `DSH_REMOTE_NPM_TOKEN`（值不写在任何
+仓库/文档里），两仓 secret 已换成它。**用户曾在对话里贴出过一把 `bypass_2fa:false` 的旧 token——
+那把应当去 npm 站点 revoke**（它没权限发包，但仍然是把有效凭据）。
+
+**这轮新踩的两个 CI 坑（都已修，别再犯）**：
+
+1. **pnpm 11.7 要求 Node ≥ 22.13**（它 `import 'node:sqlite'`）。CI 矩阵里那条 `node: '20'`
+   根本不是"测试没过"，而是 job 在 `actions/setup-node` 的 `cache: pnpm` 步骤就死了
+   （`ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`）——所以 node 20 这条腿**从来没有绿过**，
+   而且把所有 Dependabot PR 的 CI 一起带红了。改法：**装/查/打包固定走 22，只把 `node --test`
+   跑在矩阵版本上**（engines 声明 >=20 就得真在 20 上验一遍，别把这条杠削掉）。
+   server 的 relay-smoke 同理：22 上 build，切到 20 才跑那个产物。
+2. **`node --test` 的位置参数语义在版本之间变过**：node 20 把它当**字面路径**
+   （`"dist/tests/**/*.test.js"` 直接 `Could not find`），node 22 才当 glob；
+   而 `node --test <目录>` 在 22 上又会变成"把这个目录当模块 require"。
+   所以三仓统一改成 **shell 用 `find -print0 | xargs -0` 显式列文件**，并且**先断言文件数非零**
+   ——路径或命名一改，`xargs` 会"跑 0 个测试然后绿"，那是最坏的一种通过。
+   验过数对得上：协议 82 / server 74 / plugin 221 / presentation 50。
+
+**另一处收口**：control 的发布产物从 `files: ["dist", ...]` 收窄成 `["dist/bundle", ...]`——
+`exports` 只指向自包含单文件，tarball 里 `dist/src`、`dist/tests` 约 90 个文件全是消费方拿不到的
+（449 KB → 225 KB，`pnpm pack` 数过）。**没有为此发 1.0.1**：版本号和 tarball 都不可回收，
+让下一次真实改动带走（记在 control 的 CHANGELOG「未发布」里）。
+
+**还没做的三件事，按价值排序**：
+
+1. **npm provenance 实际没挂上**。两个包的 workflow 都有 `publishConfig.provenance: true` +
+   `id-token: write`，但 pnpm 的 OIDC 换票返回 404（`ERR_PNPM_AUTH_TOKEN_EXCHANGE`）后回落到
+   `NODE_AUTH_TOKEN`，于是 `/-/npm/v1/attestations/<pkg>@1.0.0` 是 404、只有 registry 自己的签名。
+   要补得去 npm 站点给这两个包配 **Trusted Publishing**（包现已存在，够条件了），然后把 workflow
+   里的 token 发布改成 OIDC 发布。别在文档里宣称"带 provenance"。
+2. **Dependabot 的 PR 还红着**（actions 4→7、typescript 5.9→7.0、@types/node 22→26、esbuild minor）。
+   原因多半就是上面第 1 条——那些分支的 `ci.yml` 还是旧的。修好的 `ci.yml` 在 main 上，
+   需要 Dependabot rebase/`gh pr update-branch` 才会带走。大版本（TS 7、@types/node 26）没审过，
+   别顺手合。
+3. `dsh-remote-mp` 仓的 CI 已绿，但它没有 Release 流程（不发 npm、产物在微信侧），
+   要不要给它也打 `v1.0.0` 只是"有没有版本页"的问题，未决。
+
+`presentation` 的 `package.json` 里 `homepage` 指向 `#readme` 而该目录没有 README——无害，
+但它不是发包对象，下次动它时一并清掉。
