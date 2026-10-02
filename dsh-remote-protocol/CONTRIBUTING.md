@@ -1,19 +1,18 @@
-# Contributing
+# 贡献指南
 
-Thanks for taking the time to contribute. This document covers the conventions this repository
-follows; by participating you agree to abide by the [Code of Conduct](./CODE_OF_CONDUCT.md).
+感谢你愿意花时间贡献。本文覆盖本仓遵循的约定；参与即表示你同意遵守
+[行为准则](./CODE_OF_CONDUCT.md)。
 
-## Ground rules for this package
+## 本包的基本规则
 
-This is a **pure-function** library and a **frozen wire contract**. Two rules matter above all:
+这是一个**纯函数**库，也是一份**冻结的线协议契约**。最重要的两条：
 
-1. **No I/O, no timers, no platform execution.** Anti-sleep exposes _which command to run_;
-   running it is the caller's job. If you need a side effect, it belongs in a different package.
-2. **Byte-level compatibility is non-negotiable.** The Mini Program ships an independent
-   implementation of the same format. Any change to encoding, key derivation, or nonce layout
-   must be mirrored there and covered by a differential test. When in doubt, open an issue first.
+1. **没有 I/O，没有定时器，不做平台执行。** 防休眠只暴露"该跑哪条命令"；真正去跑是调用方的事。
+   如果你需要一个副作用，它属于别的包。
+2. **字节级兼容不可谈判。** 小程序里有一份同格式的独立实现。任何对编码、密钥派生或 nonce 布局的
+   改动都必须在那边同步实现，并有对拍测试覆盖。拿不准就先开 issue。
 
-## Getting started
+## 上手
 
 ```sh
 git clone https://github.com/providcc/dsh-remote-protocol.git
@@ -22,37 +21,33 @@ pnpm install
 pnpm test
 ```
 
-Requires Node.js ≥ 20 and pnpm 11 (see `.nvmrc`).
+要求 Node.js ≥ 20 与 pnpm 11（见 `.nvmrc`）。
 
-## Development workflow
+## 开发流程
 
-- **Branch** from `main`; keep commits focused and messages descriptive.
-- **Test first for bug fixes.** Add a failing test that reproduces the issue, then fix it. A fix
-  without a test that would fail without it is incomplete.
-- **Type-check and test before pushing:** `pnpm typecheck && pnpm test`.
-- **Do not weaken a guarantee to make a test pass.** If a contract looks wrong, raise it — a
-  relaxed assertion is almost always the wrong fix.
+- 从 `main` **开分支**；提交保持聚焦，message 写清楚。
+- **修 bug 先写测试。** 先加一个能复现问题的失败用例，再修。没有"去掉就该红"的测试的修复是不完整的。
+- **推送前类型检查 + 跑测试：** `pnpm typecheck && pnpm test`。
+- **不要为了让测试通过而放宽一条保证。** 如果某条契约看起来不对，提出来——放宽断言几乎总是错的修法。
 
-## Style
+## 风格
 
-- TypeScript, ESM only, `strict` plus `noUncheckedIndexedAccess`.
-- Formatting is enforced by [Prettier](./.prettierrc.json): no semicolons, single quotes,
-  2-space indent, ~120 column print width. Run `pnpm format` before committing, or
-  `pnpm format:check` to verify.
-- Comments should explain _why_, not _what_ — especially where a decision deviates from the
-  obvious approach. Several contracts here are byte-frozen for reasons not visible in the code.
+- TypeScript，仅 ESM，`strict` 加 `noUncheckedIndexedAccess`。
+- 格式由 [Prettier](./.prettierrc.json) 强制：不写分号、单引号、2 空格缩进、约 120 列。
+  提交前跑 `pnpm format`，或用 `pnpm format:check` 校验。
+- 注释解释**为什么**，不是**做了什么**——尤其当某个决定偏离了显而易见的做法。这里有好几处契约
+  之所以被字节冻结，原因并不在代码里可见。
 
-## Commits and pull requests
+## 提交与 PR
 
-- Use clear, imperative commit subjects (`fix: reject unpadded base64 in parsePairingUri`).
-- In your PR description, state the problem, the approach, and how you verified it.
-- CI must be green: type-check, unit tests on Node 22, and the formatting check.
+- 提交标题用清晰的祈使句（`fix: reject unpadded base64 in parsePairingUri`）。
+- PR 描述里写清：问题是什么、怎么做的、怎么验证的。
+- CI 必须全绿：类型检查、Node 22 上的单测、格式检查。
 
-## Reporting bugs and proposing features
+## 报 bug 与提需求
 
-Use the issue templates. For anything security-related, follow [SECURITY.md](./SECURITY.md)
-instead of opening a public issue.
+用 issue 模板。任何与安全相关的，按 [SECURITY.md](./SECURITY.md) 走，不要开公开 issue。
 
-## License
+## 许可
 
-By contributing, you agree that your contributions are licensed under the [MIT License](./LICENSE).
+贡献即表示你同意你的贡献按 [MIT 许可](./LICENSE) 授权。

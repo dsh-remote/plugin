@@ -1,34 +1,33 @@
-name: Feature request
-description: Propose a new capability or an improvement.
+name: 功能建议
+description: 提出一个新能力或一处改进。
 title: 'feat: '
 labels: ['enhancement', 'triage']
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What are you trying to do that the library does not support today?
+      label: 问题
+      description: 你想做什么，而库现在不支持？
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
-      description: What would you like to see? Include API sketches if you have them.
+      label: 建议方案
+      description: 你希望看到什么？如果已有 API 草图请附上。
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: 考虑过的替代方案
     validations:
       required: false
 
   - type: markdown
     attributes:
       value: |
-        Reminder: this package is a **frozen wire contract** mirrored by the Mini Program
-        client. Changes to encoding, key derivation, or nonce layout require coordinating both
-        implementations and adding a differential test.
+        提醒：本包是一份**冻结的线协议契约**，由小程序客户端镜像实现。改动编码、密钥派生或
+        nonce 布局需要两端同步，并补一个对拍测试。

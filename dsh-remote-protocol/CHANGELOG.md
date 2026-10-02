@@ -1,25 +1,24 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project are documented in this file.
+本项目所有值得注意的改动都记录在此文件。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，
+本项目遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [未发布]
 
 ## [1.0.0] - 2026-10-03
 
-### Added
+### 新增
 
-- Initial public release of the DSH Remote Control wire protocol.
-- Sealed-record crypto (`seal` / `open`) over XSalsa20-Poly1305 via `tweetnacl`.
-- PSK generation and directional key derivation for `c2h` / `h2c`, with counter-nonce support
-  for runtimes without a CSPRNG.
-- zod schemas and parsers for relay control frames and the `cmd.*` / `ev.*` payload catalog.
-- Typed outbound builders for relay → endpoint and host → client messages.
-- `dshr:/p?...` pairing-URI encode/decode and 6-digit token helpers.
-- Conversation / host / command id generation.
-- Cross-platform keep-awake command builder (`caffeinate`, `systemd-inhibit`).
+- DSH Remote Control 线协议的首次公开发布。
+- 基于 `tweetnacl` 的 XSalsa20-Poly1305 密封记录加密（`seal` / `open`）。
+- PSK 生成与 `c2h` / `h2c` 两把方向密钥的派生，并支持在无 CSPRNG 的运行时上用计数器 nonce。
+- 中继控制帧与 `cmd.*` / `ev.*` 载荷目录的 zod schema 与解析器。
+- 中继 → 端点、主机 → 客户端消息的类型化出站构造器。
+- `dshr:/p?...` 配对 URI 编解码与 6 位码工具。
+- 会话 / 主机 / 命令 id 生成。
+- 跨平台防休眠命令构造器（`caffeinate`、`systemd-inhibit`）。
 
-[Unreleased]: https://github.com/providcc/dsh-remote-protocol/compare/v1.0.0...HEAD
+[未发布]: https://github.com/providcc/dsh-remote-protocol/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/providcc/dsh-remote-protocol/releases/tag/v1.0.0
