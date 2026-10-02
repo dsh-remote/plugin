@@ -1,9 +1,14 @@
 /* chat 页 —— 文档流，不是聊天气泡。
  *
- * 设计取向（参考用户给的桌面端工作流界面）：
- *   ① 正文通栏阅读，不套卡片；卡片只留给「过程」这种可以收起来的东西；
- *   ② 一切颜色走 TDesign 变量（主题已固定为浅色，见 app.wxss）；
- *   ③ 层级靠留白和字重，不靠投影 —— 真机小屏上投影会糊成一片。
+ * 设计取向：
+ *   ① 三种内容各有各的长相，靠**位置 + 形状**一眼分辨说话人，不靠头像和昵称：
+ *      你说的靠右、实心底；它说的靠左、白底卡片；它干活的过程是一条可收起的行。
+ *      为什么必须能一眼分辨：这一页是**异步**的 —— 你发完就走了，几小时后回来读结果，
+ *      一屏里混着"我说的 / 它说的 / 它干的"，找不到自己那句话是常事。
+ *   ② 只借微信气泡的**那条语言**（左右分列 + 圆角方向），不搬社交那一套：
+ *      没有头像、没有已读、不用白色气泡去包它的正文外层再套一层。
+ *   ③ 一切颜色走 TDesign 变量（主题已固定为浅色，见 app.wxss）。
+ *   ④ 层级靠留白和字重，不靠投影 —— 真机小屏上投影会糊成一片。
  */
 
 /* 页面骨架：顶栏 / 滚动区 / 输入区三段式。
@@ -192,20 +197,36 @@
   background: var(--td-component-border);
 }
 
-/* ── 你的指令：左侧色条 + 浅底。它是上下文，不是主角，所以不套气泡 ── */
-.user {
-  border-left: 6rpx solid var(--td-brand-color-3);
-  background: var(--td-brand-color-1);
-  border-radius: 6rpx 18rpx 18rpx 6rpx;
-  padding: 20rpx 24rpx;
+/* ── 你的指令：靠右的实心气泡 ───────────────────────────────────────
+   为什么靠右：这一页是**异步**的 —— 指令发出去、关掉手机、几小时后回来读结果。
+   一屏里混着「我说的 / 它说的 / 它干的」，第一件要能一眼分辨的事就是"哪句是我说的"。
+   微信把"自己发的"放右边、给一个实心底色，这是最省事的一眼分辨法，沿用这条语言。
+   但只借这条语言，不搬社交那一套：没有头像、没有昵称、没有已读回执。
+
+   为什么是实心而不是浅底：长会话往回翻时要能**一眼扫到**自己下的那几条指令；
+   浅底（旧版是 brand-color-1）和卡片、和过程窗口几乎是同一个明度，扫不出来。
+   白字压在 brand 上的对比度约 7:1，贴代码片段也读得清。 */
+.user-row {
+  display: flex;
+  justify-content: flex-end;
   margin-bottom: 28rpx;
+}
+
+.user {
+  max-width: 82%;
+  padding: 20rpx 26rpx;
+  /* 四个角里右下角收小 = 尾巴朝向说话的人（他在右边）。微信的圆角语言：
+     收小的那个角永远对着气泡的主人，一眼就知道谁在说。 */
+  border-radius: 26rpx 26rpx 8rpx 26rpx;
+  background: var(--td-brand-color, #0052d9);
 }
 
 .user-text {
   font-size: 30rpx;
   line-height: 46rpx;
-  color: var(--td-text-color-primary);
+  color: var(--td-text-color-anti, #ffffff);
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 /* ── 步骤组：一轮「想 → 调工具 → 再想」聚成一条 ──────────────────── */
@@ -410,14 +431,31 @@
   margin: 6rpx 0 0 12rpx;
 }
 
-/* ── 回复正文：这页的主体，通栏、不套壳 ───────────────────────────── */
+/* ── 回复正文：靠左的卡片气泡 ───────────────────────────────────────
+   为什么给它一个容器：旧版它和上面的指令块都是"通栏 + 浅底"，两者之间没有
+   图形落差，一屏读下来是一片糊的。现在它有自己的边界（白底 + 细边 + 大圆角），
+   和右边那条实心指令形成figure/ground 的对照 —— 谁是"页面主体"一目了然。
+
+   为什么 max-width 给 94% 而不是 100%：留 6% 的缝，长回复也仍然看得出"它靠左"；
+   6% 在 375pt 屏上是 20px，几乎不损失可读宽度（长文才是这一页的主体）。
+   左上车削平的角是同一套"尾巴朝向说话人"的语言，和用户气泡正好镜像。 */
+.reply-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 28rpx;
+}
+
 .reply {
+  max-width: 94%;
+  padding: 22rpx 26rpx;
+  border-radius: 8rpx 26rpx 26rpx 26rpx;
+  background: var(--td-bg-color-container);
+  border: 2rpx solid var(--td-component-border);
   font-size: 30rpx;
   line-height: 48rpx;
   color: var(--td-text-color-primary);
   word-break: break-word;
   white-space: pre-wrap;
-  margin-bottom: 28rpx;
 }
 
 /* 光标：还在写的时候让人知道没结束 */
