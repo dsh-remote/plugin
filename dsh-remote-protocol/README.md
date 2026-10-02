@@ -1,6 +1,7 @@
 # dsh-remote-protocol
 
 [![CI](https://github.com/providcc/dsh-remote-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/providcc/dsh-remote-protocol/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-remote-protocol.svg)](https://www.npmjs.com/package/dsh-remote-protocol)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 **DSH Remote Control** 三端共用的线协议——DSH 宿主插件、零知识中继、微信小程序客户端。
