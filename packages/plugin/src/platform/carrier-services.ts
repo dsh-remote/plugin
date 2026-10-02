@@ -94,6 +94,13 @@ export function createServicesKernel(services: ServicesBundle, options: Services
   const unmappedEventTypes = new Set<string>()
   /** 事件回调里抛过的错（按类型计数）。没有这一条，"回合跑到一半没声音"就只能靠猜。 */
   const listenerErrors = new Map<string, number>()
+  /**
+   * 人工交互两面的登记结果，进 status.json。
+   * 真机上"审批卡为什么没弹"有三种原因（宿主策略根本没问 / 我们没登记上 /
+   * 登记了但此刻没有已配对的手机），没有这两个字段就只能猜。
+   */
+  let approvalFace = 'not-attached'
+  let questionsFace = 'pending'
 
   /** 软探测一个成员是不是函数。返回类型用 unknown 参数表，调用点各自窄化。 */
   const fn = (owner: unknown, name: string): ((...args: any[]) => unknown) | undefined => {
@@ -442,16 +449,30 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         const listener = (...args: unknown[]): Promise<string> => participate(args)
         try {
           const disposer = (on as (n: string, fn: unknown) => unknown).call(services, name, listener)
+          // 这条登记要进 status.json：真机上审批卡"为什么没弹"分三种原因
+          // （策略根本没问 / 没登记上 / 登记了但没配对的手机），没有这个字段就只能猜。
+          approvalFace = 'registered'
           disposers.push(() => {
             if (typeof disposer === 'function') (disposer as () => void)()
             else if (typeof services.off === 'function') services.off(name, listener)
           })
         } catch (error) {
+          approvalFace = `failed: ${messageOf(error)}`.slice(0, 80)
           log('approval/request participation failed', { message: messageOf(error) })
         }
+      } else {
+        approvalFace = 'refused by guard'
       }
+    } else {
+      approvalFace = 'no on()'
     }
     const questions = services.userQuestions as LooseObject | undefined
+    if (!options.takeOverQuestions) {
+      // 默认关：`ctx.userQuestions` 只允许一个活跃提供者，接管就意味着桌面 UI 不再问。
+      questionsFace = 'not-taken-over'
+    } else if (!questions || typeof questions.registerProvider !== 'function') {
+      questionsFace = 'no userQuestions provider'
+    }
     if (options.takeOverQuestions && questions && typeof questions.registerProvider === 'function') {
       const provider = {
         ask: async (request: LooseObject) => {
@@ -471,8 +492,10 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       try {
         const dispose = (questions.registerProvider as (p: unknown) => unknown).call(questions, provider)
         if (typeof dispose === 'function') disposers.push(dispose as () => void)
+        questionsFace = 'registered'
         log('question provider taken over from the desktop UI')
       } catch (error) {
+        questionsFace = `failed: ${messageOf(error)}`.slice(0, 80)
         log('question provider registration failed', { message: messageOf(error) })
       }
     }
@@ -564,6 +587,8 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         // 真机排错的第一现场：内核到底发了哪些事件类型、其中哪些我们没认。
         eventTypes: [...seenEventTypes].slice(-24).join('|'),
         unmappedEventTypes: [...unmappedEventTypes].join('|'),
+        approvalFace,
+        questionsFace,
         listenerErrors: [...listenerErrors].slice(0, 4).map(([key, count]) => `${count}×${key}`).join(' | ') || 'none',
       }
     },

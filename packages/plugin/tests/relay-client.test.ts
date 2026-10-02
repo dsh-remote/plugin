@@ -404,9 +404,9 @@ test('enc 打到一个本端不认识的 convId：立刻作废并声明，而不
 test('pair-fail 与未知帧名都要留痕：中继侧加一个名字，主机不许永远是哑的（F1）', () => {
   const { client, slots, feed, logs } = harness()
   slots.create(120_000)
-  feed({ t: 'pair-fail', reason: 'rate_limited' })
+  feed({ t: 'pair-fail', reason: 'already_used' })
   assert.ok(
-    logs.some((line) => line.includes('pair failed') && line.includes('rate_limited')),
+    logs.some((line) => line.includes('pair failed') && line.includes('already_used')),
     `pair-fail 无人处理也不留痕（日志：${JSON.stringify(logs)}）：手机扫完码主机侧完全无痕`,
   )
   // 未定义的帧名：解析层就拒了，同样要留下一条"收到但丢弃"的痕迹。

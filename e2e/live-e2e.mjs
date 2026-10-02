@@ -265,8 +265,8 @@ async function runRound(round) {
   const downEnc = recorder.frames.filter((frame) => frame.direction === 'out' && /"t":"enc"/.test(frame.raw))
   check(
     '⑩c 下行密文帧数有下界（中继→手机；与主机 outbound 计数对账）',
-    downEnc.length >= 6,
-    `手机侧收到 ${downEnc.length} 帧下行密文；错误事件 ${JSON.stringify(recorder.errors ?? []).slice(0, 120)}`,
+    downEnc.length >= (NO_PROMPT ? 4 : 6),
+    `手机侧收到 ${downEnc.length} 帧下行密文（下限 ${NO_PROMPT ? 4 : 6}）；错误事件 ${JSON.stringify(recorder.errors ?? []).slice(0, 120)}`,
   )
   const encFrames = recorder.frames.filter((frame) => frame.direction === 'in' && frame.raw.includes('"enc"'))
   check('⑩ 零知识：上行 enc 帧数有下界', encFrames.length >= 2, `${encFrames.length} 帧`)

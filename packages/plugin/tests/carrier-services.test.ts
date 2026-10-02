@@ -193,6 +193,56 @@ test('事件回调里的异常不许冒回内核，且必须进 status.json 的 
   assert.match(String(described.listenerErrors), /^\d+×/, '要带次数：同一处抛一万次与抛一次是完全不同的问题')
 })
 
+test('人工交互两面的登记结果必须能从 status.json 读出来（审批卡没弹时的分诊入口）', () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const listeners: Record<string, (...args: unknown[]) => void> = {}
+  services.on = (name: string, listener: (...args: unknown[]) => void) => {
+    listeners[name] = listener
+    return () => {}
+  }
+  const kernel = f.kernel(services)
+  assert.equal((kernel.describe() as Record<string, unknown>).approvalFace, 'not-attached', '还没挂 sink 就说"已登记"：这条字段就成了谎')
+  const detach = kernel.attachInteractionSink!({ approval: async () => 'allowed-once', question: async () => null })
+  const described = kernel.describe() as Record<string, unknown>
+  // 审批是 **waterfall 参与者**，登记动作就是 `on('approval/request', …)`。
+  assert.ok(listeners['approval/request'], '没有真正登记 approval/request 参与者')
+  assert.equal(described.approvalFace, 'registered', `审批面登记状态读不出真值：${String(described.approvalFace)}`)
+  // 提问默认不接管（`ctx.userQuestions` 是单提供者，接管会剥夺桌面 UI 的提问能力）。
+  assert.equal(described.questionsFace, 'not-taken-over', '默认就该是 not-taken-over，否则桌面端问不了问题')
+  detach()
+})
+
+test('takeOverQuestions=true 时才注册提问提供者；没有那个服务要说得出来', () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  services.on = (name: string, listener: (...args: unknown[]) => void) => {
+    void name
+    void listener
+    return () => {}
+  }
+  let registered = 0
+  services.userQuestions = {
+    registerProvider: () => {
+      registered += 1
+      return () => {}
+    },
+  }
+  const clock = new FakeClock()
+  const kernel = createServicesKernel(services, { clock, takeOverQuestions: true, log: () => {} })
+  kernel.attachInteractionSink!({ approval: async () => 'allowed-once', question: async () => null })
+  assert.equal(registered, 1, '开了接管却没注册提供者：手机端永远收不到提问，桌面端也问不了')
+  assert.equal((kernel.describe() as Record<string, unknown>).questionsFace, 'registered')
+
+  const noService = fixture()
+  const bare = noService.bundle({ live: true })
+  bare.on = () => () => {}
+  delete bare.userQuestions
+  const kernel2 = createServicesKernel(bare, { clock, takeOverQuestions: true, log: () => {} })
+  kernel2.attachInteractionSink!({ approval: async () => 'allowed-once', question: async () => null })
+  assert.equal((kernel2.describe() as Record<string, unknown>).questionsFace, 'no userQuestions provider', '接管失败要能说清是"宿主没有这个服务"')
+})
+
 test('未知事件类型不映射但要在 kernel.unmappedEventTypes 里看得见', () => {
   const f = fixture()
   const services = f.bundle({ live: true })
