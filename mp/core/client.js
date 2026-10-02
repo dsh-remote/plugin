@@ -18,6 +18,13 @@ var socket = require('./socket.js')
 
 var PROTOCOL_VERSION = 1
 
+/**
+ * 一页历史等多久算超时。主机会把整份会话日志读出来再切片（真机实测 4 轮 713 行是毫秒级），
+ * 但长会话 + 慢磁盘可能到秒级，所以给得比普通命令宽。超时**resolve(null)** 而不是 reject：
+ * 页面只需要分得清"拿到了 / 没拿到"，用 reject 会让每个调用点都要写 try/catch。
+ */
+var HISTORY_TIMEOUT_MS = 15000
+
 class DrcClient {
   constructor() {
     this.status = 'idle' // idle | connecting | pairing | online | needs-pair | error
@@ -40,6 +47,8 @@ class DrcClient {
     this._cmdSeq = 0
     this._resume = null
     this._decryptFails = 0
+    /** cmdId → resolve。历史是**回执类**载荷：它只回答我们发出的那一次请求，不是广播。 */
+    this._historyWaiters = {}
   }
 
   // ── 事件 ──────────────────────────────────────────────────────────
@@ -156,6 +165,21 @@ class DrcClient {
     this.sessions = []
     this.keepAwake = null
     this._decryptFails = 0
+    // 还挂着的取历史请求不会有回音了：就地结算掉，否则页面的「历史读取中」会一直转
+    this._settleHistory(null)
+  }
+
+  /**
+   * 把所有挂起的取历史请求按同一个结果结算（断线/解配时用）。
+   *
+   * **不能"先换表再回调"**：`done()` 里的幂等守卫查的是 `self._historyWaiters[cmdId]`，
+   * 表一旦先被换成空的，每个回调都会在守卫处早退 —— 连 15s 超时那条路也一起被吃掉，
+   * 于是断线时页面上的「正在读取主机上的历史…」会永远转下去（不发错、不重试，最难查）。
+   * 结算点只有 `done()` 一个，让它自己删自己那一行。
+   */
+  _settleHistory(page) {
+    var ids = Object.keys(this._historyWaiters)
+    for (var i = 0; i < ids.length; i++) this._historyWaiters[ids[i]](page)
   }
 
   /** 配对不可用了：丢掉并要求重新扫码。 */
@@ -257,7 +281,7 @@ class DrcClient {
       this.sendControl({ t: 'pair-begin-client', pairingToken: this._pendingToken })
     } else if (this.isPaired()) {
       // 恢复尝试 —— 会话可能服务端已经没了
-      this._setStatus('online', '已连接，正在恢复会话')
+      this._setStatus('online', '已连接，正在同步会话列表')
       this.sendCmd({ t: 'cmd.list_sessions', cmdId: this.newCmdId() })
     } else {
       this._setStatus('needs-pair', '请输入主机上的 6 位配对码')
@@ -304,9 +328,27 @@ class DrcClient {
       return
     }
     this._decryptFails = 0
+    // 回执类载荷：它是**回答我们某一次请求**的，不是一条事件。所以先结算那个 Promise，
+    // 并且不再往下当普通事件发一遍 —— 否则页面会同时走两条路处理同一页历史。
+    if (payload.t === 'ev.session_history') {
+      var waiter = this._historyWaiters[payload.cmdId]
+      // **不要在这里 delete**：结算点只有一个，就是 loadHistory 里的 done()。
+      // 两边都删过一次 => done() 里的幂等守卫（`if (!self._historyWaiters[cmdId]) return`）
+      // 永远命中，Promise 永不 resolve——真机与本地闭环的表现都是「加载更早」转圈不动、
+      // 或首屏历史永远停在 loading（15s 的超时同样会被这个早退吃掉）。
+      if (waiter) waiter(payload)
+      return
+    }
     // 每个页面都要的簿记放在这里，页面保持「哑」
     if (payload.t === 'ev.session_changed') {
       this.sessions = payload.sessions || []
+      // 列表到了，上面那句就该退休。原来它一直挂着不动 —— DESIGN-REVIEW.md
+      // 早就点过名（「永远停在『已连接，正在恢复会话』，这就是静默坏掉」）。
+      // 何况协议里根本没有取历史的帧，写"恢复会话"会让人以为历史会回来，
+      // 然后点进会话看到空白，只能判断成"坏了"。
+      if (this.statusText === '已连接，正在同步会话列表') {
+        this._setStatus('online', '已连接到主机')
+      }
     } else if (payload.t === 'ev.keep_awake_state') {
       this.keepAwake = payload
     }
@@ -350,6 +392,42 @@ class DrcClient {
     var cmd = { t: 'cmd.keep_awake', cmdId: this.newCmdId(), enabled: !!enabled }
     if (idleReleaseSec !== undefined && idleReleaseSec !== null) cmd.idleReleaseSec = idleReleaseSec
     return this.sendCmd(cmd)
+  }
+
+  /**
+   * 读一页主机上已有的历史。
+   *
+   * 分页游标**由主机给**：返回的 `nextBeforeSeq` 原样回传进下一次调用即可拿更早的一页；
+   * 它不在就表示到最早了。页面不要自己按条数推算——一条原始内核事件可能被折叠成
+   * 0/1/2 条这里看到的条目，按条数翻页迟早会跳过或重发一段。
+   *
+   * @returns Promise<page|null>。`null` = 没拿到（未配对 / 发送失败 / 超时 / 断线），
+   *          页面据此显示"读不到"并允许重试，而不是显示成"这个会话没内容"。
+   */
+  loadHistory(sessionId, opts) {
+    opts = opts || {}
+    var self = this
+    if (!this.isPaired() || !this.sock) return Promise.resolve(null)
+    var cmdId = this.newCmdId()
+    return new Promise(function (resolve) {
+      var timer = null
+      // 结算点只有一个：删掉登记因此是幂等的，超时与回帧谁先到都只生效一次
+      var done = function (page) {
+        if (!self._historyWaiters[cmdId]) return
+        delete self._historyWaiters[cmdId]
+        if (timer) clearTimeout(timer)
+        resolve(page)
+      }
+      timer = setTimeout(function () {
+        done(null)
+      }, HISTORY_TIMEOUT_MS)
+      self._historyWaiters[cmdId] = done
+
+      var cmd = { t: 'cmd.session_history', cmdId: cmdId, sessionId: sessionId }
+      if (opts.beforeSeq !== undefined && opts.beforeSeq !== null) cmd.beforeSeq = opts.beforeSeq
+      if (opts.limit) cmd.limit = opts.limit
+      if (!self.sendCmd(cmd)) done(null)
+    })
   }
 }
 

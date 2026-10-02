@@ -29,6 +29,37 @@ function statusView(status) {
   }
 }
 
+function pad2(n) {
+  return n < 10 ? '0' + n : String(n)
+}
+
+/**
+ * 会话摘要下发的是 ISO 字符串（DESIGN.md F7）。原来直接 `slice(11,19)` 只显示
+ * 时分秒 —— 昨天和今天的 `14:32` 长得一模一样，看不出这个会话多久没动了。
+ * 按「今天 / 昨天 / 今年 / 更早」分档，长度可控且一眼能判断新旧。
+ */
+function formatTime(iso) {
+  if (!iso) return ''
+  var d = new Date(iso)
+  var t = d.getTime()
+  if (isNaN(t)) return String(iso).slice(11, 19) // 认不出来的原样截一段，别把整页搞崩
+  var now = new Date()
+  var hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+  var sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  if (sameDay) return hm
+  var yesterday = new Date(now.getTime() - 24 * 3600 * 1000)
+  var isYesterday =
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate()
+  if (isYesterday) return '昨天 ' + hm
+  if (d.getFullYear() === now.getFullYear()) return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+}
+
 Page({
   data: {
     paired: false,
@@ -41,6 +72,11 @@ Page({
     hostId: '',
     keepAwakeOn: false,
     keepAwakeText: '',
+    /** 正在连/正在配对：主机卡上要有可见的动静，别让用户以为卡死了 */
+    connecting: false,
+    /** 被过滤掉的归档会话数；>0 时列表底部补一句说明 */
+    hiddenArchived: 0,
+    hiddenText: '',
   },
 
   onLoad: function () {
@@ -112,6 +148,7 @@ Page({
       statusText: text || '',
       statusLabel: v.label,
       statusTheme: v.theme,
+      connecting: status === 'connecting' || status === 'pairing',
     })
   },
 
@@ -126,19 +163,36 @@ Page({
     })
   },
 
+  /**
+   * 归档会话**不显示**：主机对它们的每一步都直接拒绝，列出来只会让人点了才发现没用。
+   * 但也不能悄无声息地消失 —— 底部留一句「已隐藏 N 个」，否则用户会以为会话丢了。
+   */
   _renderSessions: function (list) {
-    var items = (list || []).map(function (s) {
+    var items = []
+    var hidden = 0
+    var all = list || []
+    for (var i = 0; i < all.length; i++) {
+      var s = all[i]
+      if (s.state === 'archived') {
+        hidden++
+        continue
+      }
       var b = badgeFor(s.state, s.running)
-      return {
+      items.push({
         id: s.id,
         title: s.title || s.id,
         workspace: s.workspace || '',
         badgeText: b.text,
         badgeTheme: b.theme,
-        updatedAt: s.updatedAt ? s.updatedAt.slice(11, 19) : '',
-      }
+        running: b.theme === 'primary',
+        updatedAt: formatTime(s.updatedAt),
+      })
+    }
+    this.setData({
+      sessions: items,
+      hiddenArchived: hidden,
+      hiddenText: hidden ? '已隐藏 ' + hidden + ' 个归档会话' : '',
     })
-    this.setData({ sessions: items })
   },
 
   refresh: function () {

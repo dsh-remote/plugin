@@ -1,43 +1,387 @@
-/* pair 页：布局节奏 + 警示卡（组件内部样式由 TDesign 提供） */
+/* pair 页：布局 + 状态图形。
+   颜色一律走 TDesign 变量（主题按系统深色模式自动切）；
+   本页所有输入框都用原生 input，不用 t-input —— 后者的高度完全靠组件内部
+   padding 撑，真机上撑不住时整行会塌成一条缝（已实证，见 skill dsh-mp-ui-dev）。 */
 
-.warn-card {
-  background: var(--td-error-color-1, #fdeceb);
-  border: 2rpx solid var(--td-error-color-3, #f5c6c0);
-  border-radius: 16rpx;
+/* ── 环境缺能力的警示卡 ─────────────────────────────────────────── */
+.warn {
+  background: var(--td-error-color-1, #fff0ed);
+  border-color: var(--td-error-color-3, #ffb9b0);
   padding: 24rpx;
   margin-bottom: 24rpx;
 }
 
 .warn-title {
   font-size: 30rpx;
-  font-weight: 600;
+  font-weight: 500;
   margin-bottom: 12rpx;
   color: var(--td-error-color-6, #d54941);
 }
 
+.warn-text {
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+/* ── 顶部连接头 ───────────────────────────────────────────────────
+   左边一枚「连接」图形：两个节点 + 中间一条连接条。
+   未配对 = 虚线灰；连接中 = 实心蓝 + 两端交替呼吸；已配对 = 实心绿。
+   全程只用 CSS 画，不引 t-icon（图标字体走远程 CDN，拉不到就是空白方块）。 */
+.conn {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 28rpx;
+}
+
+.link-glyph {
+  flex: 0 0 auto;
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 26rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+/* 两个「终端」造型的圆点 + 中间一条连线，比两个小圆点更像「连接」这件事 */
+.lg-node {
+  width: 22rpx;
+  height: 22rpx;
+  border-radius: 50%;
+  background: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+/* height:0 + border-top 画连线：这样「虚线/实线」只改一个属性，
+   不用去动元素的盒模型，两个状态的视觉重量天然一致。 */
+.lg-bar {
+  width: 26rpx;
+  height: 0;
+  margin: 0 7rpx;
+  border-top-width: 6rpx;
+  border-top-style: dashed;
+  border-top-color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.link-glyph.success { background: var(--td-success-color-1, #e3f9e9); }
+.link-glyph.success .lg-node { background: var(--td-success-color, #2ba471); }
+.link-glyph.success .lg-bar {
+  border-top-style: solid;
+  border-top-color: var(--td-success-color, #2ba471);
+}
+
+.link-glyph.primary { background: var(--td-brand-color-1, #f2f3ff); }
+.link-glyph.primary .lg-node { background: var(--td-brand-color, #0052d9); }
+.link-glyph.primary .lg-bar {
+  border-top-style: solid;
+  border-top-color: var(--td-brand-color, #0052d9);
+}
+
+.link-glyph.danger { background: var(--td-error-color-1, #fff0ed); }
+.link-glyph.danger .lg-node { background: var(--td-error-color, #d54941); }
+.link-glyph.danger .lg-bar {
+  border-top-style: solid;
+  border-top-color: var(--td-error-color, #d54941);
+}
+
+/* 连接中：两端交替亮 —— 比整块闪烁更像「正在建立链路」。
+   显式给两个节点各自的类，不用 :last-child（小程序 wxss 里不可靠）。 */
+.link-glyph.live .lg-a { animation: node-pulse 1.1s ease-in-out infinite; }
+.link-glyph.live .lg-b { animation: node-pulse 1.1s ease-in-out 0.55s infinite; }
+
+@keyframes node-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.conn-meta {
+  flex: 1 1 auto;
+  /* flex 子项默认 min-width:auto，不置 0 会被长主机名顶宽、挤掉右侧胶囊 */
+  min-width: 0;
+  margin: 0 20rpx;
+}
+
+.conn-name {
+  font-size: 32rpx;
+  font-weight: 500;
+  line-height: 44rpx;
+}
+
+.conn-sub {
+  margin-top: 6rpx;
+  font-size: 24rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+/* ── 已配对 ─────────────────────────────────────────────────────── */
+.done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-top: 24rpx;
+  padding: 44rpx 40rpx;
+  background: var(--td-success-color-1, #e3f9e9);
+  border-color: var(--td-success-color-3, #92dab2);
+}
+
+.done-mark {
+  width: 88rpx;
+  height: 88rpx;
+  line-height: 88rpx;
+  text-align: center;
+  margin-bottom: 20rpx;
+  border-radius: 50%;
+  background: var(--td-success-color, #2ba471);
+  color: var(--td-text-color-anti, #ffffff);
+  font-size: 44rpx;
+}
+
+.done-title {
+  font-size: 32rpx;
+  font-weight: 500;
+  margin-bottom: 10rpx;
+  color: var(--td-success-color-6, #008858);
+}
+
+.done-text {
+  /* 不设 max-width：卡片自身的内边距已经收窄了行长，再限宽会把
+     「中继只转发密文。」挤成单独一行 */
+  padding: 0 8rpx;
+}
+
+/* ── 步骤卡：编号 + 标题 + 状态在卡内，控制项在分隔线下面 ───────── */
+.stepcard {
+  margin-top: 24rpx;
+}
+
+.stepcard-head {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 28rpx;
+}
+
+.step-no {
+  flex: 0 0 auto;
+  width: 40rpx;
+  height: 40rpx;
+  line-height: 40rpx;
+  text-align: center;
+  margin-right: 16rpx;
+  border-radius: 50%;
+  font-size: 24rpx;
+  font-weight: 500;
+  background: var(--td-brand-color-1, #f2f3ff);
+  color: var(--td-brand-color, #0052d9);
+}
+
+.step-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 500;
+}
+
+.step-state {
+  flex: 0 0 auto;
+  font-size: 22rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.step-state.ok {
+  color: var(--td-success-color-6, #008858);
+}
+
+/* 分隔线单独占一层：小程序里 `+` / `:last-child` 挨着自定义组件时不可靠 */
+.card-line {
+  height: 2rpx;
+  margin-left: 28rpx;
+  background: var(--td-component-border, #e7e7e7);
+}
+
+.card-pad {
+  padding: 24rpx 28rpx 28rpx;
+}
+
+/* ── 「或」分隔 ─────────────────────────────────────────────────── */
+.or {
+  display: flex;
+  align-items: center;
+  margin: 24rpx 0;
+}
+
+.or-line {
+  flex: 1 1 auto;
+  height: 2rpx;
+  background: var(--td-component-border, #e7e7e7);
+}
+
+.or-text {
+  flex: 0 0 auto;
+  padding: 0 20rpx;
+  font-size: 22rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+/* ── 输入行：浅底嵌入卡片，看上去就是个可输入的框 ───────────────── */
+.field-box {
+  display: flex;
+  align-items: center;
+  height: 96rpx;
+  padding: 0 16rpx 0 24rpx;
+  border-radius: 16rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* input 必须显式 height：靠上下 padding 撑高会把文字垂直裁掉 */
+  height: 96rpx;
+  line-height: 96rpx;
+  font-size: 28rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.field-ph {
+  font-size: 28rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.field-clear {
+  flex: 0 0 auto;
+  width: 52rpx;
+  height: 52rpx;
+  line-height: 52rpx;
+  text-align: center;
+  margin-left: 12rpx;
+  border-radius: 50%;
+  background: var(--td-bg-color-component, #e7e7e7);
+  color: var(--td-text-color-placeholder, #a0a6b0);
+  font-size: 24rpx;
+}
+
+/* 读剪贴板：不必让用户长按输入框去粘，点一下就行 */
+.field-paste {
+  flex: 0 0 auto;
+  height: 56rpx;
+  line-height: 56rpx;
+  padding: 0 24rpx;
+  margin-left: 12rpx;
+  border-radius: 999rpx;
+  background: var(--td-bg-color-container, #ffffff);
+  color: var(--td-brand-color, #0052d9);
+  font-size: 24rpx;
+}
+
+/* ── 6 位配对码：大号居中，配一排进度点 ─────────────────────────── */
+.code-box {
+  padding: 16rpx 16rpx 20rpx;
+  border-radius: 16rpx;
+  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+}
+
+.code-input {
+  width: 100%;
+  height: 104rpx;
+  line-height: 104rpx;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 56rpx;
+  letter-spacing: 20rpx;
+  /* letter-spacing 会在最后一个字符后面也留一格，往左挪一点视觉才居中 */
+  padding-left: 20rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.code-ph {
+  font-size: 40rpx;
+  letter-spacing: 16rpx;
+  color: var(--td-text-color-placeholder, #a0a6b0);
+}
+
+.code-scale {
+  display: flex;
+  justify-content: center;
+  margin-top: 8rpx;
+}
+
+.code-pip {
+  width: 44rpx;
+  height: 6rpx;
+  border-radius: 3rpx;
+  margin: 0 6rpx;
+  background: var(--td-component-border, #dcdcdc);
+}
+
+.code-pip.on {
+  background: var(--td-brand-color, #0052d9);
+}
+
+/* ── 按钮与折叠 ─────────────────────────────────────────────────── */
 .btn-gap {
   margin-top: 24rpx;
 }
 
-.hint {
-  margin-top: 16rpx;
-  text-align: center;
-}
-
-.hint.ok {
-  color: var(--td-success-color, #2ba471);
-}
-
-.footer-link {
+.adv-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-top: 32rpx;
-  text-align: center;
-  color: var(--td-brand-color, #0052d9);
+  padding: 16rpx;
   font-size: 26rpx;
-  padding: 12rpx;
+  color: var(--td-brand-color, #0052d9);
 }
 
-.footer-link.dim {
-  color: var(--td-text-color-placeholder, #a0a6b0);
-  font-size: 24rpx;
-  margin-top: 12rpx;
+/* 纯 CSS 三角，展开时翻转 —— 比「高级设置 / 收起高级设置」两个纯文字更能提示可折叠 */
+.caret {
+  width: 0;
+  height: 0;
+  margin-right: 12rpx;
+  border-left: 10rpx solid transparent;
+  border-right: 10rpx solid transparent;
+  border-top: 12rpx solid var(--td-brand-color, #0052d9);
+  transition: transform 0.2s ease;
+}
+
+.caret.up {
+  transform: rotate(180deg);
+}
+
+/* 高级设置：左标签 + 右输入 */
+.field {
+  display: flex;
+  align-items: center;
+  height: 96rpx;
+  padding: 0 24rpx;
+}
+
+.field-k {
+  flex: 0 0 auto;
+  width: 104rpx;
+  font-size: 28rpx;
+  color: var(--td-text-color-secondary, #5c6470);
+}
+
+.field-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 96rpx;
+  line-height: 96rpx;
+  font-size: 28rpx;
+  color: var(--td-text-color-primary, #1f2329);
+}
+
+.field-line {
+  height: 2rpx;
+  margin-left: 24rpx;
+  background: var(--td-component-border, #e7e7e7);
+}
+
+/* 页脚兜底说明：配对流程走完下面会空一大片，放一句「密钥不出本机」既填版面又交代安全模型 */
+.foot-note {
+  margin-top: 24rpx;
+  padding: 0 32rpx;
+  text-align: center;
 }

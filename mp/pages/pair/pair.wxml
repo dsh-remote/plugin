@@ -1,25 +1,38 @@
 <view class="page-pad">
 
   <!-- 容器没有 WebSocket 能力时，唯一要说的就是这一句 -->
-  <view wx:if="{{!socketReady}}" class="warn-card">
+  <view wx:if="{{!socketReady}}" class="warn card">
     <view class="warn-title">当前环境无法连接</view>
-    <view class="muted">
+    <view class="warn-text">
       这个运行环境没有 WebSocket（{{diagGlobal}}.connectSocket 不存在）。
       请用微信开发者工具或真机调试运行。
     </view>
-    <view class="footer-link" bindtap="onCopyDiag">复制诊断信息</view>
+    <view class="footer-link" hover-class="pressed" bindtap="onCopyDiag">复制诊断信息</view>
   </view>
 
-  <!-- 状态 -->
-  <t-cell-group theme="card">
-    <t-cell title="连接状态" description="{{statusText || '尚未连接'}}">
-      <t-tag slot="note" theme="{{statusTheme}}" variant="light">{{statusLabel}}</t-tag>
-    </t-cell>
-    <t-cell wx:if="{{hostLabel}}" title="主机" description="{{hostLabel}}" />
-  </t-cell-group>
+  <!-- 连接头：「通没通」画成一个图形。两个节点 + 连接条，断线时是虚线，
+       连上后变实心并染色 —— 不用读文字就知道现在什么状态。 -->
+  <view class="conn card">
+    <view class="link-glyph {{statusTheme}} {{busy ? 'live' : ''}}">
+      <view class="lg-node lg-a"></view>
+      <view class="lg-bar"></view>
+      <view class="lg-node lg-b"></view>
+    </view>
+    <view class="conn-meta">
+      <view class="conn-name ellipsis">{{hostLabel || '未配对主机'}}</view>
+      <view class="conn-sub ellipsis">{{statusText || '尚未连接'}}</view>
+    </view>
+    <view class="pill {{statusTheme}}">{{statusLabel}}</view>
+  </view>
 
   <!-- 已配对 -->
   <block wx:if="{{online}}">
+    <view class="done card">
+      <view class="done-mark">✓</view>
+      <view class="done-title">加密通道已建立</view>
+      <view class="done-text muted">之后每一条指令都在手机上加密，中继只转发密文。</view>
+    </view>
+
     <view class="btn-gap">
       <t-button theme="primary" size="large" block bindtap="onGoSessions">进入会话列表</t-button>
     </view>
@@ -28,46 +41,125 @@
     </view>
   </block>
 
-  <!-- 未配对：两步走 -->
+  <!-- 未配对：两步走。每步自成一张卡，步骤号在卡内 —— 之前编号浮在灰底上，
+       和输入框各在各的容器里，看不出「1 完了才轮到 2」。 -->
   <block wx:else>
-    <view class="section-title">第一步 · 获取密钥</view>
-    <t-cell-group theme="card">
-      <t-input
-        borderless
-        placeholder="粘贴二维码内容 dshr:/p?…"
-        value="{{pasteText}}"
-        clearable
-        bind:change="onPaste" />
-    </t-cell-group>
-    <view class="btn-gap" wx:if="{{scanReady}}">
-      <t-button theme="primary" variant="outline" size="large" block bindtap="onScan">扫码配对</t-button>
-    </view>
-    <view class="muted hint" wx:else>当前环境没有扫码能力，请粘贴上面的二维码内容</view>
-    <view class="muted hint ok" wx:if="{{hasPsk}}">已获取密钥 ✓，再输入配对码</view>
+    <view class="stepcard card">
+      <view class="stepcard-head">
+        <view class="step-no">1</view>
+        <view class="step-title">获取配对密钥</view>
+        <view class="step-state {{hasPsk ? 'ok' : ''}}">{{hasPsk ? '已获取' : '待获取'}}</view>
+      </view>
+      <view class="card-line"></view>
 
-    <view class="section-title">第二步 · 输入配对码</view>
-    <t-cell-group theme="card">
-      <t-input
-        borderless
-        type="number"
-        maxlength="{{6}}"
-        placeholder="主机上显示的 6 位配对码"
-        value="{{token}}"
-        bind:change="onTokenInput" />
-    </t-cell-group>
+      <view class="card-pad">
+        <!-- 扫码是主路径：主机打印的二维码里带了密钥 + 配对码，扫完直接连 -->
+        <t-button
+          wx:if="{{scanReady}}"
+          theme="primary"
+          variant="light"
+          size="large"
+          block
+          bindtap="onScan">扫描主机上的二维码</t-button>
+        <view wx:else class="muted">当前环境没有扫码能力，请用下面的粘贴方式。</view>
+
+        <view class="or">
+          <view class="or-line"></view>
+          <view class="or-text">或粘贴</view>
+          <view class="or-line"></view>
+        </view>
+
+        <view class="field-box">
+          <input
+            class="field-input"
+            placeholder="dshr:/p?…"
+            placeholder-class="field-ph"
+            confirm-type="done"
+            value="{{pasteText}}"
+            bindinput="onPasteInput"
+            bindblur="onPasteCommit"
+            bindconfirm="onPasteCommit" />
+          <view
+            wx:if="{{pasteText}}"
+            class="field-clear"
+            hover-class="pressed"
+            hover-stay-time="80"
+            bindtap="onPasteClear">✕</view>
+          <view
+            wx:else
+            class="field-paste"
+            hover-class="pressed"
+            hover-stay-time="80"
+            bindtap="onPasteClipboard">粘贴</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="stepcard card">
+      <view class="stepcard-head">
+        <view class="step-no">2</view>
+        <view class="step-title">输入配对码</view>
+        <view class="step-state">终端上的 6 位数字</view>
+      </view>
+      <view class="card-line"></view>
+
+      <view class="card-pad">
+        <view class="code-box">
+          <input
+            class="code-input"
+            type="number"
+            maxlength="6"
+            placeholder="000000"
+            placeholder-class="code-ph"
+            value="{{token}}"
+            bindinput="onTokenInput" />
+          <!-- 进度点：数字是手输的，给一个「还差几位」的可见反馈 -->
+          <view class="code-scale">
+            <view
+              wx:for="{{[0, 1, 2, 3, 4, 5]}}"
+              wx:key="*this"
+              class="code-pip {{token.length > item ? 'on' : ''}}"></view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <view class="btn-gap">
       <t-button theme="primary" size="large" block loading="{{busy}}" disabled="{{busy}}" bindtap="onPair">
-        {{busy ? '处理中…' : '开始配对'}}
+        {{busy ? '配对中…' : '开始配对'}}
       </t-button>
     </view>
 
-    <view class="footer-link" bindtap="toggleAdvanced">{{showAdvanced ? '收起高级设置' : '高级设置'}}</view>
-    <t-cell-group theme="card" wx:if="{{showAdvanced}}">
-      <t-input borderless label="中继" placeholder="wss://…" value="{{server}}" bind:change="onServerInput" />
-      <t-input borderless label="密钥" placeholder="配对密钥 PSK" value="{{psk}}" bind:change="onPskInput" />
-    </t-cell-group>
+    <view class="adv-toggle" hover-class="pressed" bindtap="toggleAdvanced">
+      <view class="caret {{showAdvanced ? 'up' : ''}}"></view>
+      <text>{{showAdvanced ? '收起高级设置' : '高级设置'}}</text>
+    </view>
+
+    <view class="card" wx:if="{{showAdvanced}}">
+      <view class="field">
+        <view class="field-k">中继</view>
+        <input
+          class="field-v mono"
+          placeholder="wss://…"
+          placeholder-class="field-ph"
+          value="{{server}}"
+          bindinput="onServerInput" />
+      </view>
+      <view class="field-line"></view>
+      <view class="field">
+        <view class="field-k">密钥</view>
+        <input
+          class="field-v mono"
+          placeholder="配对密钥 PSK"
+          placeholder-class="field-ph"
+          value="{{psk}}"
+          bindinput="onPskInput" />
+      </view>
+    </view>
 
     <!-- 出问题时要能一句话说清环境有什么，但平时不该占版面 -->
-    <view class="footer-link dim" bindtap="onCopyDiag">复制环境自检</view>
+    <view class="footer-link dim" hover-class="pressed" bindtap="onCopyDiag">复制环境自检</view>
+
+    <view class="foot-note muted">配对密钥只保存在本机，指令在手机上加密后再发出。</view>
   </block>
 </view>

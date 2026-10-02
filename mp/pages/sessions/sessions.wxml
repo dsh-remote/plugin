@@ -1,45 +1,102 @@
 <view class="page-pad">
 
-  <!-- 未配对：整个页面只剩一个动作 -->
+  <!-- 未配对：整个页面只留一个动作，外加"接下来会发生什么"的三步说明 -->
   <block wx:if="{{!paired}}">
-    <view class="pair-landing">
-      <t-empty icon="link" description="还没有配对主机" />
-      <t-button theme="primary" size="large" block bindtap="onGoPair">去配对</t-button>
+    <view class="hero">
+      <view class="hero-mark">DSH</view>
+      <view class="hero-title">远程控制</view>
+      <view class="hero-desc">在手机上驱动主机上的 DeepSeek Harness —— 发指令、看流式输出、审批工具调用，任务没跑完主机不会睡。</view>
+
+      <view class="hero-steps card">
+        <view class="hero-step">
+          <view class="hero-num">1</view>
+          <view class="hero-text">主机端执行 <text class="mono">/drc pair</text>，终端会打印二维码</view>
+        </view>
+        <view class="hero-step">
+          <view class="hero-num">2</view>
+          <view class="hero-text">这里扫码，或把二维码内容粘贴进输入框</view>
+        </view>
+        <view class="hero-step">
+          <view class="hero-num">3</view>
+          <view class="hero-text">填主机上显示的 6 位配对码，即可连上</view>
+        </view>
+      </view>
+
+      <view class="btn-gap">
+        <t-button theme="primary" size="large" block bindtap="onGoPair">扫码配对主机</t-button>
+      </view>
+      <view class="hero-note muted">载荷端到端加密 —— 中继只看得见密文。</view>
     </view>
   </block>
 
   <block wx:else>
-    <!-- 主机状态 -->
-    <t-cell-group theme="card">
-      <t-cell title="{{hostLabel || '主机'}}" description="{{statusText}}">
-        <t-tag slot="note" theme="{{statusTheme}}" variant="light">{{statusLabel}}</t-tag>
-      </t-cell>
-      <t-cell title="防休眠" description="{{keepAwakeText}}">
-        <t-switch slot="note" value="{{keepAwakeOn}}" bind:change="onToggleKeepAwake" disabled="{{status !== 'online'}}" />
-      </t-cell>
-    </t-cell-group>
+    <!-- 主机卡：连接状态 + 防休眠。比一行 cell 更能一眼看出"现在到底通不通" -->
+    <view class="host card">
+      <view class="host-head">
+        <view class="dot {{statusTheme}} {{connecting ? 'blink' : ''}}"></view>
+        <view class="host-name ellipsis">{{hostLabel || '主机'}}</view>
+        <view class="pill {{statusTheme}}">{{statusLabel}}</view>
+      </view>
+      <view class="host-sub ellipsis">{{statusText || '已就绪'}}</view>
 
-    <view class="section-title">会话 · {{sessions.length}} 个</view>
+      <view class="host-divider"></view>
 
-    <t-empty wx:if="{{sessions.length === 0}}" icon="chat" description="暂无会话。主机端有会话时会显示在这里。" />
-
-    <t-cell-group wx:else theme="card">
-      <t-cell
-        wx:for="{{sessions}}"
-        wx:key="id"
-        title="{{item.title}}"
-        description="{{item.workspace || item.id}}"
-        hover arrow
-        data-id="{{item.id}}"
-        data-title="{{item.title}}"
-        bindtap="onOpen">
-        <view slot="note" class="cell-note">
-          <t-tag theme="{{item.badgeTheme}}" variant="light" size="small">{{item.badgeText}}</t-tag>
-          <view wx:if="{{item.updatedAt}}" class="cell-time muted">{{item.updatedAt}}</view>
+      <view class="host-keep">
+        <view class="host-keep-main">
+          <view class="keep-title">防休眠</view>
+          <view class="keep-desc muted">{{keepAwakeText}}</view>
         </view>
-      </t-cell>
-    </t-cell-group>
+        <t-switch
+          value="{{keepAwakeOn}}"
+          bind:change="onToggleKeepAwake"
+          disabled="{{status !== 'online'}}" />
+      </view>
+    </view>
 
-    <view class="footer-link" bindtap="onGoPair">重新配对 / 高级设置</view>
+    <view class="section-title">
+      <text>会话</text>
+      <text class="section-count">{{sessions.length}}</text>
+    </view>
+
+    <view wx:if="{{sessions.length === 0}}" class="card empty-card">
+      <t-empty
+        icon="chat"
+        description="{{hiddenArchived ? '这里只有归档会话，已隐藏' : (status === 'online' ? '主机上还没有会话' : '连上主机后，这里会列出它的会话')}}" />
+    </view>
+
+    <view wx:else class="card">
+      <block wx:for="{{sessions}}" wx:for-index="idx" wx:key="id">
+        <!-- 分隔线用显式元素而不是 :not(:last-child)：wxss 的选择器支持面越窄越好 -->
+        <view wx:if="{{idx > 0}}" class="sess-line"></view>
+        <view
+          class="sess"
+          hover-class="pressed"
+          hover-stay-time="80"
+          data-id="{{item.id}}"
+          data-title="{{item.title}}"
+          bindtap="onOpen">
+          <!-- 左侧色条：运行中/待办扫一眼就能看出来，不用逐行读文字 -->
+          <view class="sess-bar {{item.badgeTheme}}"></view>
+
+          <view class="sess-main">
+            <view class="sess-title ellipsis">{{item.title}}</view>
+            <view class="sess-sub ellipsis">{{item.workspace || item.id}}</view>
+          </view>
+
+          <view class="sess-right">
+            <view class="sess-badge {{item.badgeTheme}}">
+              <view wx:if="{{item.running}}" class="pulse"></view>
+              <text>{{item.badgeText}}</text>
+            </view>
+            <view class="sess-time">{{item.updatedAt}}</view>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <!-- 归档会话被藏起来了，得留一句话，否则用户会以为会话丢了 -->
+    <view wx:if="{{hiddenText}}" class="hidden-note">{{hiddenText}}</view>
+
+    <view class="footer-link" hover-class="pressed" bindtap="onGoPair">重新配对 / 高级设置</view>
   </block>
 </view>

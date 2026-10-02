@@ -180,6 +180,51 @@ Page({
   },
 
   /**
+   * 粘贴框只记值，不立刻解析。
+   * 原生 input 的 bindinput 是「每次敲键都触发」，在上面直接解析会
+   * 把半截内容当失败、反复弹提示；读取动作留给失焦/回车。
+   */
+  onPasteInput: function (e) {
+    this.setData({ pasteText: String((e.detail && e.detail.value) || '') })
+  },
+
+  /** 原生 input 没有 TDesign 的 change 事件，用 blur + confirm 兜住 */
+  onPasteCommit: function () {
+    this.onPaste({ detail: { value: this.data.pasteText } })
+  },
+
+  onPasteClear: function () {
+    this.setData({ pasteText: '' })
+  },
+
+  /**
+   * 读剪贴板。主机打印的是整段 `dshr:/p?…`，手敲不现实、长按输入框再选粘贴也绕，
+   * 点一下直接取。能力缺失时给一句人话，别让它抛 TypeError。
+   */
+  onPasteClipboard: function () {
+    var api = typeof wx !== 'undefined' ? wx : null
+    if (!api || typeof api.getClipboardData !== 'function') {
+      wx.showToast({ title: '当前环境不支持读取剪贴板，请长按输入框粘贴', icon: 'none' })
+      return
+    }
+    var self = this
+    api.getClipboardData({
+      success: function (res) {
+        var text = String((res && res.data) || '').trim()
+        if (!text) {
+          wx.showToast({ title: '剪贴板是空的', icon: 'none' })
+          return
+        }
+        self.setData({ pasteText: text })
+        self.onPaste({ detail: { value: text } })
+      },
+      fail: function () {
+        wx.showToast({ title: '读取剪贴板失败，请长按输入框粘贴', icon: 'none' })
+      },
+    })
+  },
+
+  /**
    * 粘贴主机打印的整段 `dshr:/p?…`。
    * 模拟器没有摄像头：扫码不可能，也不该有人手敲 24 字符的 base64 PSK。
    */

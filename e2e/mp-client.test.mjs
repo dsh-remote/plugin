@@ -373,7 +373,66 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
     assert.ok(lines > 0, `中继日志一行都没有（${lines}），日志审计等于没做`)
   })
 
-  test('11. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {
+  test('11. cmd.session_history：回帧必须**结算成 promise**（不是把帧收下就算完），且不再当普通事件发一遍', async () => {
+    // 为什么占一个用例：`loadHistory` 的结算点是 `done()`，它有一道幂等守卫
+    // （`if (!self._historyWaiters[cmdId]) return`）。收帧那边若顺手先把登记删掉，
+    // 守卫就永远命中 —— promise 永不 resolve，**连 15s 超时也会被同一道守卫吃掉**
+    // （超时回调走的也是 done）。表现是首屏历史永远停在 loading、或「加载更早」转圈不动，
+    // 而且不发错、不重试。这个 bug 真发生过一次，就是这么漏过去的：本文件当时没有历史用例，
+    // mp-chat-blocks 又是桩 client，两边都看不见。
+    const client = phone.client
+    const payloadsBefore = phone.count('ev.session_history')
+    // 有界等待：回帧正常是毫秒级。若结算被吃掉（见上面那段），`await` 会**永不返回**——
+    // 那会把整个套件拖死成"跑到这里就没动静了"，比一条红难查得多。
+    const page = await Promise.race([client.loadHistory(MOCK_SESSION_ID, { limit: 3 }), delay(5000).then(() => '超时未结算')])
+    assert.notEqual(page, '超时未结算', '5s 内回帧没有结算成 promise —— 结算点被吃掉了（页面会永远转圈）')
+    assert.ok(
+      page,
+      'loadHistory 没拿到页：回帧没有结算成 promise（或超时被幂等守卫吃掉）——页面上就是「正在读取主机上的历史…」永远转下去',
+    )
+    assert.equal(page.t, 'ev.session_history')
+    assert.equal(page.sessionId, MOCK_SESSION_ID, '回执的 sessionId 必须是 DSH 会话 id（F3，帧外层那个 c_* 不是它）')
+    assert.ok(Array.isArray(page.items) && page.items.length > 0, `历史页必须带条目，收到 ${JSON.stringify(page).slice(0, 200)}`)
+    for (const item of page.items) {
+      assert.ok(
+        ['ev.message_delta', 'ev.tool_event'].includes(item.t),
+        `历史条目只允许实时流那两种（小程序用同一条落块路径回放），收到 ${JSON.stringify(item.t)}`,
+      )
+    }
+    const sent = phone.cmds.filter((c) => c.cmd.t === 'cmd.session_history').pop()
+    assert.ok(sent, '手机没发出 cmd.session_history')
+    assert.equal(sent.cmd.sessionId, MOCK_SESSION_ID, '载荷 sessionId 必须是 DSH 会话 id')
+    assert.equal(sent.cmd.limit, 3, 'limit 必须原样上行')
+    assert.equal(page.cmdId, sent.cmd.cmdId, 'ev.session_history.cmdId 必须原样回传（对答靠它匹配）')
+    assert.equal(
+      phone.count('ev.session_history'),
+      payloadsBefore,
+      '它是**回执**不是事件：不该再当普通事件 emit 一遍，否则页面会走两条路处理同一页历史',
+    )
+    assert.equal(Object.keys(client._historyWaiters).length, 0, '结算后登记必须清空，否则每读一页都攒一个')
+  })
+
+  test('12. 解配/断线时挂起的历史请求必须当场结算成 null（否则「正在读取主机上的历史…」永远转下去）', async () => {
+    // 这条会解配，所以用**独立一台手机**，不能打掉共享装置（下一条用例还要它）。
+    // 真机上的对应场景：正在读历史时用户点了「解除配对」，或链接掉了触发 _resetPairing ——
+    // 两条路都走 _forgetPairing → _settleHistory。那里若"先换表再回调"，回调会在
+    // done() 的幂等守卫处全部早退，挂起的请求既拿不到结果、也不会超时。
+    const solo = newPhone('历史断线手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+    const pending = solo.client.loadHistory(MOCK_SESSION_ID, { limit: 3 })
+    assert.equal(
+      Object.keys(solo.client._historyWaiters).length,
+      1,
+      '请求没登记上 —— 这个用例就没验到东西（登记是结算的前提）',
+    )
+    solo.client.unpair()
+    const settled = await Promise.race([pending, delay(2000).then(() => '仍在等待')])
+    assert.notEqual(settled, '仍在等待', '解配后挂起的取历史请求没被结算：页面会永远停在读取中，不发错也不重试')
+    assert.equal(settled, null, '断线/解配时该结算成 null —— 页面据此显示"读不到"并允许重试，而不是"这个会话没内容"')
+    assert.equal(Object.keys(solo.client._historyWaiters).length, 0, '结算后登记必须清空')
+  })
+
+  test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {
     // 为什么这条值得占一个用例：中继只要把 sessionId→conv 映射搞错一次（或用错 PSK 派生密钥），
     // 手机在两帧之后就会**永久**丢掉配对并要求重新扫码（mp/core/client.js:294-304）。
     // 这里不替换任何组件：直接拿真实 client 的收帧入口 `_onEncrypted` 喂两条"格式完全正确、

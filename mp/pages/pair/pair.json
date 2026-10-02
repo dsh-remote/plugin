@@ -1,11 +1,6 @@
 {
   "navigationBarTitleText": "配对",
   "usingComponents": {
-    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
-    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
-    "t-tag": "/miniprogram_npm/tdesign-miniprogram/tag/tag",
-    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-divider": "/miniprogram_npm/tdesign-miniprogram/divider/divider"
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
   }
 }

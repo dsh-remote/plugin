@@ -4,6 +4,8 @@
     "pages/pair/pair",
     "pages/chat/chat"
   ],
+  "lazyCodeLoading": "requiredComponents",
+  "darkmode": false,
   "window": {
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#ffffff",

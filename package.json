@@ -9,7 +9,12 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "e2e": "node e2e/run.mjs"
+    "e2e": "node e2e/run.mjs",
+    "check:mp-ui": "node scripts/check-mp-ui.mjs",
+    "mp:lazyload": "node scripts/mp-lazyload-report.mjs",
+    "mp:theme": "node scripts/gen-mp-theme.mjs",
+    "mp:shots": "node scripts/mp-shots.mjs",
+    "mp:upload": "node scripts/mp-upload.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

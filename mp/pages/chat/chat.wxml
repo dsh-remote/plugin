@@ -1,83 +1,284 @@
-<view class="chat-wrap">
+<!-- 外层接 tap：点页面任何非输入区域都收起键盘（输入区/面板自己 catchtap 挡住）。
+     小程序默认不会因为点到别处而收键盘，键盘会一直盖住半屏。 -->
+<view class="chat-wrap" bindtap="onTapBlank">
 
-  <scroll-view class="scroll" scroll-y scroll-into-view="{{toView}}" scroll-with-animation enable-flex>
+  <!-- 顶栏：这一页的「窗口控制条」—— 连接/运行状态、过程块一键展开、中断。
+       中断放这里而不是输入区：键盘弹起时输入区会被顶走，而中断恰恰是那时候最想按的。 -->
+  <view class="bar">
+    <view class="dot {{barTheme}} {{running ? 'blink' : ''}}"></view>
+    <view class="bar-text ellipsis">{{barText}}</view>
+    <view
+      wx:if="{{foldable}}"
+      class="bar-btn"
+      hover-class="pressed"
+      hover-stay-time="80"
+      bindtap="onToggleAll">{{expanded ? '收起过程' : '展开过程'}}</view>
+    <view
+      wx:if="{{running}}"
+      class="bar-stop"
+      hover-class="pressed"
+      hover-stay-time="80"
+      bindtap="onInterrupt">
+      <view class="bar-stop-icon"></view>
+    </view>
+  </view>
+
+  <scroll-view
+    class="scroll"
+    scroll-y
+    scroll-into-view="{{toView}}"
+    scroll-with-animation
+    enable-flex
+    lower-threshold="40"
+    bindscroll="onScroll"
+    bindscrolltolower="onScrollToLower">
+
     <view class="pad">
-      <view wx:if="{{messages.length === 0}}" class="empty">
-        <text class="muted">发送一条指令开始，例如「生成周报并跑测试」。</text>
+      <!-- 历史头：读到了 / 在读 / 读不到，三种说法必须分开。
+           把"读不到"显示成"这个会话没内容"，用户会以为会话真的是空的 —— 那是假事实。 -->
+      <view wx:if="{{historyState === 'loading'}}" class="hist">
+        <view class="hist-spin"></view>
+        <text class="hist-text muted">正在读取主机上的历史…</text>
       </view>
 
-      <view wx:for="{{messages}}" wx:key="key" id="{{item.key}}" class="msg-row {{item.kind}}">
-        <view wx:if="{{item.kind === 'user'}}" class="bubble user"><text>{{item.text}}</text></view>
-        <view wx:elif="{{item.kind === 'assistant'}}" class="bubble assistant">
-          <text>{{item.text}}</text>
-          <text wx:if="{{!item.done}}" class="caret"></text>
-        </view>
-        <view wx:else class="tool-line"><text>{{item.text}}</text></view>
+      <view
+        wx:elif="{{historyState === 'error'}}"
+        class="hist hist-tap"
+        hover-class="pressed"
+        hover-stay-time="80"
+        bindtap="onLoadEarlier">
+        <text class="hist-text">没读到主机上的历史</text>
+        <text class="hist-more">点这里重试</text>
       </view>
+
+      <!-- 「还有更早」：整行可点。左边说**事实**（还有更早），右边说能做什么 ——
+           这两个位置原先写反了，左边那句「已到最早加载的位置」恰好是反的
+           （这一支只在 hasMore 为真时渲染），截图才看得出来。 -->
+      <view
+        wx:elif="{{hasMore}}"
+        class="hist hist-tap"
+        hover-class="pressed"
+        hover-stay-time="80"
+        bindtap="onLoadEarlier">
+        <text class="hist-text muted">{{historyLoadingMore ? '正在读取…' : '还有更早的内容'}}</text>
+        <text class="hist-more">{{historyLoadingMore ? '' : '加载更早的内容'}}</text>
+      </view>
+
+      <view wx:elif="{{historyState === 'ok' && blocks.length}}" class="hist">
+        <text class="hist-text muted">以上是主机上已有的历史</text>
+      </view>
+
+      <!-- 空状态：只有"确实读到了、而且里面什么都没有"才配说这句。
+           三句提示按状态分开 —— 读不到的时候说"连上主机之后会把历史读进来"是错的
+           （那时多半已经连上了，是读失败），会把用户支去查连接。 -->
+      <view wx:if="{{historyState !== 'loading' && blocks.length === 0}}" class="empty">
+        <view class="empty-mark">DSH</view>
+        <view class="empty-title">{{historyState === 'ok' ? '这个会话还没有内容' : '还没有可以显示的内容'}}</view>
+        <view wx:if="{{historyState === 'error'}}" class="empty-hint muted">上面那一行可以点一下重试。</view>
+        <view wx:elif="{{historyState === 'ok'}}" class="empty-hint muted">主机上这条会话是空的。发一条指令开始。</view>
+        <view wx:else class="empty-hint muted">连上主机之后会把已有的历史读进来。</view>
+      </view>
+
+      <!-- 文档流：轮次分隔 / 你的指令 / 步骤组 / 回复正文 / 系统提示。
+           三种内容在协议里本来就是三种东西，混在一个气泡里就没法读。
+           每块外面套一层带 id 的壳：「加载更早」把内容插到前面之后，
+           scroll-into-view 要靠它把用户刚读到的那一块滚回视口，否则页面会原地跳动。 -->
+      <block wx:for="{{blocks}}" wx:key="key">
+        <view class="blk" id="b{{item.key}}">
+
+          <view wx:if="{{item.kind === 'turn'}}" class="turn">
+            <view class="turn-label">{{item.label}}</view>
+            <view class="turn-time mono">{{item.time}}</view>
+            <view class="turn-line"></view>
+          </view>
+
+          <!-- 你的指令：左侧色条 + 浅底。不套气泡 —— 它是上下文，不是主角 -->
+          <view wx:elif="{{item.kind === 'user'}}" class="user">
+            <view class="user-text">{{item.text}}</view>
+          </view>
+
+          <!-- 步骤组：「想 → 调工具 → 再想」聚成一条。收起时只占一行，
+               这是这一页最重要的窗口管理 —— 一轮调 6 次工具不该让人翻 6 屏。 -->
+          <view wx:elif="{{item.kind === 'steps'}}" class="steps">
+            <view
+              class="steps-bar"
+              hover-class="pressed"
+              hover-stay-time="80"
+              data-idx="{{index}}"
+              bindtap="onToggleSteps">
+              <view class="steps-mark {{item.live ? 'live' : 'done'}}">
+                <text wx:if="{{!item.live}}">✓</text>
+              </view>
+              <view class="steps-label {{item.live ? 'live' : ''}}">{{item.label}}</view>
+              <view class="steps-chev">{{item.open ? '⌄' : '›'}}</view>
+            </view>
+
+            <view wx:if="{{item.open}}" class="steps-card">
+              <block wx:for="{{item.items}}" wx:for-item="it" wx:for-index="ii" wx:key="key">
+
+                <!-- 思考：只有阶段与耗时。思维链正文按 host-plugin-runtime.md 的 M28 红线
+                     不得跨 E2E 边界，宿主侧就被丢掉了 —— 这不是界面层能改的。 -->
+                <view wx:if="{{it.type === 'think'}}" class="step-think">
+                  <view class="step-think-mark {{it.done ? '' : 'live'}}"></view>
+                  <text class="step-think-text">{{it.done ? '思考' : '思考中'}} {{it.msText}}</text>
+                </view>
+
+                <!-- 工具调用：一行名称 + 结果预览，点开看参数与完整结果 -->
+                <view
+                  wx:else
+                  class="step-tool {{it.phase}}"
+                  hover-class="pressed"
+                  hover-stay-time="80"
+                  data-b="{{index}}"
+                  data-i="{{ii}}"
+                  bindtap="onToggleTool">
+                  <view class="step-tick {{it.phase}}">
+                    <text wx:if="{{it.phase === 'completed'}}">✓</text>
+                    <text wx:elif="{{it.phase === 'failed'}}">✕</text>
+                    <text wx:else>·</text>
+                  </view>
+                  <view class="step-main">
+                    <view class="step-head">
+                      <text class="step-name">{{it.tool}}</text>
+                      <text wx:if="{{it.title}}" class="step-title ellipsis">{{it.title}}</text>
+                    </view>
+                    <view wx:if="{{it.open}}" class="step-detail">
+                      <view wx:if="{{it.args}}" class="step-sec">
+                        <view class="step-k">参数</view>
+                        <view class="step-v mono">{{it.args}}</view>
+                      </view>
+                      <view wx:if="{{it.result}}" class="step-sec">
+                        <view class="step-k">结果</view>
+                        <view class="step-v mono">{{it.result}}</view>
+                      </view>
+                      <view wx:if="{{!it.args && !it.result}}" class="step-v mono">（还没有输出）</view>
+                    </view>
+                    <view wx:elif="{{it.preview}}" class="step-preview mono ellipsis">{{it.preview}}</view>
+                  </view>
+                  <view class="step-chev">{{it.open ? '▾' : '▸'}}</view>
+                </view>
+              </block>
+            </view>
+          </view>
+
+          <!-- 回复正文：不加气泡，整幅宽度阅读 —— 它才是这页的主体 -->
+          <view wx:elif="{{item.kind === 'text'}}" class="reply">
+            <text user-select>{{item.text}}</text><text wx:if="{{!item.done}}" class="caret"></text>
+          </view>
+
+          <view wx:else class="note">{{item.text}}</view>
+        </view>
+      </block>
+
+      <!-- 滚动锚点：id 与 scroll-into-view 共用同一个值，翻转即"滚到底" -->
+      <view id="{{toView}}" class="anchor"></view>
     </view>
   </scroll-view>
 
-  <!-- 审批卡 -->
-  <view wx:if="{{pendingPermission}}" class="panel">
-    <view class="panel-title">需要审批</view>
-    <view class="panel-body">
-      <view><text class="mono">{{pendingPermission.action}}</text></view>
-      <view wx:if="{{pendingPermission.resource}}" class="mono muted">{{pendingPermission.resource}}</view>
-      <view wx:if="{{pendingPermission.reason}}" class="muted reason">{{pendingPermission.reason}}</view>
+  <!-- 用户往上回看过：给一条回到最新的路，但不打扰他 -->
+  <view
+    wx:if="{{!atBottom && !pendingPermission && !pendingQuestion}}"
+    class="jump"
+    hover-class="pressed"
+    hover-stay-time="80"
+    bindtap="onJumpLatest">
+    <view class="jump-dot"></view>
+    <text>回到最新</text>
+  </view>
+
+  <!-- 审批卡。catchtap：面板里的空白也算"输入区"，点在它上面不该收键盘 -->
+  <view wx:if="{{pendingPermission}}" class="panel" catchtap="onNoop">
+    <view class="panel-head">
+      <view class="panel-flag"></view>
+      <view class="panel-title">需要审批</view>
     </view>
-    <view class="chip-row">
+
+    <view>
+      <view class="row">
+        <text class="row-k">动作</text>
+        <text class="row-v mono">{{pendingPermission.action}}</text>
+      </view>
+      <view wx:if="{{pendingPermission.resource}}" class="row">
+        <text class="row-k">对象</text>
+        <text class="row-v mono">{{pendingPermission.resource}}</text>
+      </view>
+      <view wx:if="{{pendingPermission.reason}}" class="reason">{{pendingPermission.reason}}</view>
+    </view>
+
+    <view class="actions">
       <view
         wx:for="{{pendingPermission.options}}"
         wx:key="id"
-        class="chip {{item.id === 'reject' ? 'chip-danger' : 'chip-primary'}}"
+        class="act {{item.id === 'reject' ? 'act-danger' : 'act-primary'}}"
+        hover-class="pressed"
+        hover-stay-time="80"
         data-decision="{{item.id}}"
         bindtap="onPermissionTap">{{item.label}}</view>
     </view>
   </view>
 
   <!-- 提问卡 -->
-  <view wx:if="{{pendingQuestion}}" class="panel">
-    <view class="panel-title">主机正在询问</view>
+  <view wx:if="{{pendingQuestion}}" class="panel" catchtap="onNoop">
+    <view class="panel-head">
+      <view class="panel-flag flag-brand"></view>
+      <view class="panel-title">主机正在询问</view>
+    </view>
+
     <block wx:for="{{pendingQuestion.questions}}" wx:for-item="q" wx:for-index="qi" wx:key="id">
-      <view class="panel-body">
-        <view>{{q.question}}</view>
-        <view class="chip-row">
+      <view class="question">
+        <view class="question-text">{{q.question}}</view>
+        <view class="options">
           <view
             wx:for="{{q.options}}"
             wx:for-item="o"
             wx:for-index="oi"
             wx:key="id"
-            class="chip {{o.checked ? 'chip-primary' : ''}}"
+            class="opt {{o.checked ? 'opt-on' : ''}}"
+            hover-class="pressed"
+            hover-stay-time="80"
             data-qi="{{qi}}"
             data-oi="{{oi}}"
-            bindtap="onOptionTap">{{o.label}}</view>
+            bindtap="onOptionTap">
+            <view class="opt-tick"><text wx:if="{{o.checked}}" class="opt-check">✓</text></view>
+            <text>{{o.label}}</text>
+          </view>
         </view>
       </view>
     </block>
-    <input class="panel-input" placeholder="补充说明（可选）" bindinput="onFreeText" />
+
+    <input
+      class="panel-input"
+      placeholder="补充说明（可选）"
+      placeholder-class="panel-ph"
+      bindinput="onFreeText"
+      bindfocus="onInputFocus" />
     <view class="btn-gap">
       <t-button theme="primary" size="large" block bindtap="onAnswer">提交回答</t-button>
     </view>
   </view>
 
-  <!-- 输入区 -->
-  <view class="composer">
-    <view class="composer-row">
+  <!-- 输入区：胶囊输入框 + 右侧圆形发送键。
+       catchtap：点输入框本身不该被外层当成"点了空白"而收键盘 -->
+  <view class="composer" catchtap="onNoop">
+    <view class="composer-pill">
       <input
         class="composer-input"
         placeholder="输入指令…"
+        placeholder-class="composer-ph"
         value="{{inputText}}"
+        focus="{{inputFocus}}"
         cursor-spacing="24"
-        hold-keyboard="{{true}}"
         confirm-type="send"
+        bindfocus="onInputFocus"
         bindinput="onInput"
         bindconfirm="onSend" />
-      <view class="send {{inputText ? '' : 'send-disabled'}}" bindtap="onSend">发送</view>
     </view>
-    <view class="composer-foot">
-      <text class="muted">{{running ? '运行中…' : (statusText || '空闲')}}</text>
-      <!-- 只在真的在跑时出现：一个永不生效的按钮只会让人误点 -->
-      <text wx:if="{{running}}" class="stop" bindtap="onInterrupt">中断</text>
+    <view
+      class="composer-send {{inputText ? '' : 'off'}}"
+      hover-class="{{inputText ? 'pressed' : ''}}"
+      hover-stay-time="80"
+      bindtap="onSend">
+      <view class="send-arrow"></view>
     </view>
   </view>
 </view>
