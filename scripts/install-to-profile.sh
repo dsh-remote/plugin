@@ -36,10 +36,22 @@ VERSION=$(node -p "require('$PLUGIN/package.json').version")
 [ -f "$BUILT" ] || { echo "install-to-profile: 缺产物 $BUILT" >&2; exit 1; }
 
 TARGET="$PROFILE/node_modules/$BUNDLE_ID"
-mkdir -p "$TARGET"
 
-# 先删后写：避免任何残留（旧的 dist/ 目录树、上一次的 sourcemap）被当成当前版本。
-rm -rf "$TARGET/dist" "$TARGET/index.js" "$TARGET/package.json"
+# **必须是真目录，不能是指回工作区的软链**。旧实现用 `pnpm add file:.../packages/plugin`
+# 安装，profile 的 package.json 里就留下一条 `"dsh-remote-control": "file:..."`；
+# 只要那条还在，`pnpm install` 就会把整个工作区包再物化一份进来，
+# 于是宿主里同时跑着**两个插件实例**：两个 hostId、中继里两份会话、
+# 手机连到哪一个全看谁先注册——真机取证时表现为"改了的代码没生效"，
+# 而 status.json 的计数来自另一个实例，怎么都对不上账（这次就是被它误导了好几轮）。
+if [ -L "$TARGET" ]; then
+  echo "install-to-profile: $TARGET 是软链（指向 $(readlink "$TARGET")）——profile 里还留着 file: 依赖" >&2
+  echo "  先删掉 $PROFILE/package.json 的 dependencies.$BUNDLE_ID，再重跑本脚本。" >&2
+  exit 1
+fi
+# 整个目录先删后建：只删 index.js/package.json 的话，上一次 pnpm 物化出来的
+# dist/、node_modules/ 会被当成当前版本的一部分。
+rm -rf "$TARGET"
+mkdir -p "$TARGET"
 cp "$BUILT" "$TARGET/index.js"
 # `dsh.bundle.patch` 是宿主认出这是一个 bundle 的入口字段——漏了它，
 # 文件都在、profile 的 bundles 列表里也有名字，但插件根本不会被加载（踩过一次）。
@@ -63,7 +75,7 @@ cat > "$TARGET/package.json" <<JSON
 JSON
 cp "$PLUGIN/cordis.patch.yml" "$TARGET/cordis.patch.yml"
 
-echo "→ 注册 bundle 到 $BUNDLE_ID（幂等）…"
+echo "→ 注册 bundle 到 $BUNDLE_ID（幂等），并清掉旧的 file: 依赖…"
 node --input-type=module -e "
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 const file = '$PROFILE/package.json'
@@ -76,8 +88,20 @@ pkg.dsh.profile = pkg.dsh.profile || {}
 const list = pkg.dsh.profile.bundles || []
 if (!list.includes('$BUNDLE_ID')) list.push('$BUNDLE_ID')
 pkg.dsh.profile.bundles = list
+// 旧机制退役：`file:` 依赖会让 pnpm 再物化一份插件进 profile，
+// 两个实例同时挂在中继上（两个 hostId、两份会话），手机连到谁全凭运气。
+// 现在的安装方式只有这一条：本目录下的单文件 bundle + bundles 列表里的名字。
+let removed = false
+for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+  if (pkg[field] && typeof pkg[field] === 'object' && '$BUNDLE_ID' in pkg[field]) {
+    console.log('   删除 ' + field + '.' + '$BUNDLE_ID' + ' = ' + JSON.stringify(pkg[field]['$BUNDLE_ID']))
+    delete pkg[field]['$BUNDLE_ID']
+    removed = true
+  }
+}
 writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n')
 console.log('   bundles:', list.join(', '))
+if (removed) console.log('   （file: 依赖已删除；profile 的 node_modules 里那份 pnpm 物化的副本由本脚本重写覆盖）')
 "
 
 echo

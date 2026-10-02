@@ -44,8 +44,9 @@ class FakeTransport implements RuntimeTransport {
     return this.peers.has(conversationId)
   }
 
-  broadcast(payload: EvPayload): void {
+  broadcast(payload: EvPayload): number {
     this.broadcasts.push(payload)
+    return this.peers.size > 0 ? this.peers.size : 0
   }
 
   hasPeer(conversationId: string): boolean {
@@ -635,6 +636,30 @@ test('stop() 之后尾随推送不许再发：拆了 socket 就不能再往中�
   runtime.stop()
   await clock.advance(5_000)
   assert.equal(transport.ofType(PAYLOAD_TYPES.evSessionChanged).length, 0, '停机后尾随定时器还在广播：中继那边 socket 已经关了')
+})
+
+test('一条带正文的 done 必须把正文带上（内核没有 token 级增量：正文与 done 同到）', async () => {
+  // 真机取证：`assistant/message` 是"一条消息一帧完整文本 + done"，而第一版只走 complete()，
+  // complete 对缓冲区里没有这条消息的情形发的是 done-only 帧 → 回复被整个丢掉，
+  // 手机上"⑧ 流式输出到达 / ⑨ 有 done"两条断言照样绿，屏幕上一个字都没有。
+  const { runtime, kernel, transport, clock } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair('c_vtext01')
+  await clock.advance(1_000)
+  transport.broadcasts.length = 0
+
+  kernel.feed({ kind: 'delta', sessionId: 'ses_live', messageId: 'msg_v', text: '当前有 0 个提醒。', role: 'assistant', done: true })
+  await clock.advance(200)
+  await settle()
+
+  const frames = transport.broadcasts.filter((payload) => payload.t === PAYLOAD_TYPES.evMessageDelta)
+  assert.equal(frames.length, 1, `正文与 done 被拆成了 ${frames.length} 帧（应为 1 帧合并）或整条被吞`)
+  const only = frames[0] as Extract<EvPayload, { t: 'ev.message_delta' }>
+  assert.equal(only.delta, '当前有 0 个提醒。', '回复文本丢了：手机上就是一个字都没有的空消息')
+  assert.equal(only.done, true, 'done 必须同帧到达')
+  assert.equal(only.messageId, 'msg_v')
+  assert.equal(only.role, 'assistant')
 })
 
 test('非 delta 事件之前先 flush 同会话缓冲：出站类型序列必须严格是 message_delta → tool_event → message_delta（F9）', async () => {

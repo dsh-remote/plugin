@@ -89,6 +89,11 @@ export function createServicesKernel(services: ServicesBundle, options: Services
   const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void =>
     options.log?.(message, fields)
   const titleCache = new Map<string, { title: string; at: number }>()
+  /** 取证用：内核实际发过来的会话事件类型，以及我们**没有映射**的那些（进 status.json）。 */
+  const seenEventTypes = new Set<string>()
+  const unmappedEventTypes = new Set<string>()
+  /** 事件回调里抛过的错（按类型计数）。没有这一条，"回合跑到一半没声音"就只能靠猜。 */
+  const listenerErrors = new Map<string, number>()
 
   /** 软探测一个成员是不是函数。返回类型用 unknown 参数表，调用点各自窄化。 */
   const fn = (owner: unknown, name: string): ((...args: any[]) => unknown) | undefined => {
@@ -246,13 +251,30 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     return { id: `user_${Date.now().toString(36)}`, content: [{ type: 'text', text }], source: { kind: 'user' }, role: 'user' }
   }
 
+  /**
+   * 部署默认模型（`agentDefaultModel.currentSelection()`）。
+   * 取不到就必须**在任何内核调用之前**拒绝：宿主 loop 缺 model 会在 `prepareRequest`
+   * 里抛 `reading 'provider'`，那条崩溃与远程控制毫无关系，排查方向会被彻底带偏
+   * （取证 `docs/legacy-spec/host-plugin-cordis.md` §3 表第 11 行）。
+   */
+  function currentSelection(): { provider: string; model: string } | undefined {
+    const owner = services.agentDefaultModel as LooseObject | undefined
+    const read = fn(owner, 'currentSelection')
+    if (!read || !owner) return undefined
+    try {
+      const value = read.call(owner) as { provider?: unknown; model?: unknown } | undefined
+      if (!value || typeof value.provider !== 'string' || typeof value.model !== 'string') return undefined
+      return { provider: value.provider, model: value.model }
+    } catch {
+      return undefined
+    }
+  }
+
   async function sendPrompt(sessionId: string, text: string): Promise<{ ok: boolean; message?: string }> {
     const agent = liveAgent(sessionId)
     if (!agent) return { ok: false, message: `会话没有活的 agent（agents.get(${sessionId}) 为空，请先恢复会话）` }
-    const selection = fn(services.agentDefaultModel, 'currentSelection')
-    if (!selection) {
-      // 没有可用模型时必须**主动拒绝**：宿主 loop 缺 model 会在 prepareRequest 里抛
-      // `reading 'provider'`，那是一条跟远程控制毫无关系的崩溃。
+    if (!currentSelection()) {
+      // 没有可用模型时必须主动拒绝，理由见 currentSelection() 的注释。
       return { ok: false, message: '拿不到当前模型选择（agentDefaultModel.currentSelection 缺失）' }
     }
     const message = await buildUserMessage(text)
@@ -279,6 +301,18 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     return { ok: true }
   }
 
+  /**
+   * 冷会话续跑（归档或未加载的会话发指令前必须走这一步）。
+   *
+   * **`agentOptions` 不能省**：真机取证抓到的就是这个——宿主每轮结束都会 `session/end-seed`
+   * 把 agent 拆掉，于是手机的第二条指令一定走 resume；而 `agents.resume({resumeSessionId})`
+   * 不带模型时建出来的 Agent 没有 call configuration，回合在 prompt 装配阶段就死掉：
+   * `prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`，
+   * 更早一代甚至直接抛 `Cannot read properties of undefined (reading 'provider')`。
+   * 手机上看到的是"发出去、转两下、一个字都没有"——因为回合是以 error 收的尾，
+   * 而第一版连 `turn/end` 的 reason 都丢掉了（见 `turnEndKernelEvents`）。
+   * 取证：`docs/legacy-spec/host-plugin-cordis.md` §3 表第 5/11 行。
+   */
   async function ensureRunnable(sessionId: string): Promise<{ ok: boolean; message?: string }> {
     if (liveAgent(sessionId)) return { ok: true }
     const registry = services.workspaceRegistry as LooseObject | undefined
@@ -294,8 +328,14 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     }
     const resume = fn(services.agents, 'resume')
     if (!resume) return { ok: false, message: `这一代宿主没有 agents.resume（keys=[${shapeOf(services.agents)}]）` }
+    const selection = currentSelection()
+    if (!selection) {
+      // 没有模型就不要去续跑：续出来的 Agent 一定在装配阶段炸，而且炸点看起来
+      // 与远程控制毫无关系。主动拒绝才有可读的原因。
+      return { ok: false, message: '拿不到当前模型选择（agentDefaultModel.currentSelection 缺失），无法续跑会话' }
+    }
     try {
-      await resume.call(services.agents, { resumeSessionId: sessionId })
+      await resume.call(services.agents, { resumeSessionId: sessionId, agentOptions: { provider: selection.provider, model: selection.model } })
       return { ok: true }
     } catch (error) {
       return { ok: false, message: `续跑会话失败：${messageOf(error)}` }
@@ -309,12 +349,26 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       return () => {}
     }
     const disposers: Array<() => void> = []
+    /**
+     * 注册一个**永远不会往外抛**的监听器。
+     *
+     * 这条不是防御性冗余：`guardedSubscribe` 只保护"注册"这一步，回调本体是裸交给
+     * cordis 的 emit 的。一次抛出（例如某代事件的字段形状没料到）会打断这一条事件的
+     * 派发链，严重时整条订阅被拆掉——真机上表现成"回合跑到一半就再也没有事件"，
+     * 而且 status.json 里一片祥和。插件的红线是"绝不带崩宿主"，事件回调是第一现场。
+     */
     const bind = (name: string, handler: (...args: unknown[]) => void): void => {
-      if (!canSubscribe(name)) {
-        log('refusing to subscribe', { name, waterfall: false })
-        return
+      const guardedHandler = (...args: unknown[]): void => {
+        try {
+          handler(...args)
+        } catch (error) {
+          const key = `${name}: ${messageOf(error)}`.slice(0, 120)
+          const count = (listenerErrors.get(key) ?? 0) + 1
+          listenerErrors.set(key, count)
+          if (count === 1) log('event listener threw', { name, message: messageOf(error) })
+        }
       }
-      disposers.push(guardedSubscribe(on as never, name, handler as never, (message, fields) => log(message, fields)))
+      disposers.push(guardedSubscribe(on as never, name, guardedHandler as never, (message, fields) => log(message, fields)))
     }
     bind('session/event', (...args) => translateSessionEvent(onEvent, args))
     bind('session/created', () => onEvent({ kind: 'sessions-changed', reason: 'session/created' }))
@@ -334,7 +388,13 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     }
   }
 
-  /** 平台日志里的一条会话事件 → 插件词汇表。未识别的类型直接忽略（没有 else 分支）。 */
+  /**
+   * 平台日志里的一条会话事件 → 插件词汇表。
+   *
+   * 未识别的类型**不猜、不挪用**，但必须留痕：`seenEventTypes` / `unmappedEventTypes`
+   * 直接进 status.json 的 `kernel` 里。真机取证第一次用到它就抓出了"手机上看不到工具行"
+   * 这类问题的分叉点——到底是内核没发、还是我们没认。
+   */
   function translateSessionEvent(onEvent: (event: KernelEvent) => void, args: unknown[]): void {
     const session = args.find((arg) => arg && typeof arg === 'object' && typeof (arg as { id?: unknown }).id === 'string') as
       | { id?: string }
@@ -345,60 +405,20 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     const sessionId = String(session?.id ?? '')
     const type = event?.type
     if (!sessionId || !type) return
+    seenEventTypes.add(type)
     const data = (event?.data ?? {}) as LooseObject
-    switch (type) {
-      case 'turn/start':
-        onEvent({ kind: 'run-state', sessionId, state: 'running' })
-        return
-      case 'assistant/message':
-      case 'user/message': {
-        const text = textOf(data)
-        const messageId = messageIdOf(data, event?.seq)
-        if (type === 'assistant/message') {
-          onEvent({ kind: 'delta', sessionId, messageId, text, role: 'assistant', done: true })
-        } else {
-          onEvent({ kind: 'delta', sessionId, messageId, text, role: 'user', done: true })
-        }
-        return
+    for (const mapped of sessionEventKernelEvents({ sessionId, type, seq: event?.seq, data })) {
+      // 标题缓存留在闭包这一侧：纯函数只负责"这条事件翻成什么"，不负责记账。
+      if (mapped.kind === 'title') titleCache.set(sessionId, { title: mapped.title, at: options.clock.now() })
+      onEvent(mapped)
+    }
+    if (!MAPPED_SESSION_EVENTS.has(type)) {
+      // 不映射、不猜语义（F1：挪用既有名字的语义才是危险的），但**必须留痕**：
+      // "手机上看不见工具行"这种问题，第一步就是要分清是内核没发还是我们没认。
+      if (!unmappedEventTypes.has(type)) {
+        unmappedEventTypes.add(type)
+        log('unmapped session event type', { type, keys: shapeOf(data) })
       }
-      case 'tool/call':
-        onEvent({
-          kind: 'tool',
-          sessionId,
-          callId: String(data.callId ?? data.id ?? `tool_${event?.seq ?? 0}`),
-          phase: data.args === undefined || data.args === null ? 'started' : 'args',
-          tool: typeof data.name === 'string' ? data.name : undefined,
-          title: typeof data.title === 'string' ? data.title : previewOf(data.args),
-        })
-        return
-      case 'tool/result':
-        onEvent({
-          kind: 'tool',
-          sessionId,
-          callId: String(data.callId ?? data.id ?? ''),
-          phase: data.error ? 'failed' : 'completed',
-          resultPreview: previewOf(data.result ?? data.error),
-        })
-        return
-      case 'turn/end':
-        // 顺序对手机有意义：先补一条 done，再报 idle，否则转圈会一直停在那里。
-        onEvent({ kind: 'delta', sessionId, messageId: `turn_${event?.seq ?? 0}`, text: '', done: true })
-        onEvent({ kind: 'run-state', sessionId, state: 'idle' })
-        return
-      case 'session/title':
-        if (typeof data.title === 'string') {
-          titleCache.set(sessionId, { title: data.title, at: options.clock.now() })
-          onEvent({ kind: 'title', sessionId, title: data.title })
-        }
-        return
-      case 'approval/asked':
-      case 'approval/decided':
-        // 审批审计事件（emit-mode，经 session/event 到达）。审批卡片本身由
-        // `approval/request` 的参与者路径产生，见 attachInteractionSink。
-        onEvent({ kind: 'sessions-changed', reason: type })
-        return
-      default:
-        return
     }
   }
 
@@ -526,19 +546,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     subscribe,
     attachInteractionSink,
     ensureRunnable,
-    modelSelection() {
-      const current = fn(services.agentDefaultModel, 'currentSelection')
-      if (!current) return undefined
-      try {
-        const selection = current() as LooseObject | undefined
-        if (!selection || typeof selection !== 'object') return undefined
-        const provider = typeof selection.provider === 'string' ? selection.provider : undefined
-        const model = typeof selection.model === 'string' ? selection.model : undefined
-        return provider && model ? { provider, model } : undefined
-      } catch {
-        return undefined
-      }
-    },
+    // 与发指令/续跑走同一条读取路径：这里原来还有一份实现，而且是 `current()` 裸调用
+    // （不带 receiver；真要用 this 的服务方法会当场抛），两份迟早分叉。
+    modelSelection: currentSelection,
     describe() {
       return {
         carrier: 'services',
@@ -551,13 +561,146 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         takeOverQuestions: options.takeOverQuestions === true,
         archivedSessions: archivedIds().size,
         hasOn: typeof services.on === 'function',
+        // 真机排错的第一现场：内核到底发了哪些事件类型、其中哪些我们没认。
+        eventTypes: [...seenEventTypes].slice(-24).join('|'),
+        unmappedEventTypes: [...unmappedEventTypes].join('|'),
+        listenerErrors: [...listenerErrors].slice(0, 4).map(([key, count]) => `${count}×${key}`).join(' | ') || 'none',
       }
     },
   }
 }
 
+/**
+ * 会话事件类型 → 插件事件序列。**纯函数**，抽出来的理由与 `turnEndKernelEvents`
+ * 一样：这一段每一条都对应一个真机形状，必须能在 CI 里逐条测，而不是等下一次重启宿主。
+ * 未知类型返回空数组（不映射、不猜），由调用方留痕。
+ */
+export const MAPPED_SESSION_EVENTS = new Set([
+  'turn/start',
+  'assistant/message',
+  'user/message',
+  'tool/call',
+  'tool/result',
+  'turn/end',
+  'session/title',
+  'approval/asked',
+  'approval/decided',
+])
+
+export function sessionEventKernelEvents(input: { sessionId: string; type: string; seq: unknown; data: LooseObject }): KernelEvent[] {
+  const { sessionId, type, data } = input
+  switch (type) {
+    case 'turn/start':
+      return [{ kind: 'run-state', sessionId, state: 'running' }]
+    case 'assistant/message':
+    case 'user/message':
+      return [
+        {
+          kind: 'delta',
+          sessionId,
+          messageId: messageIdOf(data, input.seq),
+          text: textOf(data),
+          role: type === 'assistant/message' ? 'assistant' : 'user',
+          done: true,
+        },
+      ]
+    case 'tool/call': {
+      // 字段名要按真机形状读：内核给的是 `arguments`（一个 JSON 串），不是 `args`；
+      // 读错了这一帧永远停在 'started'，手机上看不到参数、也看不出工具在跑什么。
+      const argsRaw = data.arguments ?? data.args
+      return [
+        {
+          kind: 'tool',
+          sessionId,
+          callId: String(data.callId ?? data.id ?? `tool_${input.seq ?? 0}`),
+          phase: argsRaw === undefined || argsRaw === null ? 'started' : 'args',
+          tool: typeof data.name === 'string' ? data.name : undefined,
+          title: typeof data.title === 'string' ? data.title : previewOf(argsRaw),
+          ...(argsRaw === undefined ? {} : { argsPreview: previewOf(argsRaw) }),
+        },
+      ]
+    }
+    case 'tool/result': {
+      const message = data.message as LooseObject | undefined
+      const callId = data.callId ?? message?.toolCallId ?? (message?.source as LooseObject | undefined)?.callId ?? ''
+      // 正文同样在两处：顶层 `result`（一代）与 `data.message.content`（真机这一代）。
+      const body = data.result ?? data.error ?? eventContent(data)
+      return [
+        {
+          kind: 'tool',
+          sessionId,
+          callId: String(callId),
+          phase: data.error ? 'failed' : 'completed',
+          resultPreview: previewOf(body),
+        },
+      ]
+    }
+    case 'turn/end':
+      return turnEndKernelEvents({ sessionId, seq: input.seq, data })
+    case 'session/title':
+      return typeof data.title === 'string' ? [{ kind: 'title', sessionId, title: data.title }] : []
+    case 'approval/asked':
+    case 'approval/decided':
+      // 审批审计事件（emit-mode，经 session/event 到达）。审批卡片本身由
+      // `approval/request` 的参与者路径产生，见 attachInteractionSink。
+      return [{ kind: 'sessions-changed', reason: type }]
+    default:
+      return []
+  }
+}
+
+/**
+ * 回合失败时给手机看的那句话。
+ *
+ * 中文打底 + 原始原因照抄：只说"失败了"用户无从下手，只贴英文栈又看不懂。
+ * 长度夹住（内核的 message 可能带着整段 prompt 或栈），并剥掉可能的路径与凭据形态。
+ */
+function turnErrorText(reason: { kind?: string; error?: { message?: string; code?: string } } | undefined): string {
+  const raw = String(reason?.error?.message ?? reason?.kind ?? '未知错误').replace(/\s+/g, ' ').trim()
+  const code = reason?.error?.code ? `（${String(reason.error.code)}）` : ''
+  return `这一轮没有产出回复，内核报错${code}：${raw.slice(0, 240)}`
+}
+
+/**
+ * 内核 `turn/end` → 插件事件序列。单独抽出来是为了**能在 CI 里测**：
+ * 这一条是真机取证抓出来的（宿主在 prompt 装配阶段抛
+ * `prompt variable "{{model}}" has no value for this assembly`，而第一版把
+ * `data.reason` 整个丢掉，于是手机上"一个字都没有的失败回合"与"成功的回合"
+ * 长得一模一样，live-e2e 十五项全绿而实际没有任何回复）。
+ * 顺序是有约定的：先补 done，再报 idle，否则手机的转圈停不下来（F9）。
+ */
+export function turnEndKernelEvents(input: {
+  sessionId: string
+  seq: unknown
+  data: LooseObject
+}): KernelEvent[] {
+  const reason = input.data.reason as { kind?: string; error?: { message?: string; code?: string } } | undefined
+  const failed = reason?.kind === 'error'
+  const messageId = `turn_${input.seq ?? 0}`
+  const events: KernelEvent[] = []
+  if (failed) events.push({ kind: 'delta', sessionId: input.sessionId, messageId, text: turnErrorText(reason), role: 'system', done: false })
+  events.push({ kind: 'delta', sessionId: input.sessionId, messageId, text: '', done: true })
+  events.push({ kind: 'run-state', sessionId: input.sessionId, state: 'idle', ...(failed ? { detail: 'turn-error' } : {}) })
+  return events
+}
+
+/**
+ * 一条会话事件的正文在哪里。
+ *
+ * **两代形状都要认**（真机取证）：`user/message` 把 `content` 放在事件 data 顶层，
+ * 而 `assistant/message` 放在 `data.message.content`（同一层还有 `turn/step/usage/stream`）。
+ * 第一版只读顶层，于是助手的回复折成空串——手机上"流式输出到达"的断言**仍然通过**
+ * （done 帧照发、帧数照够），但屏幕上一个字都没有。这是这条链路上最要命的一类缺陷：
+ * 判据数的是帧，不是内容。
+ */
+function eventContent(data: LooseObject): unknown {
+  if (data?.content !== undefined && data?.content !== null) return data.content
+  const message = data?.message as LooseObject | undefined
+  return message?.content
+}
+
 function textOf(data: LooseObject): string {
-  const content = data?.content
+  const content = eventContent(data)
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content
@@ -570,7 +713,8 @@ function textOf(data: LooseObject): string {
 }
 
 function messageIdOf(data: LooseObject, seq: unknown): string {
-  const id = data?.id ?? data?.messageId
+  const message = data?.message as LooseObject | undefined
+  const id = data?.id ?? data?.messageId ?? message?.id
   if (typeof id === 'string' && id) return id
   return `msg_${String(seq ?? Date.now())}`
 }

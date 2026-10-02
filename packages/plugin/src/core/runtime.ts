@@ -38,8 +38,8 @@ import type { Clock } from '../ports/index.js'
 export interface RuntimeTransport {
   /** 发给某一条配对会话（回执用）。返回 false 表示没有活的对端。 */
   reply(conversationId: string, payload: EvPayload): boolean
-  /** 发给所有已配对的会话（会话列表、防休眠状态这类广播）。 */
-  broadcast(payload: EvPayload): void
+  /** 发给所有已配对的会话（会话列表、防休眠状态这类广播）。返回**收到这条广播的会话数**，0 表示没发出去。 */
+  broadcast(payload: EvPayload): number
   /** 此刻是否有能收这条会话消息的对端（审批要不要认领的判据）。 */
   hasPeer(conversationId: string): boolean
   /** 当前活跃的配对会话 id。 */
@@ -112,7 +112,7 @@ export class HostRuntime {
   ) {
     this.options = { ...DEFAULTS, ...options }
     this.window = new DeltaWindow(
-      (delta) => this.transport.broadcast(delta),
+      (delta) => this.broadcast(delta),
       this.clock,
       { ...DEFAULT_WINDOW_OPTIONS, ...options.window },
     )
@@ -157,7 +157,7 @@ export class HostRuntime {
   /** 手机发来的命令。`conversationId` 是配对通道 id，与载荷里的 sessionId 不是一回事（F3）。 */
   async handleCommand(cmd: CmdPayload, conversationId: string): Promise<void> {
     const reply = (ok: boolean, extras: { message?: string; data?: Record<string, unknown> } = {}): void => {
-      this.transport.reply(conversationId, resultOf(cmd.cmdId, ok, extras))
+      this.replyTo(conversationId, resultOf(cmd.cmdId, ok, extras))
     }
     try {
       switch (cmd.t) {
@@ -201,7 +201,7 @@ export class HostRuntime {
         }
         case 'cmd.keep_awake': {
           const snapshot = this.sleep.setEnabled(cmd.enabled, cmd.idleReleaseSec)
-          this.transport.broadcast(keepAwakeState(snapshot))
+          this.broadcast(keepAwakeState(snapshot))
           reply(true)
           return
         }
@@ -213,23 +213,57 @@ export class HostRuntime {
     }
   }
 
+  /**
+   * 出站计数（进 status.json 的 `outbound`）。
+   *
+   * 为什么必须有：真机取证时手机报"没收到工具行"，第一件要分清楚的事是
+   * **插件到底没发，还是发了但路上丢了**。没有这组计数，这个问题只能靠猜。
+   * `*_no_peer` 是"发了但回执说没有对端"，那是另一种故障（配对已经不在了）。
+   */
+  private readonly outboundCount: Record<string, number> = {}
+  get stats(): Record<string, number> {
+    return { ...this.outboundCount }
+  }
+
+  private countOutbound(payload: EvPayload, sent?: boolean): void {
+    const key = payload.t.replace(/^ev\./, '')
+    this.outboundCount[key] = (this.outboundCount[key] ?? 0) + 1
+    if (sent === false) this.outboundCount[`${key}_no_peer`] = (this.outboundCount[`${key}_no_peer`] ?? 0) + 1
+  }
+
+  private broadcast(payload: EvPayload): void {
+    // 广播也要报"有没有人收到"：只数帧不数对端，就会在真机上出现
+    // "计数说发了 4 帧、手机一帧都没收到"这种无从对账的局面。
+    this.countOutbound(payload, this.transport.broadcast(payload) > 0)
+  }
+
+  private replyTo(conversationId: string, payload: EvPayload): void {
+    this.countOutbound(payload, this.transport.reply(conversationId, payload))
+  }
+
   /** 内核事件入口。合帧与顺序规则都在这几行里。 */
   private onKernelEvent(event: KernelEvent): void {
     switch (event.kind) {
-      case 'delta':
+      case 'delta': {
+        // **一条带正文的 done 必须先把正文推进窗口**。内核没有 token 级增量：一条消息
+        // 就是一条完整的 `assistant/message`（正文与 done 同到）。第一版在这里只走
+        // `complete()`，而 complete 对"缓冲区里根本没有这条消息"的情形发的是 **done-only 帧**
+        // ——于是 `textOf` 辛苦读出来的回复被整个丢掉，手机上收到一帧空文本 + done，
+        // 而"⑧ 流式输出到达 / ⑨ 有 done"两条断言照样绿（真机取证抓到的正是这个）。
+        if (event.text) this.window.push(event.sessionId, event.messageId, event.text, event.role)
         if (event.done) this.window.complete(event.sessionId, event.messageId, event.role)
-        else this.window.push(event.sessionId, event.messageId, event.text, event.role)
         if (event.text) this.sleep.markActive()
         return
+      }
       case 'tool':
         // 非 delta 事件之前必须先 flush 同会话缓冲，否则工具行会插进它自己的文本里。
         this.window.flushSession(event.sessionId)
-        this.transport.broadcast(toolEvent(event))
+        this.broadcast(toolEvent(event))
         this.sleep.markActive()
         return
       case 'run-state':
         this.window.flushSession(event.sessionId)
-        this.transport.broadcast(runState(event))
+        this.broadcast(runState(event))
         if (event.state === 'running') this.sleep.markActive()
         void this.pushSessions('run-state')
         return
@@ -283,8 +317,8 @@ export class HostRuntime {
       this.clock.clearTimeout(this.mergeTimer)
       this.mergeTimer = undefined
     }
-    this.transport.broadcast(sessionChanged(this.sessions, reason))
-    this.transport.broadcast(keepAwakeState(this.sleep.snapshot()))
+    this.broadcast(sessionChanged(this.sessions, reason))
+    this.broadcast(keepAwakeState(this.sleep.snapshot()))
     return this.sessions
   }
 
@@ -326,7 +360,7 @@ export class HostRuntime {
         timer,
       })
       info.signal?.addEventListener('abort', () => this.settle(id, 'cancelled'), { once: true })
-      this.transport.reply(conversationId, permissionRequest({
+      this.replyTo(conversationId, permissionRequest({
         requestId: id,
         sessionId: info.sessionId,
         action: info.action,
@@ -362,7 +396,7 @@ export class HostRuntime {
         options: info.questions,
       })
       info.signal?.addEventListener('abort', () => this.settle(id, null), { once: true })
-      this.transport.reply(conversationId, questionRequest({
+      this.replyTo(conversationId, questionRequest({
         requestId: id,
         sessionId: info.sessionId,
         questions: info.questions,

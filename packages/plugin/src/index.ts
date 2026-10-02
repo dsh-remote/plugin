@@ -180,8 +180,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     reply(conversationId: string, payload: EvPayload): boolean {
       return relay ? relay.send(conversationId, payload) : false
     },
-    broadcast(payload: EvPayload): void {
-      relay?.broadcast(payload)
+    broadcast(payload: EvPayload): number {
+      return relay ? relay.broadcast(payload) : 0
     },
     hasPeer(conversationId: string): boolean {
       return relay?.hasPeer(conversationId) ?? false
@@ -278,6 +278,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       pairing: describeActivePairing(),
       keepAwake: snapshot,
       kernel: kernel?.describe() ?? null,
+      // 出站计数：手机上"没收到 X"的第一现场对比点（插件没发 vs 发了但路上丢了）。
+      outbound: runtime?.stats ?? null,
       probe,
       // token 永远不出现真值；这条有测试锁住。
       hostToken: undefined,
