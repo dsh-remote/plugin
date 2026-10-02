@@ -40,7 +40,7 @@ if (!existsSync(PY)) {
 const { qrMatrix, qrPng, renderTerminalQr } = await import(pathToFileURL(qrModule).href)
 
 const PAYLOADS = [
-  'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142',
+  'dshr:/p?v=1&s=wss%3A%2F%2Frelay.example.invalid&n=demo-host&psk=ZmFrZS1wc2srZmFrZQ%2BZmFrZQ%3D%3D&t=424242',
   'dshr:/p?v=1&s=wss%3A%2F%2F127.0.0.1%3A8787&n=mb&psk=AAAAAAAAAAAAAAAAAAAAAA%3D%3D&t=000001',
   'HELLO WORLD',
   'a',

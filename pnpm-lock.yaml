@@ -80,6 +80,25 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/presentation:
+    dependencies:
+      qrcode:
+        specifier: ^1.5.4
+        version: 1.5.4
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.20.4
+      '@types/qrcode':
+        specifier: ^1.5.5
+        version: 1.5.6
+      esbuild:
+        specifier: ^0.27.7
+        version: 0.27.7
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   packages/protocol:
     dependencies:
       tweetnacl:

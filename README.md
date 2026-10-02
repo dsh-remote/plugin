@@ -16,6 +16,7 @@
 | **协议层** | `packages/protocol` | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
 | **中继服务** | `apps/server` | 零知识 WebSocket 中继（`ws` + `zod`）。生产入口是**单文件产物** `dist/bundle/main.js` |
 | **Host 插件** | `packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件 |
+| **右栏呈现** | `packages/presentation` | 配对码落成 PNG + 一条同域只读路由；浏览器面（`client`）轮询它并把二维码**自动推进右栏**——不用用户自己点开侧边栏，也不切工作区 |
 | **小程序客户端** | `mp/` | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
 | **测试装置** | `e2e/` | 本地全链路 + 真实链路取证（见「测试」） |
 | **部署配置** | `deploy/` | nginx + systemd + 上线步骤（生产实例已运行） |
@@ -93,6 +94,7 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 | `node --test e2e/protocol.test.mjs` | 与小程序 `mp/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `pnpm --filter @dsh-rc/server test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 73 |
 | `pnpm -C packages/plugin test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话** | 218 |
+| `pnpm -C packages/presentation test` | 二维码落盘判据（**没落盘 / 已过期一律不 `ready`**）、`expiresAt` 的 ISO 与毫秒两种形状、会话作用域地址、路由**防环回与防跨作用域**、浏览器面产物形状 | 44 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 14 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题（客户端重连、中继重启、主机重启） | 86 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |

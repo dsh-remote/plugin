@@ -1,0 +1,27 @@
+{
+  "name": "dsh-remote-control-presentation",
+  "version": "2.0.0",
+  "description": "DSH Remote Control presentation half: keeps the current pairing QR rendered on disk and answers a same-origin route so the right sidebar opens it automatically — no manual click, no workspace switch.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/bundle/index.js",
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p client/tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p client/tsconfig.json && node ../../scripts/bundle-presentation.mjs",
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\""
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/qrcode": "^1.5.5",
+    "esbuild": "^0.27.7",
+    "typescript": "^5.6.3"
+  }
+}
