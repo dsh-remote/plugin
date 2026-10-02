@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "e2e": "node e2e/run.mjs",
-    "check:mp-ui": "node scripts/check-mp-ui.mjs",
+    "check:mp-ui": "node scripts/check-mp-ui.mjs && node scripts/check-mp-contrast.mjs",
     "mp:lazyload": "node scripts/mp-lazyload-report.mjs",
     "mp:theme": "node scripts/gen-mp-theme.mjs",
     "mp:shots": "node scripts/mp-shots.mjs",

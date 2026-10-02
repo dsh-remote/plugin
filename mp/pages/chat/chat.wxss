@@ -114,7 +114,7 @@
   flex: 0 0 auto;
   margin-left: 16rpx;
   font-size: 24rpx;
-  color: var(--td-brand-color);
+  color: var(--td-brand-color-on-tint);
 }
 
 /* 整行可点的那两种（读不到 / 还有更早）：主文案提一档对比度，暗示这里能按 */
@@ -275,7 +275,7 @@
 }
 
 .steps-label.live {
-  color: var(--td-brand-color);
+  color: var(--td-brand-color-on-tint);
 }
 
 .steps-chev {
@@ -499,7 +499,7 @@
   border: 2rpx solid var(--td-component-border);
   box-shadow: var(--td-shadow-1);
   font-size: 24rpx;
-  color: var(--td-brand-color);
+  color: var(--td-brand-color-on-tint);
 }
 
 .jump-dot {

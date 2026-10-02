@@ -113,7 +113,7 @@ view, scroll-view, input, textarea, button {
 
 .pill.primary {
   background: var(--td-brand-color-1, #f2f3ff);
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
 }
 
 .pill.warning {
@@ -135,7 +135,7 @@ view, scroll-view, input, textarea, button {
 .footer-link {
   margin-top: 40rpx;
   text-align: center;
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
   font-size: 26rpx;
   line-height: 44rpx;
   padding: 16rpx;

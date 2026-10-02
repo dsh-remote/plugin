@@ -51,7 +51,7 @@
   margin-top: 28rpx;
   padding: 16rpx;
   font-size: 26rpx;
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
 }
 
 .caret {
@@ -131,7 +131,7 @@
   margin-left: 12rpx;
   border-radius: 999rpx;
   background: var(--td-bg-color-container, #ffffff);
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
   font-size: 24rpx;
 }
 
@@ -291,7 +291,7 @@
   border-radius: 999rpx;
   font-size: 24rpx;
   background: var(--td-brand-color-1, #f2f3ff);
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
 }
 
 /* 没连上时置灰：**能看见、能点，点了会说为什么**。
@@ -398,7 +398,7 @@
 
 .sess-badge.primary {
   background: var(--td-brand-color-1, #f2f3ff);
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color-on-tint, #0052d9);
 }
 
 .sess-badge.warning {
