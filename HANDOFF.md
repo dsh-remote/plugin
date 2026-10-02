@@ -428,3 +428,62 @@ turn/end  {"turn":12,"reason":{"kind":"completed"}}
 坏码），已显式启用其自带的 UTF-8 编码器；小程序扫码/粘贴遇内嵌配对码自动连接。
 
 测试：77 项 + e2e 9 步 + QR 解码 28 组，全绿。
+
+### 5.15 真实链路端到端测试（e2e/live-e2e.mjs）—— 不再靠猜
+
+**为什么要有它**：之前的 `scripts/verify-deployment.mjs` 有「自建主机模式」——
+拿不到真实配对码时会用 mock 桥接自建一个主机并**顺利通过**。假通过比失败更贵，
+它掩盖的正是用户实际遇到的故障（配对成功，但主机把 peer 丢了）。
+
+`e2e/live-e2e.mjs` 的三个真实：
+
+| 层 | 真实到什么程度 |
+|---|---|
+| 客户端 | `mp/utils/drc.js` 真实代码（wx shim 在 Node 里跑） |
+| 中继 | 默认线上 `wss://drc.provid.cc`（nginx + Let's Encrypt） |
+| 内核 | 本机 Harness 里的插件，要求 `carrier=services` |
+
+**拿不到真实配对码就直接失败**，绝不退化成 mock。失败时打印事件轨迹，
+这是定位「服务端显示 paired、客户端却毫无反应」的关键。
+
+```sh
+node e2e/live-e2e.mjs                      # 完整闭环（含真实发一条指令）
+node e2e/live-e2e.mjs --rounds 3           # 连跑查稳定性
+node e2e/live-e2e.mjs --session <归档会话id> # 验证自动恢复
+node e2e/live-e2e.mjs --pair <码> --qr '<dshr:…>'
+```
+
+**踩到的坑**：配对码是**一次性的**，而 `status.json` 按定时器刷新、不按消费刷新，
+所以一个"看起来没过期"的码可能早已被别的客户端用掉。测试因此只接受
+**新发布（age<25s）且本轮未用过**的码，遇到「已被使用/已过期」自动换新码重试
+（真失败仍会失败）。
+
+### 5.16 它抓出的两个真 bug（都已修）
+
+**① 主机按自己请求的 TTL 记过期，而不是服务端给的**
+
+主机请求 60s、服务端实际给 180s。码发出超过 60s 后，主机已把那把 PSK 清扫掉；
+此时客户端配对成功，主机 `peer-joined` 找不到 PSK → **静默丢弃 peer** →
+客户端密钥缺失，之后每一帧都解不开：会话列表永远空，界面弹「加密解密失败」。
+
+修法：`pair-ready` 携带服务端权威 `ttlMs`，据此更新该码的过期时间；
+丢弃 peer 时写入 `relayProblem`（`status.json` 可见），不再只有 stdout 一行。
+
+**② 多个配对码同时在挂时用错 PSK**（5.14 修）
+
+`pendingPair` 单槽 → `pendingPairs: Map<token, {psk, expiresAt}>`；
+服务端 `peer-joined` 回传 `pairingToken`；按客户端**实际使用的码**取 PSK。
+回归测试 `e2e/multi-pair.test.mjs`（连发两个码、用第一个配对）。
+
+### 5.17 当前实测状态
+
+```
+live-e2e 单轮 10 项 ✅   3 轮 24 项 ✅
+工具型指令（bash echo）真实执行并回传 ✅
+归档会话自动恢复后执行 ✅
+83 项单测 ✅   e2e 9 步 ✅   QR 解码 28 组 ✅
+carrier=services · relay=online · relayProblem=null
+```
+
+未验证：真机上的审批/提问卡（本机所有会话都是 `danger-full-access` +
+`approval/policy: never`，永不弹审批）；手机端视觉效果（无法代看，见下）。
