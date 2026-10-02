@@ -2,12 +2,17 @@
   "name": "@dsh-rc/e2e",
   "private": true,
   "type": "module",
+  "description": "本地端到端与真实链路取证：真中继 + 真插件运行时（内核面 mock）+ 真小程序客户端代码。",
   "scripts": {
-    "test": "node --test mp-crypto.test.mjs && node --test mp-client.test.mjs && node --test mp-platform.test.mjs && node --test multi-pair.test.mjs && node run.mjs",
-    "test:mp-crypto": "node --test mp-crypto.test.mjs",
+    "test": "node --test mp-crypto.test.mjs mp-client.test.mjs mp-platform.test.mjs multi-pair.test.mjs restart-resume.test.mjs && node run.mjs",
+    "test:local-chain": "node run.mjs",
     "test:mp-client": "node --test mp-client.test.mjs",
-    "test:relay": "node run.mjs",
-    "test:multi-pair": "node --test multi-pair.test.mjs"
+    "test:multi-pair": "node --test multi-pair.test.mjs",
+    "test:restart-resume": "node --test restart-resume.test.mjs",
+    "test:protocol-bytes": "node --test protocol.test.mjs",
+    "test:mp-platform": "node --test mp-platform.test.mjs",
+    "test:mp-crypto": "node --test mp-crypto.test.mjs",
+    "test:live": "node live-e2e.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0",

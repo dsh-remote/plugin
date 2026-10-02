@@ -1,137 +1,148 @@
 /**
- * Regression: several pairing codes outstanding at once.
+ * multi-pair.test — 多张配对码并存时，必须按**手机实际用的那张码**取 PSK。
  *
- * A host can legitimately offer more than one code — an auto-published code
- * plus a `/drc pair`, or two `/drc pair`s inside the TTL. The host must derive
- * the conversation keys from the PSK belonging to the token the CLIENT USED,
- * not from "the most recent one". Picking the wrong PSK produces keys the
- * client cannot reproduce: every payload fails to decrypt, so the session list
- * stays empty and the UI shows a cryptic "cannot decrypt" error.
+ * 它守护的是旧实现的一起线上事故（取证 docs/legacy-spec/relay-and-wireformat.md §2.3 第 2 条、
+ * docs/legacy-spec/testing-and-tooling.md §3）：主机同时挂着"自动发布的那张"与"手动 /drc pair 的那张"
+ * 时，旧实现把待配对 PSK 存成**单槽**，于是主机用"最新那张"的密钥派生会话钥匙，
+ * 而手机用的是"它扫的那张"——握手全绿、`paired` 也到了，但**每一帧都解不开**，
+ * 手机表现为"会话列表永远空白 + 一句莫名的无法解密"。
+ * 新实现两侧都必须是 `Map<token,{psk,expiresAt}>`，中继的 `peer-joined` 必须回传 `pairingToken`
+ * （packages/plugin/src/core/keys.ts:98-148 与 transport/relay.ts:194-210）。
+ *
+ * 三个真实里本文件与其它本地用例同构：真中继（apps/server 产物）+ 真插件运行时
+ * （`apply()` 真入口）+ **真 `mp/core/client.js`**；只有内核面是 `platform/mock-kernel.ts`
+ * （所以会话 id 一律 `ses_mock*`，这不证明真内核）。
+ *
+ * 独立端口、独立 hostId、`DRC_LOG_LEVEL=warn`：这个文件必须能在别的用例旁边并行跑。
  */
-import test from 'node:test'
+import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import path from 'node:path'
-import WebSocket from 'ws'
+import { mkdirSync, rmSync } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
+import { MOCK_SESSION_ID, bootHost, controlFrames, newPhone, pairPhone, shutdown, startRelay, tappedFrames } from './run.mjs'
+import { until } from './mp-sim.mjs'
 
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.join(HERE, '..')
-const rp = (p) => path.join(ROOT, p)
+describe('多张配对码并存：按所用码取 PSK（旧事故回归）', () => {
+  const workDir = path.join(os.tmpdir(), `drc-e2e-multipair-${process.pid}`)
+  let relay = null
+  let host = null
+  let phone = null
+  let earlier = null
+  let later = null
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-async function startServer(port, token) {
-  const proc = spawn(process.execPath, [rp('apps/server/src/main.mjs')], {
-    env: { ...process.env, DRC_PORT: String(port), DRC_HOST_TOKEN: token, DRC_LOG_LEVEL: 'warn' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  proc.stdout.resume()
-  proc.stderr.resume()
-  for (let i = 0; i < 80; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/healthz`)
-      if (r.ok) return proc
-    } catch {
-      /* not up yet */
-    }
-    await sleep(100)
-  }
-  throw new Error('server did not start')
-}
-
-/** Minimal client: control frames in the clear, payloads PSK-encrypted. */
-function makeClient(crypto, url) {
-  const ws = new WebSocket(url)
-  const inbox = []
-  ws.on('message', (d) => inbox.push(JSON.parse(String(d))))
-  const send = (f) => ws.send(JSON.stringify(f))
-  const take = async (pred, ms = 6000, what = 'frame') => {
-    const deadline = Date.now() + ms
-    while (Date.now() < deadline) {
-      const i = inbox.findIndex(pred)
-      if (i >= 0) return inbox.splice(i, 1)[0]
-      await sleep(30)
-    }
-    throw new Error(`timeout waiting for ${what}`)
-  }
-  return { ws, inbox, send, take }
-}
-
-test('pairing with an EARLIER token still yields working keys', async (t) => {
-  const PORT = 18931
-  const TOKEN = 'multi-pair-test-token-0123456789abcdef'
-  const server = await startServer(PORT, TOKEN)
-  t.after(() => server.kill())
-
-  const { HostRuntime, MockHarnessBridge } = await import(rp('packages/plugin/dist/src/index.js'))
-  const crypto = await import(rp('packages/protocol/dist/src/index.js'))
-
-  const rt = new HostRuntime({
-    config: {
-      serverUrl: `ws://127.0.0.1:${PORT}`,
-      hostToken: TOKEN,
-      hostLabel: 'multi',
-      keepAwakeEnabled: false,
-    },
-    bridge: new MockHarnessBridge(),
-    log: () => {},
-  })
-  rt.start()
-  t.after(() => rt.stop())
-  for (let i = 0; i < 40 && rt.relay.status !== 'online'; i++) await sleep(100)
-  assert.equal(rt.relay.status, 'online')
-
-  // Two codes outstanding at the same time, exactly like an auto-published
-  // code followed by `/drc pair`.
-  const first = rt.createPairing(60_000, { includeToken: true })
-  const second = rt.createPairing(60_000, { includeToken: true })
-  assert.notEqual(first.token, second.token)
-  await sleep(400) // let both pair-ready land
-
-  const qr1 = crypto.parsePairingQr(first.qr)
-  assert.ok(qr1, 'first QR parses')
-
-  // The client pairs with the FIRST code — the one that is no longer "latest".
-  const c = makeClient(crypto, `ws://127.0.0.1:${PORT}`)
-  await new Promise((r) => c.ws.on('open', r))
-  c.send({ t: 'hello', role: 'client', protocol: 1, clientId: 'mp-test' })
-  await c.take((f) => f.t === 'hello-ok')
-  c.send({ t: 'pair-begin-client', pairingToken: first.token })
-  const paired = await c.take((f) => f.t === 'paired' || f.t === 'pair-fail')
-  assert.equal(paired.t, 'paired', 'the earlier token must still be claimable')
-
-  const sessionId = paired.sessionId
-  const kC2H = crypto.derivePskKey(qr1.psk, 'c2h', sessionId)
-  const kH2C = crypto.derivePskKey(qr1.psk, 'h2c', sessionId)
-  let seq = 0
-
-  // Ask for the session list. If the host used the wrong PSK it either cannot
-  // decrypt this at all, or seals its reply with keys we cannot open.
-  const cmd = { t: 'cmd.list_sessions', cmdId: 'multi-1' }
-  c.send({
-    t: 'enc',
-    sessionId,
-    seq: ++seq,
-    clientId: 'mp-test',
-    ciphertext: crypto.seal(kC2H, cmd).ciphertext,
+  before(async () => {
+    mkdirSync(workDir, { recursive: true })
+    relay = await startRelay({ env: { DRC_SWEEP_MS: '1000', DRC_LOG_LEVEL: 'warn' }, label: '本地中继（multi-pair）' })
+    host = await bootHost({ relayUrl: relay.url, hostId: 'e2e_multipair_host', statusDir: workDir, pairTtlMs: 60_000 })
+    phone = newPhone('multi-pair 手机')
   })
 
-  // The host pushes keep-awake state on join; every frame it sends must be
-  // openable with our keys. Take frames until the command's result arrives.
-  let opened = null
-  const deadline = Date.now() + 8000
-  while (Date.now() < deadline) {
-    const reply = await c.take((f) => f.t === 'enc', 8000, 'encrypted reply')
-    const payload = crypto.open(kH2C, { ciphertext: reply.ciphertext })
-    assert.ok(payload, 'host reply must decrypt with the PSK of the code we used')
-    if (payload.t === 'ev.result') {
-      opened = payload
-      break
-    }
-  }
-  assert.ok(opened, 'the session list result must arrive and decrypt')
-  assert.ok(Array.isArray(opened.data.sessions))
+  after(async () => {
+    const { relayExit } = await shutdown({ phone, host, relay })
+    rmSync(workDir, { recursive: true, force: true })
+    assert.equal(relayExit.code, 0, `中继必须优雅退出，实际 code=${relayExit.code}`)
+  })
 
-  c.ws.close()
+  test('1. 先发布两张码：它们必须互不相同，且两张都各自拿到服务端权威 ttlMs', async () => {
+    earlier = host.createPairing()
+    await delay(400)
+    later = host.createPairing()
+    await delay(400)
+    assert.notEqual(earlier.token, later.token, `两张码不能相同（6 位空间碰撞也要重来）：${earlier.token}`)
+    assert.notEqual(earlier.psk, later.psk, '每张码必须有自己的一份 PSK')
+    const ready = controlFrames('host', 'received', ['pair-ready'])
+    for (const token of [earlier.token, later.token]) {
+      const frame = ready.find((f) => f.pairingToken === token)
+      assert.ok(frame, `这张码 ${token} 没等到 pair-ready：主机不会改写它的本地过期时间`)
+      assert.ok(Number.isInteger(frame.ttlMs) && frame.ttlMs > 0, `pair-ready.ttlMs 必须是正整数，收到 ${JSON.stringify(frame.ttlMs)}`)
+    }
+    assert.equal(ready.length >= 2, true, `只看到 ${ready.length} 条 pair-ready——两张码并存没成立，这条回归就是空的`)
+    assert.equal(host.state().pendingPairs >= 2, true, `主机侧只挂着 ${host.state().pendingPairs} 张待配对码：单槽实现会在这里露形`)
+  })
+
+  test('2. 用**较早那张**配对：paired 与 peer-joined 都必须指向它', async () => {
+    const { pairing } = await pairPhone(host, phone, { pairing: earlier, expectedRelayUrl: relay.url })
+    assert.equal(pairing.token, earlier.token, '本用例必须用较早那张码')
+    const claim = controlFrames('phone', 'sent', ['pair-begin-client']).pop()
+    assert.equal(claim.pairingToken, earlier.token)
+    const paired = controlFrames('phone', 'received', ['paired']).pop()
+    assert.match(paired.sessionId, /^c_[0-9a-f]{12}$/, `paired.sessionId 形状不对：${paired.sessionId}`)
+    const joined = await until(
+      () => controlFrames('host', 'received', ['peer-joined']).find((f) => f.sessionId === paired.sessionId) ?? null,
+      { timeoutMs: 8000, trail: phone.trail, label: '主机收到这条会话的 peer-joined' },
+    )
+    assert.equal(joined.pairingToken, earlier.token, 'peer-joined 必须回传手机实际使用的那张码')
+    assert.notEqual(joined.pairingToken, later.token, '不能把"最新那张"当成依据')
+  })
+
+  test('3. 主机发来的每一帧都能用较早那张码的 PSK 解开；用最新那张的密钥必须全部失败', async () => {
+    const convId = phone.convId
+    const { codec } = phone.mp
+    const keyOfEarlier = codec.derivePskKey(earlier.psk, 'h2c', convId)
+    const keyOfLater = codec.derivePskKey(later.psk, 'h2c', convId)
+    assert.notEqual(Buffer.from(keyOfEarlier).toString('hex'), Buffer.from(keyOfLater).toString('hex'), '两把派生密钥必须不同——否则这条回归是空的')
+
+    // 让主机多推几类帧：join 时的列表 + 防休眠、list 回执、prompt→审批→工具→delta→done。
+    phone.client.listSessions()
+    await delay(200)
+    const permissionBefore = phone.count('ev.permission_request')
+    phone.client.sendPrompt(MOCK_SESSION_ID, '多码并存也要能整条跑通')
+    const request = await phone.waitForPayload('ev.permission_request', '审批卡到达', { after: permissionBefore, timeoutMs: 12_000 })
+    phone.client.resolvePermission(request.sessionId, request.requestId, 'approve')
+    await phone.waitForPayload('ev.message_delta', '回合收尾（done:true）', { where: (p) => p.done === true, timeoutMs: 12_000 })
+    await delay(200)
+
+    const down = tappedFrames('phone', 'received')
+      .map((f) => ({ raw: f.raw, frame: JSON.parse(f.raw) }))
+      .filter((entry) => entry.frame.t === 'enc' || entry.frame.t === 'enc-batch')
+    assert.ok(down.length >= 8, `主机一共只发来 ${down.length} 帧密文，样本太少不足以证明"每一帧"`)
+    const records = []
+    for (const entry of down) {
+      if (entry.frame.t === 'enc') {
+        assert.equal(entry.frame.sessionId, convId, '下行帧外层 sessionId 必须逐字不变（红线 4）')
+        records.push(entry.frame)
+        continue
+      }
+      assert.ok(Array.isArray(entry.frame.items), 'enc-batch 的 items 必须是数组（否则手机整批丢弃）')
+      for (const item of entry.frame.items) records.push({ sessionId: entry.frame.sessionId, ciphertext: item.ciphertext })
+    }
+    const opened = []
+    for (const record of records) {
+      const payload = codec.open(keyOfEarlier, record)
+      assert.ok(payload, `主机发来的一帧用"所用码 A 的 PSK"解不开：${record.ciphertext.slice(0, 32)}…（这正是旧事故的形状）`)
+      assert.equal(typeof payload.t, 'string')
+      opened.push(payload.t)
+    }
+    assert.ok(opened.length >= 8, `只解开 ${opened.length} 帧，下界 8`)
+    assert.ok(opened.includes('ev.session_changed'), 'join 时推的会话列表帧也必须在"每一帧"里')
+    assert.ok(opened.includes('ev.keep_awake_state'), 'join 时推的防休眠状态帧也必须在"每一帧"里')
+
+    // 反证：用另一张码的密钥必须一帧都解不开。解得开就说明两张码共用了一个 PSK。
+    const wrongOpens = records.filter((record) => codec.open(keyOfLater, record) !== null)
+    assert.deepEqual(wrongOpens.map((r) => r.ciphertext.slice(0, 16)), [], '用"最新那张码"的密钥居然解开了帧——两张码共用了 PSK')
+
+    // 手机侧的用户可见症状必须为 0：一次解密失败会给提示，两次就永久掉配对（§3.2）。
+    const decryptErrors = phone.events.filter((e) => e.kind === 'error' && String(e.message).includes('无法解密'))
+    assert.deepEqual(decryptErrors.map((e) => e.message), [], `手机报了 ${decryptErrors.length} 次解密失败`)
+    assert.equal(phone.client.status, 'online', '手机必须还停在 online')
+  })
+
+  test('4. 列表与回执都要在（F8），且会话 id 与载荷 sessionId 同值（F3）', async () => {
+    const cmdId = phone.client.newCmdId()
+    phone.client.sendCmd({ t: 'cmd.list_sessions', cmdId })
+    const result = await phone.waitForPayload('ev.result', 'list_sessions 的回执', { where: (p) => p.cmdId === cmdId, timeoutMs: 10_000 })
+    assert.equal(result.ok, true, `回执 ok:false：${result.message ?? ''}`)
+    assert.ok(Array.isArray(result.data?.sessions), 'ev.result.data.sessions 必须是数组（虽然手机不读它）')
+    const changed = await phone.waitForPayload('ev.session_changed', '列表快照', {
+      where: (p) => Array.isArray(p.sessions) && p.sessions.length > 0,
+      timeoutMs: 10_000,
+    })
+    assert.equal(changed.sessions, phone.client.sessions)
+    const uplink = phone.sent.filter((s) => s.frame.t === 'enc').pop()
+    assert.match(uplink.frame.sessionId, /^c_/, '帧外层必须是配对通道 id')
+    assert.notEqual(uplink.frame.sessionId, changed.sessions[0].id)
+    await until(() => phone.client.status === 'online', { timeoutMs: 3000, trail: phone.trail, label: '手机仍在 online（多码并存没把配对打掉）' })
+  })
 })

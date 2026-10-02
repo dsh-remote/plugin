@@ -136,18 +136,43 @@ async function runRound(round) {
 
   const client = new clientModule.DrcClient().hydrate()
   const trail = traceOf(client)
-  const seen = { sessionChanged: 0, deltas: 0, done: 0, tools: 0, approvals: 0, questions: 0, keepAwake: 0, runStates: 0, results: 0 }
+  const seen = { sessionChanged: 0, deltas: 0, done: 0, assistantDone: 0, idleAfterPrompt: 0, tools: 0, approvals: 0, questions: 0, keepAwake: 0, runStates: 0, results: 0 }
+  /**
+   * **按 role 累加正文**。这条是补上去的：只看帧数会被"一帧空文本 + done"完全骗过去，
+   * 而真机上就发生过一次（`assistant/message` 的正文在 `data.message.content`，
+   * 插件只读了顶层 → 手机上一个字都没有，⑧⑨ 两条断言照样绿）。
+   */
+  const text = { assistant: '', user: '', system: '' }
   const answers = []
+  /** 发出指令后置真、回合结束后置假：只有这段时间里的 idle 才算这一轮跑完了。 */
+  let turnOpen = false
   client.on((event) => {
     const payload = event?.payload
+    if (payload && process.env.DRC_LIVE_DEBUG) {
+      console.log(`     · payload ${payload.t}${payload.t === 'ev.message_delta' ? ` role=${payload.role} len=${String(payload.delta).length} done=${payload.done === true}` : ''}`)
+    }
+    if (event?.kind && event.kind !== 'payload' && process.env.DRC_LIVE_DEBUG) {
+      console.log(`     · event ${event.kind} ${String(event.message ?? event.statusText ?? '').slice(0, 80)}`)
+    }
     if (!payload) return
     if (payload.t === 'ev.session_changed') seen.sessionChanged += 1
     if (payload.t === 'ev.message_delta') {
       seen.deltas += 1
       seen.done += payload.done === true ? 1 : 0
+      const role = payload.role === 'user' || payload.role === 'system' ? payload.role : 'assistant'
+      text[role] += typeof payload.delta === 'string' ? payload.delta : ''
+      // **助手的**收尾帧才是"这一轮跑完了"的判据：手机自己发出去的话会以 role=user
+      // 原样回声回来、而且同样带 done:true，拿它当判据会在模型还没开始想的时候就走完。
+      if (payload.done === true && role !== 'user') seen.assistantDone += 1
     }
     if (payload.t === 'ev.tool_event') seen.tools += 1
-    if (payload.t === 'ev.run_state') seen.runStates += 1
+    if (payload.t === 'ev.run_state') {
+      seen.runStates += 1
+      // **回合结束的判据**：发完指令之后第一条 idle。
+      // 助手的 done 帧不够格：一条只含 tool-call 的 `assistant/message` 同样是
+      // "done 且 role≠user"，用它当判据会在模型还在调工具的时候就去解配（真机取证踩过）。
+      if (turnOpen && payload.state === 'idle') seen.idleAfterPrompt += 1
+    }
     if (payload.t === 'ev.result') seen.results += 1
     if (payload.t === 'ev.keep_awake_state') seen.keepAwake += 1
     if (payload.t === 'ev.permission_request') {
@@ -195,16 +220,54 @@ async function runRound(round) {
       check('⑦ 有可用会话来跑回合', false, '列表里没有可发的会话')
     } else {
       if (target.state === 'archived') console.log(`     （目标是归档会话 ${target.id}：主机应自动恢复后再执行）`)
+      turnOpen = true
       client.sendPrompt(target.id, PROMPT)
-      const streamed = await until(() => (seen.deltas > 0 ? true : null), { trail, label: '流式输出到达', timeoutMs: 90_000 }).catch(() => null)
-      check('⑧ 流式输出到达', !!streamed, `${seen.deltas} 帧 delta`)
-      const finished = await until(() => (seen.done > 0 ? true : null), { trail, label: '收到 done 帧', timeoutMs: 120_000 }).catch(() => null)
+      // 判据是**发完指令之后的第一条 idle**。助手的 done 帧不够格：一条只含 tool-call 的
+      // `assistant/message` 同样是"done 且 role≠user"，拿它当"跑完了"会在模型还在调工具时
+      // 就解配走人——真机取证被这个假绿骗过一整轮（手机只收到 1 帧用户回声，
+      // 正文与工具行其实几秒之后才到）。
+      const streamed = await until(() => (seen.idleAfterPrompt > 0 ? true : null), { trail, label: '回合结束（发指令后的第一条 idle）', timeoutMs: 180_000 }).catch(() => null)
+      turnOpen = false
+      check('⑧ 回合真的跑完了（发指令后收到 idle）', !!streamed, `idleAfterPrompt=${seen.idleAfterPrompt} delta 帧=${seen.deltas} 工具事件=${seen.tools} 审批=${seen.approvals}`)
+      const finished = await until(() => (seen.done > 0 ? true : null), { trail, label: '收到 done 帧', timeoutMs: 20_000 }).catch(() => null)
       check('⑨ 回合正常收尾（有 done:true，手机才会停止转圈）', !!finished, `done=${seen.done} 工具事件=${seen.tools} 审批=${seen.approvals} 提问=${seen.questions}`)
+      // 判据必须落在**内容**上：一帧空文本 + done 同样满足"帧数 > 0 且 done > 0"。
+      check(
+        '⑧b 助手正文非空（数帧不数字会被空回复完全骗过去）',
+        text.assistant.trim().length > 0,
+        `${text.assistant.length} 字：${text.assistant.slice(0, 48).replace(/\n/g, ' ')}…`,
+      )
+      check('⑧c 这一轮不是以内核报错收尾', !text.system.includes('这一轮没有产出回复'), text.system.slice(0, 140))
       check('⑨b 所有出站命令都得到回执（cmdId 对答链路活着）', seen.results >= 2, `ev.result ${seen.results} 条`)
     }
   }
 
   // 零知识断言的对象是**交给中继的那一帧**，不是客户端事件流（解密方当然看得到明文）。
+  if (process.env.DRC_LIVE_DEBUG) {
+    // 用 B5 的 h2c 密钥**在测试侧自己解一遍所有下行密文帧**：
+    // 客户端事件流少了几条时，必须能分清"主机没发 / 中继没转 / 手机没解"，
+    // 否则这种对账只能靠猜（这一步就是为了那一次猜不出来的排查）。
+    const pairedFrame = recorder.frames.map((frame) => { try { return JSON.parse(frame.raw) } catch { return null } }).find((frame) => frame?.t === 'paired')
+    const conv = pairedFrame?.sessionId
+    const h2c = conv ? codec.derivePskKey(parsed.psk, 'h2c', conv) : null
+    const kinds = []
+    for (const frame of recorder.frames) {
+      if (frame.direction !== 'out') continue
+      let obj
+      try { obj = JSON.parse(frame.raw) } catch { continue }
+      if (obj.t === 'enc' && h2c) {
+        const opened = codec.open(h2c, obj)
+        kinds.push(opened ? opened.t : '解不开')
+      }
+    }
+    console.log(`     · 下行密文自解 ${kinds.length} 帧（conv=${conv ?? '无'}）：${kinds.join(' | ')}`)
+  }
+  const downEnc = recorder.frames.filter((frame) => frame.direction === 'out' && /"t":"enc"/.test(frame.raw))
+  check(
+    '⑩c 下行密文帧数有下界（中继→手机；与主机 outbound 计数对账）',
+    downEnc.length >= 6,
+    `手机侧收到 ${downEnc.length} 帧下行密文；错误事件 ${JSON.stringify(recorder.errors ?? []).slice(0, 120)}`,
+  )
   const encFrames = recorder.frames.filter((frame) => frame.direction === 'in' && frame.raw.includes('"enc"'))
   check('⑩ 零知识：上行 enc 帧数有下界', encFrames.length >= 2, `${encFrames.length} 帧`)
   const leak = []
