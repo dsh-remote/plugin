@@ -8,6 +8,10 @@
  * - Origin 缺席 → **放行**（同源 GET 浏览器本来就可能不带，桌面宿主转发时还会主动删掉它）；
  * - 非 GET → 405；没有码 → 200 + `state:"none"`（**不是 404**：客户端要能区分
  *   "没在配对"和"路由不存在/被拦"）。
+ *
+ * 2026-10-02 起落盘也走这条路由（图要落在请求那条会话的工作区，只有这里知道会话是谁），
+ * 所以这里多守一条**不变量**：**落盘没成功就不能答 `ready`**。右栏拿到地址就会去开那个
+ * 文件，文件不存在（或还是上一版码）时用户看到的是"弹出来一张废图"——比不弹更糟。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -53,11 +57,37 @@ async function ask(
   return answer()
 }
 
-const ready: PairingRouteOptions = {
-  imageFile: '/Users/x/.dsh/sidebar-qr.png',
-  snapshot: () => ({ state: 'ready', epoch: 'e1', expiresAt: 2_000_000 }),
+const TARGET_FILE = '/Users/x/project/.dsh/sidebar-qr.png'
+
+/** 落点与写动作的假实现：默认写得成，调用参数都被记下来给断言用。 */
+function targetSpy(options: { file?: string; ok?: boolean } = {}): {
+  target: (sessionId: string) => { file: string; persist(): boolean }
+  calls: string[]
+  persists: () => number
+} {
+  const calls: string[] = []
+  let persists = 0
+  return {
+    target: (sessionId: string) => {
+      calls.push(sessionId)
+      return {
+        file: options.file ?? TARGET_FILE,
+        persist: () => {
+          persists += 1
+          return options.ok !== false
+        },
+      }
+    },
+    calls,
+    persists: () => persists,
+  }
 }
-const none: PairingRouteOptions = { imageFile: ready.imageFile, snapshot: () => ({ state: 'none' }) }
+
+const ready: PairingRouteOptions = {
+  snapshot: () => ({ state: 'ready', epoch: 'e1', expiresAt: 2_000_000 }),
+  target: targetSpy().target,
+}
+const none: PairingRouteOptions = { snapshot: () => ({ state: 'none' }), target: targetSpy().target }
 
 test('路由路径与包名对齐（客户端硬编码的是同一个字符串）', () => {
   assert.equal(PAIRING_ROUTE, '/plugins/dsh-remote-control-presentation/pairing')
@@ -97,23 +127,41 @@ test('有码但没有可用 session → 400（宿主不猜会话，地址编不�
   }
 })
 
-test('有码 + 可用 session → 200，地址就是那张图的会话作用域地址', async () => {
-  const answer = await ask(ready, { host: '127.0.0.1:1234', url: '/?session=sess-1' })
+test('有码 + 可用 session → 先落盘再答 200，地址由 target.file 编出来', async () => {
+  const spy = targetSpy()
+  const answer = await ask({ snapshot: ready.snapshot, target: spy.target }, { host: '127.0.0.1:1234', url: '/?session=sess-1' })
   assert.deepEqual(answer.body, {
     state: 'ready',
     epoch: 'e1',
-    address: 'dsh-resource://file/session/sess-1//Users/x/.dsh/sidebar-qr.png',
+    address: `dsh-resource://file/session/sess-1/${TARGET_FILE}`,
     expiresAt: 2_000_000,
   })
+  // target 收到的是**请求里那个**会话 id（工作区就是按它解析的）；且确实落了盘。
+  assert.deepEqual(spy.calls, ['sess-1'])
+  assert.equal(spy.persists(), 1)
+})
+
+test('落盘失败 → 200 + none，绝不交出指向不存在文件的地址', async () => {
+  const spy = targetSpy({ ok: false })
+  const answer = await ask({ snapshot: ready.snapshot, target: spy.target }, { host: '127.0.0.1', url: '/?session=sess-1' })
+  assert.deepEqual(answer, { status: 200, body: { state: 'none' } })
+  assert.equal(spy.persists(), 1, '该试过写盘，只是写不成')
+})
+
+test('没有码时不解析落点：不该为了答 none 还去摸工作区', async () => {
+  const spy = targetSpy()
+  const answer = await ask({ snapshot: none.snapshot, target: spy.target }, { host: '127.0.0.1', url: '/?session=sess-1' })
+  assert.deepEqual(answer, { status: 200, body: { state: 'none' } })
+  assert.deepEqual(spy.calls, [], '没有码就不该调 target()')
 })
 
 test('snapshot 抛错 → 500，而不是把宿主带崩', async () => {
   const answer = await ask(
     {
-      imageFile: ready.imageFile,
       snapshot: () => {
         throw new Error('boom')
       },
+      target: targetSpy().target,
     },
     { host: '127.0.0.1', url: '/?session=s1' },
   )

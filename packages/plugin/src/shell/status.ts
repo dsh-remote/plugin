@@ -88,15 +88,22 @@ export class StatusFile implements StatusSink {
 }
 
 /**
- * 配对二维码 PNG 的落点：**DSH 配置目录根部** `~/.dsh/pairing-qr.png`（同样 0600）。
+ * 配对二维码 PNG 的落点（0600）：**当前会话的工作区**下的 `.dsh/pairing-qr.png`。
  *
- * 为什么不与 status.json 同目录：PNG 是给用户/扫码器看的东西，不该埋进 `~/.dsh/dsh-remote-control/`
- * 这个实现目录里；放根部一处，用户按卡片路径能直接找到。
- * 参数只当开关用——statusFile 为空串表示这一行没配过，此时返回空串，调用方据此退回文本码
+ * 2026-10-02 用户拍板改的落点（原话「要保存到工作区的 .dsh 不是 home 下的 .dsh」）：
+ * 二维码属于"这次配对属于哪个项目"这件事，跟着会话的工作区走比跟着 home 走更符合直觉，
+ * 也不会在用户机器上多出一个与项目无关的固定文件。
+ *
+ * `workspaceDir` 解析不出来时退回 `~/.dsh/pairing-qr.png`（配置目录根部）——**不是**退回
+ * 与 status.json 同目录：PNG 是给用户/扫码器看的东西，不该埋进 `~/.dsh/dsh-remote-control/`
+ * 这个实现目录里。
+ *
+ * statusFile 只当开关用——空串表示这一行没配过，此时返回空串，调用方据此退回文本码
  * （空串路径绝不能去 `path.join`，否则 PNG 会写到进程 CWD）。
  */
-export function pairingImagePath(statusFile: string): string {
+export function pairingImagePath(statusFile: string, workspaceDir?: string): string {
   if (!statusFile) return ''
+  if (workspaceDir) return path.join(workspaceDir, '.dsh', 'pairing-qr.png')
   return path.join(homedir(), '.dsh', 'pairing-qr.png')
 }
 

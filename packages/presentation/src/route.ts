@@ -13,6 +13,11 @@
  * （lib/main.js 的 forwardWebRequest），所以这里两条都自然成立；这一层是给
  * "DSH 被当 Web 服务暴露在局域网上"那种挂载方式兜底。
  *
+ * 落盘也在这里（2026-10-02 改）：图该落在**哪条会话的工作区**只有这条路由知道
+ * （`?session=` 是唯一带上会话身份的地方），所以"写这张图"跟着请求走，
+ * 由 `target()` 给出落点与写动作。**写不成就不答 `ready`**——那条不变量没变：
+ * 绝不把指向不存在文件的地址交出去。
+ *
  * 回答的形状：**未知/无码一律 200 + `state:"none"`，不是 404**——客户端要能区分
  * "没有码"和"路由不存在/被拦"，前者是正常状态（没在配对），后者是配置事故。
  */
@@ -63,18 +68,29 @@ function json(response: ServerResponse, status: number, body: unknown): void {
   response.end(payload)
 }
 
+/** 这次请求该把图落到哪、以及"把它写下去"这个动作。 */
+export interface PairingRouteTarget {
+  /** 绝对路径（`<workspace>/.dsh/sidebar-qr.png`，兜底是 home 下的配置目录）。 */
+  file: string
+  /** 返回 false = 写不成（没有图可写、或磁盘写不进去），路由据此答 `none`。 */
+  persist(): boolean
+}
+
 export interface PairingRouteOptions {
-  /** 二维码 PNG 落盘在哪（地址就是按它编的）。 */
-  imageFile: string
   /** 当前快照：由宿主侧节拍维护，路由只读。 */
   snapshot(): PairingSnapshot
+  /**
+   * 这次请求该落哪、怎么落。**会话 → 工作区**那一步在调用方（entry）解析：
+   * 平台知识只留在主插件里，这一层不认识"工作区"。
+   */
+  target(sessionId: string): PairingRouteTarget
 }
 
 /**
  * 一次配对码查询。
  *
  * `?session=` 由浏览器那一半带上来——**只有它知道自己是哪个会话**。宿主不拿这个值去查
- * 任何东西，只是把它编进地址（编之前按会话 id 的字面形状收窄）。
+ * 任何东西（除了"该把图落在哪个工作区"），编进地址之前按会话 id 的字面形状收窄。
  */
 export function pairingHandler(options: PairingRouteOptions): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   return async (request, response) => {
@@ -98,10 +114,16 @@ export function pairingHandler(options: PairingRouteOptions): (request: Incoming
         json(response, 400, { state: 'none', error: 'session parameter required' })
         return
       }
+      const target = options.target(sessionId)
+      // 先落盘，再作答：地址一旦交出去，右栏就会去开它。
+      if (!target.persist()) {
+        json(response, 200, { state: 'none' })
+        return
+      }
       json(response, 200, {
         state: 'ready',
         epoch: snapshot.epoch,
-        address: sessionFileAddress(sessionId, options.imageFile),
+        address: sessionFileAddress(sessionId, target.file),
         expiresAt: snapshot.expiresAt,
       })
     } catch (error) {

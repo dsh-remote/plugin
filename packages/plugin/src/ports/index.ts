@@ -160,6 +160,17 @@ export interface KernelPort {
 
   /** 冷会话续跑（归档/未加载的会话发指令前需要）。 */
   ensureRunnable?(sessionId: string): Promise<{ ok: boolean; message?: string }>
+  /**
+   * 一条会话的工作区目录（会话头里的 `cwd`）。
+   *
+   * **可选**：宿主代际不同，能拿到 `cwd` 的面也不同。只查**活会话**（`sessions.get(id)`，
+   * 同步、零成本）——用到它的两个调用点（`/drc pair` 与右栏那条路由）都发生在用户正在
+   * 那条会话里操作的时刻，活会话这条足以覆盖；查不到就返回 undefined，调用方退回
+   * `~/.dsh/` 并在卡片上如实显示那个路径。
+   *
+   * 返回值必须是绝对路径（会话头里的 `cwd` 被内核校验为绝对路径），调用方直接当目录用。
+   */
+  sessionWorkspace?(sessionId: string): string | undefined
   /** 当前模型选择，仅用于展示与"没模型就拒绝"的前置判断。 */
   modelSelection?(): { provider: string; model: string } | undefined
   /** 诊断：内核服务实际暴露了哪些成员，出错时打出来。 */

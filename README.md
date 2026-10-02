@@ -79,7 +79,7 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 
 ### 配对与使用
 
-1. DSH 里执行 `/drc pair`：**默认写出二维码图片**（`qrImage` 默认开），**右栏会自动弹出当前配对码**（`packages/presentation`，装了那一行才成立）——没弹出时按卡片给的路径打开 `~/.dsh/pairing-qr.png` 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
+1. DSH 里执行 `/drc pair`：**默认写出二维码图片**（`qrImage` 默认开），写到**当前会话工作区**的 `.dsh/pairing-qr.png`（工作区解析不出来时才落 `~/.dsh/pairing-qr.png`），**右栏会自动弹出当前配对码**（`packages/presentation`，装了那一行才成立）——没弹出时按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
 2. 微信开发者工具打开 `mp/`（TDesign 产物已预置在 `mp/miniprogram_npm/`，**不需要**「构建 npm」）；
 3. 首页扫码或粘贴二维码内容 → 自动连接；
 4. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。

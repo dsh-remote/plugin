@@ -160,6 +160,29 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     return typeof status === 'string' ? status : 'idle'
   }
 
+  /**
+   * 一条会话的工作区目录（会话头里的 `cwd`）。二维码 PNG 按它落 `<workspace>/.dsh/`。
+   *
+   * **只查活会话**：`services.sessions.get(id)` 拿到的是内核的 `Session` 对象，
+   * `header.cwd` 由内核自己校验成绝对路径（dsh-session：`cwd must be an absolute path`）。
+   * 不走持久化语料那条路（`sessionQuery.listSessions` 要读整份语料、还顺带拉标题），
+   * 因为用到它的两个时机——用户敲 `/drc pair`、右栏轮询——都发生在**用户正在那条会话里**。
+   * 查不到就返回 undefined，调用方退回 `~/.dsh/` 并把那个路径如实写进卡片。
+   */
+  function sessionWorkspace(sessionId: string): string | undefined {
+    const get = fn(services.sessions, 'get')
+    if (!get || sessionId === '') return undefined
+    try {
+      const session = get.call(services.sessions, sessionId) as { header?: { cwd?: unknown }; cwd?: unknown } | undefined
+      // 两个读法都留着：真身是 `session.header.cwd`，而某些代际把会话折叠成扁平记录
+      // （`{id, cwd}`，见 listSessions 里 `sessions.list` 那个分支的读法）。
+      const cwd = session?.header?.cwd ?? session?.cwd
+      return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   function toSummary(record: ListedSession, archived: Set<string>): SessionSummary {
     const cached = titleCache.get(record.id)
     const running = agentStatus(record.id) === 'running'
@@ -671,6 +694,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     subscribe,
     attachInteractionSink,
     ensureRunnable,
+    sessionWorkspace,
     // 与发指令/续跑走同一条读取路径：这里原来还有一份实现，而且是 `current()` 裸调用
     // （不带 receiver；真要用 this 的服务方法会当场抛），两份迟早分叉。
     modelSelection: currentSelection,
@@ -685,6 +709,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         // 新建会话只依赖这一条。和 historyFace 同理：真机上"新建没反应"第一件要分清的事
         // 是宿主没有这个能力，还是我们没调对。
         createFace: typeof fn(services.sessionController?.commands, 'create') === 'function' ? 'commands.create' : `absent (keys=${shapeOf(services.sessionController)})`.slice(0, 120),
+        // 二维码落点依赖这一条。它缺席时 PNG 会退回 ~/.dsh/，卡片上的路径会跟着变——
+        // 用户看到"图不在工作区"时，第一件事就是看这个字段是不是 absent。
+        workspaceFace: typeof fn(services.sessions, 'get') === 'function' ? 'sessions.get' : `absent (keys=${shapeOf(services.sessions)})`.slice(0, 120),
         agents: typeof services.agents === 'object',
         agentDefaultModel: typeof services.agentDefaultModel === 'object',
         workspaceRegistry: typeof services.workspaceRegistry === 'object',

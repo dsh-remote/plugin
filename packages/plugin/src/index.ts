@@ -56,7 +56,7 @@ interface LooseContext {
       name: string
       description: string
       input?: { hint?: string }
-      handler?: (invocation: { commandId: string; rawInput: string }) => Promise<unknown> | unknown
+      handler?: (invocation: { commandId: string; rawInput: string; agent?: unknown }) => Promise<unknown> | unknown
     }): unknown
   }
 }
@@ -65,6 +65,8 @@ export interface RuntimeHandle {
   readonly config: PluginConfig
   state(): Record<string, unknown>
   createPairing(): { qr: string; token: string; psk: string; expiresAt: number } | null
+  /** 某条会话的工作区目录；解析不出来是 undefined（二维码 PNG 因此退回 `~/.dsh/`）。 */
+  sessionWorkspace(sessionId: string): string | undefined
   stop(): void
 }
 
@@ -116,6 +118,10 @@ export function apply(ctx: LooseContext, injected: Partial<PluginConfig> = {}): 
         return handle?.state() ?? { relay: 'offline', carrier: 'none', reason: 'not-started' }
       },
       createPairing: (): { qr: string; token: string; psk: string; expiresAt: number } | null => handle?.createPairing() ?? null,
+      // presentation 那一半要按会话解析落点（右栏那张图放哪），而"会话 → 工作区"这点
+      // 平台知识只在本插件里有。**在这里开一个口，而不是让那一半自己去探内核服务**：
+      // 两份探测迟早分叉，而分叉的表现是"卡片说 A 地、右栏读 B 地"，很难查。
+      sessionWorkspace: (sessionId: string): string | undefined => handle?.sessionWorkspace(sessionId),
     })
   } catch {
     /* 这一代宿主可能不支持 provide */
@@ -695,6 +701,27 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     log('no kernel carrier available', { hint: '需要 sessions/apiProxy 服务，或把 mockBridge 打开做开发' })
   }
 
+  /**
+   * 这次 `/drc pair` 是在哪条会话里敲的 → 那条会话的工作区目录。
+   *
+   * `agent` 是宿主交给 handler 的**接收 agent**（`@deepseek-ai/dsh-commands` 的
+   * `handler: ({ agent, rawInput })`），会话 id 在 `agent.session.id`——与
+   * `platform/carrier-services.ts` 读审批/提问事件里那个 agent 是同一个形状。
+   * 拿不到 agent、会话、工作区**都不算失败**：那时二维码退回 `~/.dsh/`，卡片上印的就是
+   * 退回去的那个路径。这里绝不能"猜一个应该在的工作区"——卡片路径与真落盘路径必须同一个。
+   */
+  const workspaceOfInvocation = (invocation: { agent?: unknown }): string | undefined => {
+    const agent = invocation?.agent as { session?: { id?: unknown } } | undefined
+    const sessionId = typeof agent?.session?.id === 'string' ? agent.session.id : ''
+    if (sessionId === '') return undefined
+    try {
+      // runtime 还没起来（carrier=none）时 kernel 是 undefined：退回家目录那条路。
+      return kernel?.sessionWorkspace?.(sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
   // ── /drc 命令 ──────────────────────────────────────────────────────
   // 拿 commands 的方式和拿内核服务完全一样：`ctx.commands` 这种"直接点属性"的读法在
   // 真 cordis 上下文上是**抛错**的（属性名不在本 fiber 的 inject 集合里，见 reflect.ts
@@ -711,7 +738,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     name: 'drc',
     description: 'DSH 远程控制：发布配对二维码、查看中继与内核接合状态',
     input: { hint: 'pair | status | unpair' },
-    handler: async (invocation: { commandId: string; rawInput: string }): Promise<CommandResult> => {
+    handler: async (invocation: { commandId: string; rawInput: string; agent?: unknown }): Promise<CommandResult> => {
       const argument = String(invocation.rawInput ?? '').trim().toLowerCase()
       if (argument.startsWith('pair')) {
         const pairing = createPairing()
@@ -720,7 +747,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
         // 二维码横切成条——实测 zxing 在 ≥1.15 行距就解不出来，而宿主固定 1.6，也就是
         // 文本码在这个（唯一）宿主上扫不出来。图片是自包含位图矩阵，跟行高/字体/配色无关。
         // 只有显式关掉 qrImage 时才渲染文本码当退路（另有可粘贴的 URI 兜底）。
-        if (config.qrImage) writePairingImage(pairing.qr, config, log)
+        const workspaceDir = workspaceOfInvocation(invocation)
+        const imageFile = config.qrImage ? pairingImagePath(config.statusFile, workspaceDir) : ''
+        if (imageFile) writePairingImage(imageFile, pairing.qr, config, log)
         const terminal = config.qrImage ? undefined : await renderTerminalQr(pairing.qr, { style: config.qrStyle, ansi: config.qrAnsi })
         return {
           kind: 'success',
@@ -730,7 +759,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
             expiresAt: pairing.expiresAt,
             now: clock.now(),
             qrImage: config.qrImage,
-            statusFile: config.statusFile,
+            imageFile,
             terminalQr: terminal,
           }),
         }
@@ -779,6 +808,13 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
     config,
     state,
     createPairing,
+    sessionWorkspace(sessionId: string): string | undefined {
+      try {
+        return kernel?.sessionWorkspace?.(sessionId)
+      } catch {
+        return undefined
+      }
+    },
     stop(): void {
       // 复查定时器要先撤：停机之后它们再去写 status.json，写的是已经过期的取证。
       oneShot.cancelAll()
@@ -799,14 +835,16 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
  *
  * 落到磁盘的仍然是**旁路**：命令 API 只收纯文本，我们写 PNG + 把**路径**写进卡片，
  * 但绝不替用户打开查看器——`qrOpen` 默认关（原话「不要用打开一个图片的方式」）。
+ *
+ * `file` 由调用方按会话工作区解析好（`pairingImagePath`）后传进来，本函数只管写。
  */
 function writePairingImage(
+  file: string,
   qrText: string,
   config: PluginConfig,
   log: (message: string, fields?: Record<string, string | number | boolean | undefined>) => void,
 ): void {
-  if (!config.qrImage) return
-  const file = pairingImagePath(config.statusFile)
+  if (!config.qrImage || !file) return
   qrPng(qrText)
     .then((buffer) => {
       if (!writePrivateFile(file, buffer)) {

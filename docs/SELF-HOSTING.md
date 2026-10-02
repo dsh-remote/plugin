@@ -655,13 +655,14 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "De
 | `approvalTimeoutSec` | `180` | — | 审批卡超时 |
 | `listingRefreshSec` | `15` | — | 会话列表刷新周期 |
 | `keepAwake.enabled` / `idleReleaseSec` / `keepDisplay` | `true` / `300` / `false` | — | `idleReleaseSec` 不是有效非负数会夹回 300 |
-| `qrImage` / `qrOpen` / `qrStyle` | `true` / `false` / `half` | `DRC_QR_IMAGE=0` / `DRC_QR_OPEN=0` / `DRC_QR_STYLE` | `qrImage` 默认写 `~/.dsh/pairing-qr.png`（DSH 命令卡的行高会把半块文本码切成条，只有图片扫得出来）；`qrOpen` 仍默认关（写图 ≠ 替你打开查看器）；`qrStyle` 只在关掉 `qrImage` 时当退路 |
+| `qrImage` / `qrOpen` / `qrStyle` | `true` / `false` / `half` | `DRC_QR_IMAGE=0` / `DRC_QR_OPEN=0` / `DRC_QR_STYLE` | `qrImage` 默认把码写进**当前会话工作区**的 `.dsh/pairing-qr.png`（工作区解析不出来才落 `~/.dsh/pairing-qr.png`；DSH 命令卡的行高会把半块文本码切成条，只有图片扫得出来）；`qrOpen` 仍默认关（写图 ≠ 替你打开查看器）；`qrStyle` 只在关掉 `qrImage` 时当退路 |
 | `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里这是唯一排错入口） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
 
 日常配对路径：DSH 里执行 `/drc pair` → 右栏**自动弹出**当前配对码，直接扫（没弹出就按卡片给的
-路径打开 `~/.dsh/pairing-qr.png`；卡片另附可粘贴的 `dshr:/p?…` 一行兜底）。右栏那份图是
-`~/.dsh/sidebar-qr.png`。
+路径打开那张 PNG：`<会话工作区>/.dsh/pairing-qr.png`，解析不出工作区时是
+`~/.dsh/pairing-qr.png`；卡片另附可粘贴的 `dshr:/p?…` 一行兜底）。右栏那份图落在会话工作区的
+`.dsh/sidebar-qr.png`（同理有 home 兜底）。
 
 ### 10.4 排错第一入口：`status.json`
 

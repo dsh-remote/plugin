@@ -109,12 +109,19 @@ node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须�
 - **配对二维码默认出图片**（2026-10-02 翻转原拍板）：真机取证发现 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白把半块文本码横切成条（用真机输出做受控实验：行距 1.0 时 zxing 解得出来、≥1.15 就扫不出来），文本码在这个宿主上根本扫不了。于是 `qrImage` 默认 **true**（写 `pairing-qr.png` 并把路径给用户）、`qrOpen` 仍默认 **false**（写图 ≠ 替你打开查看器）、`qrAnsi` 默认 false、`qrStyle` 默认 `half`（只在关掉 `qrImage` 时当退路）。命令 API 只接受纯文本，所以图片以"文件路径"的形式进卡片，卡片同时给可粘贴的 `dshr:/p?…` 一行。
 - **二维码自动进右栏**（2026-10-02，新增 `packages/presentation`）：`/drc pair` 之后
   右栏**自己弹出**当前配对码，用户不必再去点侧边栏。做法是一个 `dsh.client` 双面包——
-  宿主侧把码落成 `~/.dsh/sidebar-qr.png` 并给一条同域只读路由
+  宿主侧把码落成 `<会话工作区>/.dsh/sidebar-qr.png`（工作区解析不出来才落 `~/.dsh/sidebar-qr.png`）
+  并给一条同域只读路由
   `/plugins/dsh-remote-control-presentation/pairing`；浏览器侧每 2s 轮询它，
   `state==='ready'` 且 `epoch` 变了才 `ctx.sidebarRight.openResource(address)`。
-  不切工作区、不写用户项目目录。**为什么拆成独立的包**：`openResource` 要用 `webServer`
+  不切工作区、不静默换工作区。**为什么拆成独立的包**：`openResource` 要用 `webServer`
   服务（`clientModules` + 路由），而主插件刻意不写 inject 闸门；拆开后缺 `webServer`
   的宿主只影响这一行，配对/中继不受牵连。安装脚本与产物见 §2/§4.9。
+- **二维码落到会话工作区的 `.dsh`**（2026-10-02 用户拍板，原话「要保存到工作区的 .dsh
+  不是 home 下的 .dsh」）：`/drc pair` 的 `pairing-qr.png` 与右栏的 `sidebar-qr.png` 都写进
+  **请求那条会话的工作区**下的 `.dsh/`；"会话 → 工作区"这点平台知识只在主插件里
+  （`KernelPort.sessionWorkspace()`，`ctx.sessions.get(id).header.cwd`），presentation 半侧
+  通过 `dshRemoteControl.sessionWorkspace()` 问它，问不到才退回 home 兜底。落盘时机也从
+  "后台节拍"挪到"路由答题前"——只有路由知道 `?session=`。**不变量**：写不成就不答 `ready`。
 - 环境变量：中继的默认值逐项继承旧值，但**三个变量名改了**
   （`DRC_MAX_AUTH_ATTEMPTS`→`DRC_HOST_AUTH_MAX_ATTEMPTS`、
   `DRC_MAX_PAIR_ATTEMPTS`→`DRC_PAIR_ATTEMPTS_PER_CONN`、

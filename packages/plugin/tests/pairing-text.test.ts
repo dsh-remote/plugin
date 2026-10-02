@@ -14,6 +14,8 @@ import { pairingPairText, PAIR_UNAVAILABLE_TEXT } from '../src/shell/pairing-tex
 
 const QR = 'dshr:/p?v=1&s=wss%3A%2F%2Frelay.example.invalid&n=demo-host&psk=ZmFrZS1wc2srZmFrZQ%2BZmFrZQ%3D%3D&t=424242'
 const TERMINAL = '█▀▀▀▀▀█ ...\n▀ ▀ ▀ ▀▀'
+/** 已按会话工作区解析好的落点（`shell/status.ts` 的 pairingImagePath 负责拼，本文件只验印法）。 */
+const IMAGE = '/Users/demo/project/.dsh/pairing-qr.png'
 
 function view(overrides: Partial<Parameters<typeof pairingPairText>[0]> = {}) {
   return {
@@ -22,7 +24,7 @@ function view(overrides: Partial<Parameters<typeof pairingPairText>[0]> = {}) {
     expiresAt: 1_000_000,
     now: 940_000,
     qrImage: false,
-    statusFile: '/tmp/drc/status.json',
+    imageFile: IMAGE,
     terminalQr: TERMINAL,
     ...overrides,
   }
@@ -48,10 +50,15 @@ test('不出现任何"打开图片/查看器"的指示：这条命令不许把�
 test('开了 qrImage 时才报图片路径（报了就等于承诺写了文件），且不再塞那段扫不出来的文本码', () => {
   const withImage = pairingPairText(view({ qrImage: true }))
   assert.match(withImage, /pairing-qr\.png/, 'qrImage=true 时必须说清文件在哪')
+  assert.ok(withImage.includes(IMAGE), `卡片上的路径必须是调用方解析好的那一个（收到的是 ${IMAGE}）`)
+  assert.match(withImage, /\.dsh\//, '落在工作区的 .dsh 下：用户拍板过"不要 home 下的 .dsh"')
   assert.match(withImage, /右栏/, '右栏会自动弹出二维码，主路径就得写它：只报文件路径等于让用户白跑一趟去找图')
   assert.equal(withImage.includes(TERMINAL), false, '图片模式下不许再吐文本二维码：DSH 命令卡的行高会把它切成条（本轮事故）')
   assert.ok(withImage.includes(QR), 'URI 原文仍要留着：手输/粘贴是最后退路')
   assert.equal(pairingPairText(view({ qrImage: false })).includes('pairing-qr.png'), false, '没写图片却报路径：用户会去找一个不存在的文件')
+  // 图片模式开着但根本没有落点（statusFile 没配）时，也不许印出一个空路径——
+  // 那等于让用户去找一个叫空字符串的文件。
+  assert.doesNotMatch(pairingPairText(view({ qrImage: true, imageFile: '' })), /再扫：/)
 })
 
 test('中继没连上时给出可行动的下一步，而不是"失败"', () => {

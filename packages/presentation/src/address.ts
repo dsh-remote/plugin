@@ -6,9 +6,12 @@
  * `parseFileAddress(address)?.scope === "session"`；`absolute` 形状会被当场拒绝
  * （`sidebarRight: tab type "text" refuses "..."`）。会话 scope 里**允许直接放绝对路径**：
  * 这是宿主 `fileAddressFor()` 的既定语义（工作区外的绝对路径"keeps its absolute path
- * in that Session's address"），也是本包能"只编地址、不往用户工作区落文件"的全部依据。
- * 真机取证：把 `~/.dsh/pairing-qr.png` 的绝对路径按会话 scope 编址，
- * 右栏直接把图渲染出来了。
+ * in that Session's address"）。
+ * 真机取证：把一张绝对路径下的 PNG 按会话 scope 编址，右栏直接把图渲染出来了。
+ *
+ * 编出来的地址现在指向**该会话工作区**下的 `<workspace>/.dsh/sidebar-qr.png`
+ * （2026-10-02 改；此前是 home 下的 `~/.dsh/sidebar-qr.png`）。会话作用域仍然必须：
+ * 右栏是"某个会话的右栏"，同一个文件在不同的会话里得能各自打开。
  *
  * 编码规则与 `@deepseek-ai/dsh-util-workspace-path` 的 `encodeSegment` 同口径
  * （逐段 `encodeURIComponent`，只把 `:` 留成字面量，好让 Windows 盘符不在路径里变成 `%3A`）。

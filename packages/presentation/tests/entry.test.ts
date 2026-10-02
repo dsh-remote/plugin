@@ -7,10 +7,15 @@
  *
  * 另外几条都是"宿主加载纪律"的形状：`apply` 在任何情况下都不许向外抛（抛出去宿主那一行
  * fiber 就失败）、没有服务时什么都不做、只有一半服务时不起、卸载时路由与节拍都要收回。
+ *
+ * 落点（2026-10-02 改）：图该落在**请求那条会话的工作区**的 `.dsh` 下，工作区从主插件
+ * `provide` 的 `dshRemoteControl.sessionWorkspace()` 问来；问不到才退回配置里的
+ * `imageFile`。所以这里既要有"落了工作区、兜底位没被写"的正面，也要有"写不成 → 答 none、
+ * 绝不交出指向不存在文件的地址"的反面。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { apply } from '../src/entry.js'
@@ -38,8 +43,11 @@ interface Setup {
   unregistered: () => number
 }
 
-function remoteWith(pairing: unknown): { state: { pairing: unknown } } {
-  return { state: { pairing } }
+function remoteWith(
+  pairing: unknown,
+  sessionWorkspace?: (sessionId: string) => string | undefined,
+): Record<string, unknown> {
+  return { state: { pairing }, ...(sessionWorkspace === undefined ? {} : { sessionWorkspace }) }
 }
 
 /**
@@ -185,6 +193,89 @@ test('两个服务都到齐：起节拍、挂路由，节拍跑出来的图真�
     })
   } finally {
     cleanup()
+  }
+})
+
+test('会话工作区解析得出来：图落在 <工作区>/.dsh/sidebar-qr.png，配置里的 imageFile 当兜底不用', async () => {
+  const { file: fallback, cleanup } = tempImageFile()
+  const workspace = mkdtempSync(path.join(tmpdir(), 'drc-entry-ws-'))
+  try {
+    const setupResult = setup({
+      remote: remoteWith(
+        pairingWith('dsh-rc://pair?server=ws://x&psk=fake-psk&token=fake-token', Date.now() + 60_000),
+        (sessionId) => (sessionId === 'sess-1' ? workspace : undefined),
+      ),
+    })
+    await withTimers(async () => {
+      apply(setupResult.ctx, { imageFile: fallback, refreshMs: 1000 })
+      const answer = await waitFor(async () => {
+        const got = await askRoute(setupResult.routes[0]!, '/?session=sess-1')
+        return got.status === 200 && got.body.state === 'ready' ? got : undefined
+      })
+      const address = String(answer.body.address)
+      // 工作区是绝对路径 → 会话作用域地址里出现双斜杠，这是宿主 parseFileAddress 认的形状。
+      assert.ok(address.startsWith('dsh-resource://file/session/sess-1//'), address)
+      assert.ok(address.endsWith('/.dsh/sidebar-qr.png'), address)
+      assert.ok(existsSync(path.join(workspace, '.dsh', 'sidebar-qr.png')), '图必须落在会话工作区的 .dsh 下')
+      assert.equal(existsSync(fallback), false, '工作区解析得出来时不该再往兜底位置写')
+    })
+  } finally {
+    cleanup()
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test('工作区解析不出来（老主插件 / 服务形状不对）：退回配置里的 imageFile，两边仍指同一个文件', async () => {
+  const { file: fallback, cleanup } = tempImageFile()
+  try {
+    const setupResult = setup({
+      remote: remoteWith(pairingWith('dsh-rc://pair?psk=fake-psk', Date.now() + 60_000), () => {
+        throw new Error('跨包调用炸了')
+      }),
+    })
+    await withTimers(async () => {
+      apply(setupResult.ctx, { imageFile: fallback, refreshMs: 1000 })
+      const answer = await waitFor(async () => {
+        const got = await askRoute(setupResult.routes[0]!, '/?session=sess-1')
+        return got.status === 200 && got.body.state === 'ready' ? got : undefined
+      })
+      assert.ok(String(answer.body.address).endsWith(encodeURIComponent(path.basename(fallback))))
+      assert.ok(existsSync(fallback), '兜底落点必须真的写出文件')
+    })
+  } finally {
+    cleanup()
+  }
+})
+
+test('落盘写不进去 → 200 + none，绝不交出指向不存在文件的地址', async () => {
+  const { file: fallback, cleanup } = tempImageFile()
+  const workspace = mkdtempSync(path.join(tmpdir(), 'drc-entry-badws-'))
+  try {
+    // 把"工作区"指到一个**文件**上：`<文件>/.dsh/` 建不出来，writePrivatePng 必然 false。
+    const notADir = path.join(workspace, 'not-a-dir')
+    writeFileSync(notADir, 'x')
+    // 这个计数是"路由真的走到了落点解析那一步"的证据：只有快照 ready 才会去问工作区，
+    // 于是它排除了"tick 还没跑完所以答 none"这种假绿。
+    let asked = 0
+    const setupResult = setup({
+      remote: remoteWith(pairingWith('dsh-rc://pair?psk=fake-psk', Date.now() + 60_000), () => {
+        asked += 1
+        return notADir
+      }),
+    })
+    await withTimers(async () => {
+      apply(setupResult.ctx, { imageFile: fallback, refreshMs: 1000 })
+      await waitFor(async () => {
+        const got = await askRoute(setupResult.routes[0]!, '/?session=sess-1')
+        return asked > 0 ? got : undefined
+      })
+      const answer = await askRoute(setupResult.routes[0]!, '/?session=sess-1')
+      assert.deepEqual(answer.body, { state: 'none' })
+      assert.equal(existsSync(fallback), false, '兜底位置也不该被写：写不成就不该交地址')
+    })
+  } finally {
+    cleanup()
+    rmSync(workspace, { recursive: true, force: true })
   }
 })
 

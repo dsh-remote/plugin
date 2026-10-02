@@ -552,3 +552,54 @@ test('创建返回里没有 sessionId：按失败处理，不把 undefined 当�
   assert.equal(made.ok, false)
   assert.match(String(made.message), /sessionId/)
 })
+
+/**
+ * `sessionWorkspace` 是二维码 PNG 落点的唯一依据（`/drc pair` 卡片与右栏那条路由都用它）。
+ * 它必须是**同步、零成本、绝不抛**的：调用点一个在命令 handler 里（用户等着出卡片），
+ * 一个在每 2 秒一次的轮询请求里。
+ */
+test('sessionWorkspace：认活会话头里的 cwd，认不出来就 undefined（调用方退回 ~/.dsh/）', () => {
+  const f = fixture()
+  const services = f.bundle()
+  services.sessions = {
+    list: () => [],
+    get: (id: string) => {
+      if (id === 'ses_ws') return { header: { id: 'ses_ws', cwd: '/Users/u/project' } }
+      // 另一代把会话折叠成扁平记录（listSessions 的 sessions.list 分支就是这么读的）。
+      if (id === 'ses_flat') return { id: 'ses_flat', cwd: '/Users/u/flat' }
+      if (id === 'ses_nocwd') return { header: { id: 'ses_nocwd' } }
+      return undefined
+    },
+  }
+  const kernel = f.kernel(services)
+  assert.equal(kernel.sessionWorkspace?.('ses_ws'), '/Users/u/project', '真身是 session.header.cwd')
+  assert.equal(kernel.sessionWorkspace?.('ses_flat'), '/Users/u/flat', '扁平记录形态（顶层 cwd）也要认')
+  assert.equal(kernel.sessionWorkspace?.('ses_nocwd'), undefined, '没有 cwd 就是 undefined，不许回空串（空串会被 path.join 拼到进程 CWD）')
+  assert.equal(kernel.sessionWorkspace?.('ses_gone'), undefined, '查不到就是 undefined')
+  assert.equal(kernel.sessionWorkspace?.(''), undefined, '空 id 不去问内核')
+  assert.match(String((kernel.describe() as Record<string, unknown>).workspaceFace), /sessions\.get/)
+})
+
+test('宿主没有 sessions.get：返回 undefined 而不是抛（卡片退回 ~/.dsh/ 那条路）', () => {
+  const f = fixture()
+  const services = f.bundle()
+  services.sessions = { list: () => [] }
+  const kernel = f.kernel(services)
+  assert.doesNotThrow(() => kernel.sessionWorkspace?.('ses_any'))
+  assert.equal(kernel.sessionWorkspace?.('ses_any'), undefined)
+  assert.match(String((kernel.describe() as Record<string, unknown>).workspaceFace), /absent/)
+})
+
+test('sessions.get 抛错（cordis Proxy 读不到成员就是抛）：折成 undefined，不许打断 /drc pair', () => {
+  const f = fixture()
+  const services = f.bundle()
+  services.sessions = {
+    list: () => [],
+    get: () => {
+      throw new Error('cannot get property "x" without inject')
+    },
+  }
+  const kernel = f.kernel(services)
+  assert.doesNotThrow(() => kernel.sessionWorkspace?.('ses_boom'))
+  assert.equal(kernel.sessionWorkspace?.('ses_boom'), undefined)
+})

@@ -2,9 +2,9 @@
  * entry — presentation 包的 cordis 入口（宿主侧）。
  *
  * 这一半只做三件事：把主插件 `provide` 的 `dshRemoteControl.state.pairing` 每隔
- * `refreshMs` 看一版并渲染落盘、把一个同域只读路由挂到 `webServer` 上、卸载时把
- * 定时器和路由都收回。业务判断在 `presenter.ts`，地址编码在 `address.ts`，
- * 路由的安全姿态与回答形状在 `route.ts`。
+ * `refreshMs` 看一版并渲染成 PNG 字节、把一个同域只读路由挂到 `webServer` 上（图由它按
+ * 请求落盘）、卸载时把定时器和路由都收回。业务判断在 `presenter.ts`，地址编码在
+ * `address.ts`，路由的安全姿态与回答形状在 `route.ts`。
  *
  * 三条纪律（与主插件 `packages/plugin/src/index.ts` 同款，理由也一样）：
  *
@@ -16,9 +16,10 @@
  *    按"回调参数=服务"写会六个服务全 none 且不报错）。所以回调里逐候选试
  *    `candidate.get(name, true)` 与直接读属性，两条都包 try。
  */
+import path from 'node:path'
 import { readConfig, validateConfig, type PresentationConfig } from './config.js'
-import { liveDeps, PairingPresenter, type ActivePairing } from './presenter.js'
-import { registerPairingRoute, type WebServerLike } from './route.js'
+import { liveDeps, PairingPresenter, writePrivatePng, type ActivePairing, type PairingArtifact } from './presenter.js'
+import { registerPairingRoute, type PairingRouteTarget, type WebServerLike } from './route.js'
 
 /**
  * 我们只用到 ctx 的几个成员，所以不硬依赖 `@deepseek-ai/cordis` 的类型。
@@ -95,13 +96,58 @@ function applyInner(ctx: LooseContext, injected: Partial<PresentationConfig>): P
     return undefined
   }
 
-  const presenter = new PairingPresenter(liveDeps(config.imageFile, log))
+  const presenter = new PairingPresenter(liveDeps(log))
   const collected: { remote?: RemoteControlLike; web?: WebServerLike } = {}
   const probe: Record<string, string> = {}
   let timer: ReturnType<typeof setInterval> | undefined
   let unregister: (() => void) | undefined
   let started = false
   let stopped = false
+  /** 已经落过盘的那一版（epoch + 落点）：轮询是 2 秒一次，不记住就会反复写同一个文件。 */
+  let written: { epoch: string; file: string } | null = null
+
+  /**
+   * 某条会话的工作区目录。**问主插件要**（它 `provide` 的 `dshRemoteControl` 上开了
+   * `sessionWorkspace`），因为"会话 → 工作区"这点平台知识只在那一边。
+   * 解析不出来（老版本主插件 / 服务没起来 / 形状不对）返回 undefined，调用方退回配置里的
+   * 兜底落点——这一半绝不能自己猜一个路径出来。
+   */
+  const workspaceOf = (sessionId: string): string | undefined => {
+    try {
+      const remote = collected.remote as { sessionWorkspace?: (id: string) => unknown } | undefined
+      const value = remote?.sessionWorkspace?.(sessionId)
+      return typeof value === 'string' && value !== '' ? value : undefined
+    } catch {
+      // 跨包调用：那边任何一步抛错都当"解析不出来"，不能让一次轮询把宿主带崩。
+      return undefined
+    }
+  }
+
+  /**
+   * 这次请求该把图落到哪。
+   *
+   * 正常路径：`<会话工作区>/.dsh/sidebar-qr.png`（用户拍板：放工作区，不放 home）。
+   * 兜底：配置里的 `imageFile`（默认 `~/.dsh/sidebar-qr.png`）——只在工作区解析不出来时用，
+   * 那种情况下卡片上印的路径也是它，两边仍然指向同一个文件。
+   */
+  const targetFor = (sessionId: string): PairingRouteTarget => {
+    const workspace = workspaceOf(sessionId)
+    const file = workspace ? path.join(workspace, '.dsh', 'sidebar-qr.png') : config.imageFile
+    return {
+      file,
+      persist: (): boolean => {
+        const artifact: PairingArtifact | null = presenter.current()
+        if (!artifact) return false
+        if (written && written.epoch === artifact.epoch && written.file === file) return true
+        if (!writePrivatePng(file, artifact.buffer)) {
+          log('二维码落盘失败', { file })
+          return false
+        }
+        written = { epoch: artifact.epoch, file }
+        return true
+      },
+    }
+  }
 
   /** 看一眼当前配对码。任何一步抛出都只记一行，节拍继续。 */
   const tick = async (): Promise<void> => {
@@ -131,8 +177,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PresentationConfig>): P
     started = true
     try {
       unregister = registerPairingRoute(collected.web, {
-        imageFile: config.imageFile,
         snapshot: () => presenter.snapshot(),
+        target: targetFor,
       })
       probe.route = 'registered'
     } catch (error) {
@@ -145,7 +191,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PresentationConfig>): P
     // 不 unref 的话，任何一次性跑法（headless/CLI/e2e）都会被这个节拍钉住不退出。
     timer.unref?.()
     void tick()
-    log('started', { imageFile: config.imageFile, refreshMs: config.refreshMs })
+    log('started', { fallbackImageFile: config.imageFile, refreshMs: config.refreshMs })
   }
 
   /** 一个候选来源里取出 `name`：先按作用域上下文读，读不到再按"直接就是服务"读。 */
