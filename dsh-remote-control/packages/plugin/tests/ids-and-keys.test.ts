@@ -14,7 +14,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { base64Text, derivePskKey, open, seal } from 'dsh-remote-protocol'
+import { base64Text, derivePskKey, open, seal } from 'dsh-remote-wire'
 import { ConversationBook, PairingSlots, type PairSlot } from '../src/core/keys.js'
 
 /** 可推进的假时钟：过期判定必须完全确定，不能靠 sleep(1ms)。 */

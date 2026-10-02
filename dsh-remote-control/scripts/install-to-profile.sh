@@ -39,7 +39,7 @@ fi
 
 # 装 profile 只需要**产物**；类型检查是 CI 的事（pnpm -r typecheck）。
 # 这里刻意不跑 tsc：类型检查失败不该挡住"把当前代码装进宿主验证一把"。
-# 协议层是外部 npm 依赖（dsh-remote-protocol），由 `pnpm install` 落到 node_modules，
+# 协议层是外部 npm 依赖（dsh-remote-wire），由 `pnpm install` 落到 node_modules，
 # esbuild 打包时直接内联，本脚本不再单独构建它。
 echo "→ 构建：两个包的 esbuild 打包（协议层随依赖内联）…"
 node "$ROOT/scripts/bundle-plugin.mjs"

@@ -12,8 +12,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { CmdPayload, EvPayload, SessionSummary } from 'dsh-remote-protocol'
-import { PAYLOAD_TYPES } from 'dsh-remote-protocol'
+import type { CmdPayload, EvPayload, SessionSummary } from 'dsh-remote-wire'
+import { PAYLOAD_TYPES } from 'dsh-remote-wire'
 import { HostRuntime, type RuntimeTransport } from '../src/core/runtime.js'
 import { KeepAwake } from '../src/core/sleep-policy.js'
 import { FakeClock } from '../src/core/clock.js'

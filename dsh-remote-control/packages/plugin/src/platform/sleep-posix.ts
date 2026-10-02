@@ -17,7 +17,7 @@
  * 手机端与 status.json 都会如实显示。
  */
 import { spawn } from 'node:child_process'
-import { buildSleepCommand, detectBackend, isSleepSupported } from 'dsh-remote-protocol'
+import { buildSleepCommand, detectBackend, isSleepSupported } from 'dsh-remote-wire'
 import type { SleepPort } from '../ports/index.js'
 
 export class SystemSleepBackend implements SleepPort {

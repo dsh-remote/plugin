@@ -13,7 +13,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { EvMessageDelta } from 'dsh-remote-protocol'
+import type { EvMessageDelta } from 'dsh-remote-wire'
 import { DeltaWindow, DEFAULT_WINDOW_OPTIONS, type WindowOptions } from '../src/core/window.js'
 import { FakeClock } from '../src/core/clock.js'
 

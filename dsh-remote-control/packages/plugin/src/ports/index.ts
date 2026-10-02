@@ -18,7 +18,7 @@
  *    平台对象一律在适配器里折叠完再出来。这样协议层的 `SessionSummary` 与内核
  *    代际变化之间有一层可测的翻译，而不是满屏 `as any`。
  */
-import type { AnswerItem, QuestionItem, SessionSummary } from 'dsh-remote-protocol'
+import type { AnswerItem, QuestionItem, SessionSummary } from 'dsh-remote-wire'
 
 /** 插件端口只需要四个方法形状的 socket，方便用内存替身测试。 */
 export interface PeerSink {

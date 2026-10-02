@@ -25,7 +25,7 @@ import {
   parseCmdPayload,
   parseRelayFrameText,
   seal,
-} from 'dsh-remote-protocol'
+} from 'dsh-remote-wire'
 import { ConversationBook, DEFAULT_PRUNE_POLICY, type PairSlot, type PrunePolicy } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
 

@@ -17,7 +17,7 @@
 
 其余两半在各自仓库：[`dsh-remote-server`](https://github.com/providcc/dsh-remote-server)（零知识中继）、
 `dsh-remote-mp`（微信小程序客户端）。三者共用
-[`dsh-remote-protocol`](https://github.com/providcc/dsh-remote-protocol)（线协议，本插件以 npm 依赖消费）。
+[`dsh-remote-protocol`](https://github.com/providcc/dsh-remote-protocol)（线协议；npm 包名 `dsh-remote-wire`，本插件以 npm 依赖消费）。
 
 ```
 ┌──────────────────┐  wss + host token   ┌────────────────┐  wss + 配对码   ┌────────────────┐
@@ -30,7 +30,7 @@
 
 中继看到的每个载荷都是 `base64(nonce ‖ secretbox)`，它**没有密钥**。载荷密钥（PSK）在本机生成，
 只经配对二维码交给手机，从不上网。密钥派生、密封记录与配对 URI 的字节级契约由
-`dsh-remote-protocol` 冻结，本仓只消费它。
+`dsh-remote-wire` 冻结，本仓只消费它。
 
 插件侧的关键约束：**host token 只从环境变量读**（`hostTokenEnv`，默认 `DRC_HOST_TOKEN`）。
 它不写进 patch 文件——配置文件比环境变量更容易被顺手提交或贴进工单。
@@ -39,7 +39,7 @@
 
 ### 前置条件
 
-`dsh-remote-protocol` 是 npm 依赖，本仓的 `pnpm install` 需要它已经发布。首次引导顺序：
+`dsh-remote-wire` 是 npm 依赖，本仓的 `pnpm install` 需要它已经发布。首次引导顺序：
 
 1. 在 `dsh-remote-protocol` 仓打 `v*` 标签走它的 Release，把包发到 npm；
 2. 回到本仓跑一次 `pnpm install`，把生成的 `pnpm-lock.yaml` 提交；
@@ -50,7 +50,7 @@
 插件不进 `node_modules`，而是打成**自包含单文件**装进 profile：
 
 ```sh
-pnpm install          # 装依赖（含 dsh-remote-protocol，需先发布该包）
+pnpm install          # 装依赖（含 dsh-remote-wire，需先发布该包）
 sh scripts/install-to-profile.sh
 # DSH_PROFILE=~/.dsh/profiles/tui sh scripts/install-to-profile.sh   # 指定其它 profile
 ```

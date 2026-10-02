@@ -19,7 +19,7 @@
  *   由 `outbound.ts` 的构造器产出，参数表里就没有 sessionId。
  */
 import { randomUUID } from 'node:crypto'
-import type { AnswerItem, CmdPayload, EvPayload, HistoryItem, QuestionItem, SessionSummary } from 'dsh-remote-protocol'
+import type { AnswerItem, CmdPayload, EvPayload, HistoryItem, QuestionItem, SessionSummary } from 'dsh-remote-wire'
 import {
   keepAwakeState,
   messageDelta,
@@ -30,7 +30,7 @@ import {
   sessionChanged,
   sessionHistory,
   toolEvent,
-} from 'dsh-remote-protocol/outbound'
+} from 'dsh-remote-wire/outbound'
 import type { ApprovalDecision, AskUserQuestionAnswerValue, KernelEvent, KernelPort } from '../ports/index.js'
 import { DeltaWindow, DEFAULT_WINDOW_OPTIONS, type WindowOptions } from './window.js'
 import type { KeepAwake } from './sleep-policy.js'

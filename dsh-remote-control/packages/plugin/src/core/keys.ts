@@ -9,9 +9,9 @@
  * 取错的结果是"配对显示成功、每一帧都解不开、会话列表空白"——极难定位。
  * 因此这里不提供"取最近一个"的接口，只有 `resolveFor(token)`。
  */
-import { generatePsk, randomPairingToken } from 'dsh-remote-protocol'
-import type { Direction } from 'dsh-remote-protocol'
-import { derivePskKey } from 'dsh-remote-protocol'
+import { generatePsk, randomPairingToken } from 'dsh-remote-wire'
+import type { Direction } from 'dsh-remote-wire'
+import { derivePskKey } from 'dsh-remote-wire'
 
 const C2H: Direction = 'c2h'
 const H2C: Direction = 'h2c'

@@ -16,7 +16,7 @@
  */
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { type CmdPayload, type EvPayload, buildPairingUri } from 'dsh-remote-protocol'
+import { type CmdPayload, type EvPayload, buildPairingUri } from 'dsh-remote-wire'
 import { HostRuntime, type RuntimeTransport } from './core/runtime.js'
 import { KeepAwake } from './core/sleep-policy.js'
 import { PairingSlots } from './core/keys.js'

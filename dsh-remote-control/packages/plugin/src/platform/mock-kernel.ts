@@ -11,8 +11,8 @@
  * 因为旧实现曾靠自建主机模式假通过，掩盖了"中继说配对成功、主机却把 peer 丢了"
  * 这类真故障（取证 docs/legacy-spec/testing-and-tooling.md §2.4、§4）。
  */
-import type { SessionSummary } from 'dsh-remote-protocol'
-import type { QuestionItem } from 'dsh-remote-protocol'
+import type { SessionSummary } from 'dsh-remote-wire'
+import type { QuestionItem } from 'dsh-remote-wire'
 import type {
   ApprovalDecision,
   AskUserQuestionAnswerValue,

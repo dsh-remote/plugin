@@ -25,7 +25,7 @@
  *    所以一条助手消息是**整条到达**的：合帧器仍然要跑（它保证 done 与顺序），
  *    但这里不假装是逐 token 流。
  */
-import type { QuestionItem, SessionSummary } from 'dsh-remote-protocol'
+import type { QuestionItem, SessionSummary } from 'dsh-remote-wire'
 import { canParticipate, canSubscribe, guardedSubscribe } from './guard.js'
 import type {
   ApprovalDecision,

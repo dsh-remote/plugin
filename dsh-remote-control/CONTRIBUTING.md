@@ -26,7 +26,7 @@ pnpm install
 pnpm test
 ```
 
-要求 Node.js ≥ 20 与 pnpm 11（见 `.nvmrc`）。协议层 `dsh-remote-protocol` 以 npm 依赖引入（首次
+要求 Node.js ≥ 20 与 pnpm 11（见 `.nvmrc`）。协议层 `dsh-remote-wire` 以 npm 依赖引入（首次
 `pnpm install` 前需该包已发布到 npm——引导顺序见 README「前置条件」）。
 
 ## 开发流程
