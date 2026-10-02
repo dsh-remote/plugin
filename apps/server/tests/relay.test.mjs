@@ -827,3 +827,42 @@ test('慢消费者：同样超限 1 秒，主机该断、客户端不该断（�
     await ctx.close()
   }
 })
+
+test('重配：旧会话的密文不许再灌给已经重配的手机（🟡7）', async () => {
+  // 与 CIPHER 只差首字符：同一个字符集、同一处填充，但字节不同。
+  // 探针必须用**与正控不同的**密文——`expectNone` 会翻整段历史，
+  // 用同一个密文就会命中正控那一帧，把"修好了"误判成"没修"。
+  const CIPHER_PROBE = 'BAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+
+    // 正控：重配之前，旧会话这条通道本来就是活的
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await client.until((f) => f.t === 'enc')).ciphertext, CIPHER)
+
+    // 同一台手机（同一 clientId、同一 socket）重配到新会话
+    host.send({ t: 'pair-begin', pairingToken: '999888' })
+    await host.until((f) => f.t === 'pair-ready')
+    client.send({ t: 'pair-begin-client', pairingToken: '999888' })
+    // `until` 会先翻已经收到过的帧，所以必须点名"换了一个会话"的那条 paired
+    const paired = await client.until((f) => f.t === 'paired' && f.sessionId !== conversationId)
+    const nextConv = paired.sessionId
+    assert.notEqual(nextConv, conversationId)
+
+    // 旧主机必须被告知这个观众走了：与"客户端显式 session-leave"同一条通知，
+    // 否则主机以为还有人在看，会继续往这个会话里推。
+    const left = await host.until((f) => f.t === 'peer-left' && f.sessionId === conversationId)
+    assert.equal(left.clientId, 'inst-1')
+
+    // 主机在旧会话上继续发：手机必须先被摘掉，一帧都不该到达
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER_PROBE })
+    await client.expectNone((f) => f.t === 'enc' && f.ciphertext === CIPHER_PROBE, 500)
+
+    // 新会话照常送达——上一条断言不是"整个通道死了"的假绿
+    host.send({ t: 'enc', sessionId: nextConv, ciphertext: CIPHER_PROBE })
+    assert.equal((await client.until((f) => f.t === 'enc' && f.ciphertext === CIPHER_PROBE)).sessionId, nextConv)
+  } finally {
+    await ctx.close()
+  }
+})

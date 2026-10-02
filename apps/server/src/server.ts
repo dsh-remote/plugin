@@ -253,10 +253,21 @@ export function createRelay(config: RelayConfig): RelayHandle {
       return
     }
     peer.pairAttempts = 0
+    // 同一台手机重配到新会话时，它在旧会话里的成员记录已经被 claim 摘掉了（🟡7）。
+    // 这里补上对旧主机的告知：与"客户端显式 session-leave"走同一条通知（`peer-left`），
+    // 主机才知道少了这个观众，不必再往那个会话里推。（会话本身仍归主机。）
+    for (const old of claimed.detached) {
+      sendTo(state.hostSocket(old), peerLeftFrame(old, peer.clientId))
+    }
     sendToPeer(peer, pairedFrameOf(claimed.conversationId, claimed.hostId))
     // 发给主机的那一条**必须带 pairingToken**：主机按它取自己那份 PSK（多码并存事故）。
     sendToPeer(peerOfHost(claimed.hostId), peerJoinedForHost(claimed.conversationId, peer.clientId, frame.pairingToken))
-    log.info('paired', { sessionId: claimed.conversationId, hostId: claimed.hostId, clientId: peer.clientId })
+    log.info('paired', {
+      sessionId: claimed.conversationId,
+      hostId: claimed.hostId,
+      clientId: peer.clientId,
+      ...(claimed.detached.length > 0 ? { detachedFrom: claimed.detached.length } : {}),
+    })
   }
 
   function peerOfHost(hostId: string): Peer | undefined {

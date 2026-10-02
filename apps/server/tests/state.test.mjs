@@ -252,3 +252,42 @@ test('counts 与 reset 服务于 /healthz 与测试隔离', () => {
   state.reset()
   assert.deepEqual(state.counts(), { hosts: 0, clients: 0, conversations: 0, pendingPairs: 0 })
 })
+
+// ── 重配（复核 🟡7）────────────────────────────────────────────────────
+
+test('重配：同一 clientId 认领新码时，必须从旧会话的成员表里摘掉', () => {
+  const { state } = harness()
+  state.issuePair('h1', '111111', 180_000)
+  const first = state.claim('111111', 'inst-1')
+  assert.equal(first.ok, true)
+
+  state.issuePair('h1', '222222', 180_000)
+  const second = state.claim('222222', 'inst-1')
+  assert.equal(second.ok, true)
+  assert.notEqual(second.conversationId, first.conversationId, '每次认领都是一个新会话')
+  assert.deepEqual(second.detached, [first.conversationId], '必须报告摘掉了哪个旧会话（调用方要通知主机）')
+
+  assert.equal(
+    state.conversations.get(first.conversationId).clients.has('inst-1'),
+    false,
+    '摘不干净的话，主机在旧会话上的流会把密文继续灌给这台已经换了钥匙的手机',
+  )
+  assert.equal(state.conversations.get(second.conversationId).clients.has('inst-1'), true)
+  assert.equal(
+    state.conversations.has(first.conversationId),
+    true,
+    '旧会话保留：它归主机（与客户端 session-leave 同一条原则），不该由中继删',
+  )
+})
+
+test('leaveAll：一个 clientId 只会留在最后一次认领的会话里', () => {
+  const { state } = harness()
+  state.issuePair('h1', '111111', 180_000)
+  const a = state.claim('111111', 'inst-1')
+  state.issuePair('h1', '222222', 180_000)
+  const b = state.claim('222222', 'inst-1')
+  assert.equal(state.conversations.get(a.conversationId).clients.has('inst-1'), false)
+  assert.deepEqual(state.leaveAll('inst-1'), [b.conversationId], '最后一个会话同样要能被摘掉')
+  assert.equal(state.conversations.get(b.conversationId).clients.size, 0)
+  assert.deepEqual(state.leaveAll('不存在的客户端'), [], '不认识的 clientId 不许抛')
+})

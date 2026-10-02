@@ -61,7 +61,7 @@ export interface Conversation {
 }
 
 export type ClaimResult =
-  | { ok: true; conversationId: string; hostId: string }
+  | { ok: true; conversationId: string; hostId: string; detached: string[] }
   | { ok: false; reason: PairRejectReason }
 
 export type PairRejectReason = 'invalid_or_expired' | 'already_used' | 'host_offline' | 'rate_limited'
@@ -155,6 +155,8 @@ export class RelayState implements Clock {
     if (!host || host.ws.readyState !== WS_OPEN) return { ok: false, reason: 'host_offline' }
 
     pending.used = true
+    // 同一台手机重配：先把它从旧会话里摘干净（复核 🟡7，理由见 leaveAll）。
+    const detached = this.leaveAll(clientId)
     const conversationId = newConversationId()
     this.conversations.set(conversationId, {
       hostId: pending.hostId,
@@ -162,7 +164,7 @@ export class RelayState implements Clock {
       seqHost: 0,
       lastActivityAt: now,
     })
-    return { ok: true, conversationId, hostId: pending.hostId }
+    return { ok: true, conversationId, hostId: pending.hostId, detached }
   }
 
   /** 主机侧的过期表：返回被清掉的 token（调用方不需要再通知任何人）。 */
@@ -355,6 +357,25 @@ export class RelayState implements Clock {
     if (!conv || !conv.clients.delete(clientId)) return false
     conv.lastActivityAt = this.now()
     return true
+  }
+
+  /**
+   * 把一个 clientId 从**所有**会话的成员表里摘掉，返回受影响的会话。
+   *
+   * 重新配对时必须走这条（复核 🟡7）。一个 clientId 同时只该属于一个会话——拓扑恒 1:1，
+   * 手机自己也只记一个 convId（`_onPaired` 会覆盖旧的）。不摘的话，主机在旧会话上的流
+   * 会把密文继续灌给这台**已经换了钥匙**的手机：解不开 → 连错两次即 `_resetPairing`
+   * 连 socket 一起关，于是"刚配对成功就被旧流打断"。
+   *
+   * 会话本身**保留**（与 `leave` 同一条原则：会话归主机）。主机可能还在这个会话上跑着
+   * 一轮输出，中继没有理由替它删；会回收交给 `sweepIdle` 与主机侧的上界。
+   */
+  leaveAll(clientId: string): string[] {
+    const touched: string[] = []
+    for (const [conversationId, conv] of this.conversations) {
+      if (conv.clients.delete(clientId)) touched.push(conversationId)
+    }
+    return touched
   }
 
   /**
