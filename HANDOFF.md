@@ -188,10 +188,11 @@ package.json 里还留着那条 `file:` 依赖，宿主里就可能同时跑两�
    `never`**（含 `source:"delegation"` 的子 agent 会话），**一个 `ask` 都没有**——
    所以不是"缺一个会弹审批的会话"，而是**这个部署把默认策略配成了 `never`**。
    `dsh-user-approval` 的 README 明说 `ask` 才是服务默认（`never` 是"CI 与无人值守运行的严格
-   无头模式"），`setApprovalPolicy(session, policy)` 是持久写入路径。**要取证必须先改
-   审批策略，那是用户的安权姿态（`never` → `ask` 会放行原本被确定性拒绝的操作），
-   这件事没有用户点头不许替他们做。** 提问那条则**在本机无解**：这一代宿主的
-   `ctx.userQuestions` 就不带 `registerProvider`（§1.1），换会话也没用。
+   无头模式"），`setApprovalPolicy(session, policy)` 是持久写入路径。**要取证必须先改审批策略，
+   那是用户的安全姿态**（`never` → `ask` 会放行原本被确定性拒绝的操作），没有用户点头不许替
+   他们做。**2026-10-02 用户已明确表态：先不动策略，这条继续按"未取证"记账——别再问第二遍。**
+   提问那条则**在本机无解**：这一代宿主的 `ctx.userQuestions` 就不带 `registerProvider`（§1.1），
+   换会话也没用。等宿主升级后先重扫一次 `kernel.questionsFace` 的 keys 再谈。
 2. **host 侧通道上界已补**（原 DESIGN-REVIEW 🟡8）：`ConversationBook.pruneStale` 按"最后活动"剪
    （`conversationIdleTtlSec`，默认 24h）并保留 64 条硬上界，剪枝一定走 `voidConversation`
    （发 `session-leave` + 通知上层），由 status 的 3s 节拍驱动。四条变异验证锁住：只删内存不发
