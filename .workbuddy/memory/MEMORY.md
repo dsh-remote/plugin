@@ -87,16 +87,26 @@ env -u NODE_OPTIONS pnpm -C e2e test  # mp/协议/多配对/重启恢复 + run.m
   中继发的 `error` 帧自带中文 `message`（`apps/server/src/server.ts` 的 `CLIENT_ERROR_TEXT`）。
 - 页面入口是 `pages/sessions/sessions`（未配对显示「去配对」），pair 页配对成功自动返回。
 - socket.js 连接超时看 `_opened` 标志，不是「已绑定」——旧版的超时是死代码。
-- 已知瑕疵：`node --test e2e/mp-client.test.mjs` 跑完进程会多挂 ~58s 才退出
-  （套件本体 0.8s），疑似 run.mjs 侧残留 handle。
-- **协议没有「取历史」的能力**（2026-10-02 核实到底）：`packages/protocol/src/*.ts`
-  没有 `history/backlog/replay` 之类的帧，`KernelPort`
-  （`packages/plugin/src/ports/index.ts`）也没有读历史的方法，
-  `KernelSession` 只有 summary/live/listingSource、**不含消息**。
-  → 手机只能看到**连上之后**的事件，主机上已有的对话不会同步过来。
-  chat 页空状态因此如实说明。做真历史要动 protocol + plugin
-  （`sessionQuery` 在 status.json 的 probe 里露出 `_corpus` / `_readWindowMax`，
-  有读消息窗口的迹象）+ mp，跨共享协议，先协调。
+- ~~已知瑕疵：`node --test e2e/mp-client.test.mjs` 跑完进程会多挂 ~58s 才退出~~
+  **已修**（`be6ac44` fix(plugin,e2e)：一次性定时器 unref 并在停机时撤销）。
+  根因不是 run.mjs 残留 handle，是「载具探测复查」那个 `setTimeout` 没 `unref`。
+  现在单跑 **12s**、`pnpm -r test` 整体 **16s**。
+  做法在 `packages/plugin/src/core/clock.ts`：`unrefTimer()` + `createOneShotTimers()`
+  ——**unref 与「停机集中撤销」必须成对**：只 unref，宿主没退时仍会写过期取证；
+  只撤销，宿主空闲时进程还被钉住。对 `FakeClock` 的数字句柄是空操作。
+- **「取历史」已实现（2026-10-02，三端）**，这条替换掉了旧的「协议没有取历史能力」：
+  - 协议 `packages/protocol/src/payloads.ts`：`cmd.session_history` / `ev.session_history`，
+    条目与实时流**同构**（`ev.message_delta` / `ev.tool_event`），所以回放复用同一套落块函数。
+    **刻意只有游标 `nextBeforeSeq`、没有 `hasMore`** —— 两个字段表达"还有更早"迟早出现
+    "说还有却不给游标"，手机上就是「加载更早」点了没反应且无报错。
+  - 插件：`KernelPort.readHistory?`（可选）+ `platform/carrier-services.ts` 的
+    `historyPageFromLog()`（纯函数，一条内核事件折 0/1/2 条线格式条目，走
+    `sessionQuery.readSession` 拿整份日志在内存里切片）。内核缺 `readSession` 时**明确拒绝**，
+    **不返回空页**（空页会让用户以为会话是空的）。
+  - mp：`client.loadHistory()` 按 `cmdId` 配 waiter + 15s 超时；`chat.js` 的
+    `_loadHistory` / `onLoadEarlier` / `_replayPage`。
+  - 判据：`~/.dsh/dsh-remote-control/status.json` 的 `kernel.historyFace`
+    （`readSession` = 能读；`absent (keys=…)` = 不能）。**真机验历史前先看它。**
 
 ## mp 界面（UI）约定（2026-10-02 重做后）
 

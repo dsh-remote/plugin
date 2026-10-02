@@ -23,7 +23,7 @@
 | 协议层 | **81 项全绿** | `pnpm --filter @dsh-rc/protocol test` |
 | 与小程序逐字节对拍 | **18 项全绿**（284 条向量 + 随机新向量 + 篡改 + 反证 + F6 契约） | `node --test e2e/protocol.test.mjs` |
 | 中继 | **63 项全绿**（含产物级零知识断言、空目录起单文件、优雅停机 exit 0、version 对账） | `pnpm --filter @dsh-rc/server test` |
-| host 插件 | **204 项全绿** | `pnpm --filter dsh-remote-control test` |
+| host 插件 | **208 项全绿** | `pnpm --filter dsh-remote-control test` |
 | 本地全链路 | **14 步全绿**（真中继进程 + 真 `apply()` 入口 + 真 mp 代码，内核面 mock；第 6 步就是取历史） | `node e2e/run.mjs` |
 | 生命周期取证 | **74 项全绿**（客户端重连 / 中继重启 / **主机重启不许静默** / 审批闭环 / 提问闭环 / 多码并存 / 历史分页） | `node --test e2e/*.test.mjs`（在 `e2e/` 下跑） |
 | 小程序页面逻辑 | **19 + 3 项全绿**（chat 块流时序与历史回放 / 会话列表归档过滤） | `pnpm -C e2e test:mp-pages` |

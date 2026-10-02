@@ -58,7 +58,7 @@
 ```sh
 env -u NODE_OPTIONS pnpm install            # 必须 env -u NODE_OPTIONS，见 HANDOFF §4
 env -u NODE_OPTIONS pnpm -r typecheck       # 类型（build 绿不等于类型对）
-env -u NODE_OPTIONS pnpm -r test            # 协议 81 / 中继 63 / 插件 204 / e2e 74
+env -u NODE_OPTIONS pnpm -r test            # 协议 81 / 中继 63 / 插件 208 / e2e 74
 env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 ```
 
@@ -92,7 +92,7 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 | `pnpm --filter @dsh-rc/protocol test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令 | 81 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `mp/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `pnpm --filter @dsh-rc/server test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话）+ **产物级零知识断言** | 63 |
-| `pnpm --filter dsh-remote-control test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页 | 204 |
+| `pnpm --filter dsh-remote-control test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页 | 208 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 14 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页（客户端重连、中继重启、主机重启） | 74 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
