@@ -49,6 +49,8 @@ const clientMeta = z.object({
   platform: z.string().optional(),
   label: z.string().optional(),
 })
+/** 客户端自报的门面信息（小程序发 `{platform:'wechat-mp', label:'微信小程序'}`）。 */
+export type ClientMeta = z.infer<typeof clientMeta>
 
 // ── 端点 → 中继 ─────────────────────────────────────────────────────
 
@@ -86,14 +88,21 @@ export const encFrame = z.object({
   /** 元数据而已：不得校验单调（F13），host→client 方向由中继重新编号。 */
   seq: z.number().int().nonnegative().optional(),
   clientId: z.string().min(1).max(128).optional(),
-  ciphertext: base64Text,
+  /**
+   * 这里只要求"非空字符串"，**字符集合不合法由 `base64Text` 单独把关**。
+   * 故意分两层：混在 schema 里，中继就没法区分"形状不对（unknown_frame）"与
+   * "密文不是合法 base64（bad_frame）"，而这两个错误码对排错的价值完全不同。
+   */
+  ciphertext: z.string().min(1).max(512 * 1024),
 })
 
 export const encBatchFrame = z.object({
   t: z.literal('enc-batch'),
   /** 通道 id 只在外层；小程序逐项解密时复用它。 */
   sessionId: nonEmpty,
-  items: z.array(z.object({ seq: z.number().int().nonnegative().optional(), ciphertext: base64Text })).min(1),
+  items: z
+    .array(z.object({ seq: z.number().int().nonnegative().optional(), ciphertext: z.string().min(1).max(512 * 1024) }))
+    .min(1),
 })
 
 /** 显式退出某个会话（D3 之后会话会长存，需要一条主动退出的路）。 */
@@ -104,11 +113,34 @@ export const sessionLeaveFrame = z.object({
 
 export const pingFrame = z.object({ t: z.literal('ping'), ts: z.number().optional() })
 
+/**
+ * 主机声明"我此刻仍持有密钥的会话有哪些"。
+ *
+ * 为什么必须有这条（复核 R1）：D3/D6 让会话跨断连存活之后，出现了旧实现没有的
+ * 死角——**主机进程重启**（PSK 随之消失）而中继不知道，于是它继续把手机发来的
+ * 密文转发给一个解不开的主机；手机既收不到回复、也收不到 `unknown_session`，
+ * 表现是"永远转圈且没有任何提示"。中继自己的表命中与否并不能代表主机是否还认得这个会话。
+ *
+ * 语义：主机鉴权成功后立刻发一条 `resync`，列出它还持有的 convId。
+ * 中继把该主机名下**没被列出**的会话删掉，但**不**向客户端发 `peer-left`——
+ * 那在小程序里会翻成一条英文 toast（没有映射），而是让客户端下一次用旧 convId
+ * 发帧时自然撞上 `unknown_session`，从而得到中文的"会话已失效，请重新配对"。
+ */
+export const resyncFrame = z.object({
+  t: z.literal('resync'),
+  sessionIds: z.array(nonEmpty).max(2000),
+})
+
+// 刻意不提供"逐条确认会话还在"的帧：resync 一次就够，
+// 多一个入口只会多一类"两条路说法不一致"的故障。
+
 /** 端点可能发给中继的一切。 */
 export const endpointFrame = z.discriminatedUnion('t', [
   helloFrame,
   pairBeginFrame,
   pairClaimFrame,
+  resyncFrame,
+
   encFrame,
   encBatchFrame,
   sessionLeaveFrame,
@@ -173,6 +205,12 @@ export const errorCodes = [
   'unknown_session',
   /** D4：发送方不是该会话成员。 */
   'not_member',
+  /**
+   * 会话还在，但主机此刻不在（宽限期内）。**必须区别于 `unknown_session`**：
+   * 客户端见到 `unknown_session` 会丢掉配对并要求重新扫码，而这里只是"这条指令没人接"，
+   * 用户重试即可，配对关系不该因此作废（D3/D6）。
+   */
+  'host_unavailable',
   'bad_frame',
   'rate_limited',
   'bad_json',

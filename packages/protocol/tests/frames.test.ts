@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PROTOCOL_VERSION,
+  base64Text,
   encBatchFrame,
   errorFrame,
   helloFrame,
@@ -77,16 +78,25 @@ test('配对码必须是 6 位数字；TTL 必须是正整数', () => {
   assert.equal(pairReadyFrame.safeParse({ t: 'pair-ready', pairingToken: '123456', ttlMs: 180_000 }).success, true)
 })
 
-test('ciphertext 必须是标准 base64；url-safe、空白、非 base64 字符都拒（否则 Buffer 会静默吞掉）', () => {
+test('ciphertext 分两层把关：形状层只要求非空字符串，字符集层要求标准 base64', () => {
+  // 为什么分两层：如果 base64 校验混在 schema 里，中继就没法区分
+  // "帧的形状不对（unknown_frame）"与"密文不是合法 base64（bad_frame）"，
+  // 而这两个错误码对排错的价值完全不同。
   const base = { t: 'enc', sessionId: 'c_a1b2c3d4e5f6' }
+  assert.ok(parseEndpointFrame({ ...base, ciphertext: CIPHER }))
   for (const bad of ['', 'a', '!!!!', 'AAECAwQFBgcICQoLDA0ODw==\n', 'AA AC', 'AAAA-BBB_CCC=', '====']) {
     assert.equal(
-      parseEndpointFrame({ ...base, ciphertext: bad }),
-      null,
-      `必须拒绝这个 ciphertext：${JSON.stringify(bad)}`,
+      base64Text.safeParse(bad).success,
+      false,
+      `字符集层必须拒绝这个 ciphertext：${JSON.stringify(bad)}`,
     )
   }
-  assert.ok(parseEndpointFrame({ ...base, ciphertext: CIPHER }))
+  assert.equal(base64Text.safeParse(CIPHER).success, true)
+  // 形状层仍然守得住：缺字段、超长、非字符串。
+  assert.equal(parseEndpointFrame({ ...base, ciphertext: '' }), null)
+  assert.equal(parseEndpointFrame(base), null)
+  assert.equal(parseEndpointFrame({ ...base, ciphertext: 42 }), null)
+  assert.equal(parseEndpointFrame({ ...base, ciphertext: 'A'.repeat(600 * 1024) }), null)
 })
 
 test('seq 只当元数据：非负整数可以任意起点，负数与小拒', () => {
@@ -158,6 +168,14 @@ test('isEncFrame 只认两条数据面帧（转发热路径的分诊判据）', 
   assert.equal(isEncFrame({ t: 'enc' }), true)
   assert.equal(isEncFrame({ t: 'enc-batch' }), true)
   for (const t of ['hello', 'paired', 'error', 'pong', 'enc ']) assert.equal(isEncFrame({ t }), false)
+})
+
+test('resync：主机声明它仍持有密钥的会话（复核 R1 的协议入口）', () => {
+  assert.ok(parseEndpointFrame({ t: 'resync', sessionIds: [] }), '空清单是合法且有意义的一条')
+  assert.ok(parseEndpointFrame({ t: 'resync', sessionIds: ['c_a1b2c3d4e5f6', 'c_000000000000'] }))
+  assert.equal(parseEndpointFrame({ t: 'resync' }), null, '缺 sessionIds 无法表达"我还有这些"')
+  assert.equal(parseEndpointFrame({ t: 'resync', sessionIds: 'c_a1b2c3d4e5f6' }), null)
+  assert.equal(parseEndpointFrame({ t: 'resync', sessionIds: [''] }), null, '空串 id 没有意义')
 })
 
 test('错误消息长度有界（一条失控的 message 不该占满内存）', () => {

@@ -1,16 +1,27 @@
 {
   "name": "@dsh-rc/server",
-  "version": "0.1.0",
-  "description": "Zero-knowledge WebSocket relay for DSH Remote Control (host plugin <-> clients).",
+  "version": "2.0.0",
+  "description": "Zero-knowledge WebSocket relay for DSH Remote Control. Routes sealed records between the host plugin and paired clients; never sees plaintext.",
+  "private": true,
   "type": "module",
-  "main": "src/main.mjs",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "main": "./dist/src/main.js",
   "scripts": {
-    "start": "node src/main.mjs",
-    "build": "true",
-    "test": "node --test tests/relay.test.mjs tests/hardening.test.mjs"
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm clean && tsc -p tsconfig.json && tsup",
+    "start": "node dist/src/main.js",
+    "start:bundle": "node dist/bundle/main.js",
+    "test": "pnpm build && node --test tests/state.test.mjs tests/relay.test.mjs tests/hardening.test.mjs tests/bundle.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
-  "engines": { "node": ">=20" }
+  "devDependencies": {
+    "@dsh-rc/protocol": "workspace:*",
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.5.12",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  }
 }

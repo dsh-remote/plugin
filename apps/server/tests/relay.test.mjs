@@ -1,102 +1,568 @@
-import test from 'node:test'
+/**
+ * 中继的 socket 级集成测试：真的起一个中继、真的连 socket、真的走一遍
+ * 注册 → 配对 → 转发 → 断开。状态机的分支在 `state.test.mjs` 里已穷举，
+ * 这里验的是"帧进出与协议契约一致"这一层。
+ */
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { setTimeout as sleep } from 'node:timers/promises'
 import WebSocket from 'ws'
+import { createRelay } from '../dist/src/server.js'
+import { loadConfig } from '../dist/src/config.js'
 
-const PORT = 18791
-const TOKEN = '***'
-let proc
+/** 一眼假的 token；测试里绝不用真实凭据。 */
+const TOKEN = 'unit-test-host-token-0123456789abcdef'
+const CIPHER = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 
-async function startServer() {
-  proc = spawn(process.execPath, ['src/main.mjs'], {
-    cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, DRC_PORT: String(PORT), DRC_HOST_TOKEN: TOKEN },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  proc.stdout.resume()
-  proc.stderr.pipe(process.stderr)
-  // wait until listening
-  for (let i = 0; i < 50; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${PORT}/healthz`)
-      if (r.ok) return
-    } catch { /* not yet */ }
-    await new Promise((r) => setTimeout(r, 100))
+async function startRelay(overrides = {}) {
+  const env = {
+    ...process.env,
+    DRC_HOST_TOKEN: TOKEN,
+    DRC_PORT: '0',
+    DRC_BIND: '127.0.0.1',
+    DRC_LOG_LEVEL: 'silent',
+    DRC_PAIR_TTL_MS: '30000',
+    DRC_HOST_GRACE_MS: '250',
+    DRC_MAX_FRAMES_PER_SEC: '500',
+    ...overrides,
   }
-  throw new Error('server did not come up')
+  const { config, problems } = loadConfig(env, 'test')
+  assert.equal(problems.filter((p) => p.level === 'error').length, 0, '测试配置不合法')
+  const relay = createRelay(config)
+  const { port } = await relay.startListening()
+  const ctx = { relay, port, url: `ws://127.0.0.1:${port}`, open: [] }
+  ctx.close = async () => {
+    for (const peer of ctx.open) peer.ws.terminate()
+    await relay.close()
+  }
+  return ctx
 }
 
-const connect = () => new Promise((res, rej) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}`)
-  ws.on('open', () => res(ws))
-  ws.on('error', rej)
-})
+class Peer {
+  constructor(ws) {
+    this.ws = ws
+    this.frames = []
+    this.waiters = []
+    this.closeCode = null
+    this.closed = new Promise((resolve) => {
+      ws.on('close', (code, reason) => {
+        this.closeCode = { code, reason: reason.toString() }
+        resolve(this.closeCode)
+      })
+    })
+    ws.on('message', (raw) => {
+      let frame = null
+      try {
+        frame = JSON.parse(raw.toString())
+      } catch {
+        frame = { t: '__invalid_json_text__', raw: raw.toString().slice(0, 40) }
+      }
+      this.frames.push(frame)
+      const waiter = this.waiters.shift()
+      if (waiter) waiter.resolve(frame)
+    })
+  }
 
-function nextFrame(ws, pred, ms = 3000) {
-  return new Promise((res, rej) => {
-    const timer = setTimeout(() => { ws.off('message', on); rej(new Error('timeout waiting frame')) }, ms)
-    const on = (raw) => { const f = JSON.parse(String(raw)); if (pred(f)) { clearTimeout(timer); ws.off('message', on); res(f) } }
-    ws.on('message', on)
+  static async connect(url) {
+    const ws = new WebSocket(url)
+    const peer = new Peer(ws)
+    await new Promise((resolve, reject) => {
+      ws.on('open', resolve)
+      ws.on('error', reject)
+    })
+    return peer
+  }
+
+  send(frame) {
+    this.ws.send(JSON.stringify(frame))
+  }
+
+  rawText(text) {
+    this.ws.send(text)
+  }
+
+  rawBinary(buffer) {
+    this.ws.send(Buffer.from(buffer))
+  }
+
+  /** 下一条到达的帧（不匹配就继续等）。 */
+  next(timeoutMs = 2000) {
+    if (this.frames.length > this.cursor) {
+      const frame = this.frames[this.cursor++]
+      return Promise.resolve(frame)
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const index = this.waiters.findIndex((w) => w.timer === timer)
+        if (index >= 0) this.waiters.splice(index, 1)
+        reject(new Error(`等帧超时；已收到 ${JSON.stringify(this.frames).slice(0, 400)}`))
+      }, timeoutMs)
+      this.waiters.push({
+        resolve: (frame) => {
+          this.cursor += 1
+          clearTimeout(timer)
+          resolve(frame)
+        },
+        timer,
+      })
+    })
+  }
+
+  /** 等到某一类帧出现（可以在后面，也可能已经收到）。 */
+  async until(match, timeoutMs = 2000) {
+    const seen = this.frames.find(match)
+    if (seen) return seen
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const frame = await this.next(Math.max(50, deadline - Date.now()))
+      if (match(frame)) return frame
+    }
+    throw new Error(`没等到匹配的帧；已收到 ${JSON.stringify(this.frames).slice(0, 400)}`)
+  }
+
+  /** 反向断言：一段时间内**不许**出现匹配的帧（D3/D6 的核心判据）。 */
+  async expectNone(match, ms = 400) {
+    const at = Date.now()
+    while (Date.now() - at < ms) {
+      const hit = this.frames.find(match)
+      if (hit) throw new Error(`不该出现的帧出现了：${JSON.stringify(hit)}`)
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    assert.ok(true)
+  }
+
+  cursor = 0
+
+  has(match) {
+    return this.frames.some(match)
+  }
+}
+
+async function pairUp(ctx, { hostLabel = 'bins', clientId = 'inst-1', token = '123456' } = {}) {
+  const host = await Peer.connect(ctx.url)
+  host.send({ t: 'hello', role: 'host', protocol: 1, token: TOKEN, label: hostLabel })
+  const hostOk = await host.until((f) => f.t === 'hello-ok')
+  assert.equal(hostOk.role, 'host')
+  host.send({ t: 'pair-begin', pairingToken: token })
+  const ready = await host.until((f) => f.t === 'pair-ready')
+  assert.equal(ready.ttlMs, Number(process.env.DRC_PAIR_TTL_MS ?? 30000) || ready.ttlMs)
+
+  const client = await Peer.connect(ctx.url)
+  client.send({
+    t: 'hello',
+    role: 'client',
+    protocol: 1,
+    clientId,
+    clientMeta: { platform: 'wechat-mp', label: '微信小程序' },
   })
+  const clientOk = await client.until((f) => f.t === 'hello-ok')
+  assert.equal(clientOk.clientId, clientId, '客户端自带的 clientId 必须原样保留')
+  client.send({ t: 'pair-begin-client', pairingToken: token })
+  const paired = await client.until((f) => f.t === 'paired')
+  const joined = await host.until((f) => f.t === 'peer-joined')
+  ctx.open.push(host, client)
+  return { host, client, hostId: hostOk.hostId, conversationId: paired.sessionId, joined }
 }
 
-test('pairing + encrypted relay end-to-end', async (t) => {
-  await startServer()
-  t.after(() => proc?.kill())
-
-  // ── host auths and issues pair token ──
-  const host = await connect()
-  host.send(JSON.stringify({ t: 'auth', role: 'host', token: TOKEN, hostId: 'h1', label: 'mac' }))
-  const ok = await nextFrame(host, (f) => f.t === 'auth-ok')
-  assert.equal(ok.hostId, 'h1')
-
-  host.send(JSON.stringify({ t: 'pair-begin', pairingToken: '123456', psk: 'AAAAAAAAAAAAAAAAAAAAAA' }))
-  assert.ok((await nextFrame(host, (f) => f.t === 'pair-ready')).pairingToken === '123456')
-
-  // ── client claims pair token ──
-  const cl = await connect()
-  cl.send(JSON.stringify({ t: 'hello', role: 'client', protocol: 1, clientId: 'wx-1' }))
-  await nextFrame(cl, (f) => f.t === 'hello-ok')
-  cl.send(JSON.stringify({ t: 'pair-begin-client', pairingToken: '123456' }))
-  const paired = await nextFrame(cl, (f) => f.t === 'paired')
-  assert.match(paired.sessionId, /^c_/)
-
-  // host sees peer-joined
-  const joined = await nextFrame(host, (f) => f.t === 'peer-joined')
-  assert.equal(joined.sessionId, paired.sessionId)
-  assert.equal(joined.clientId, 'wx-1')
-
-  // ── opaque enc relay, both directions, seq assigned by server ──
-  cl.send(JSON.stringify({ t: 'enc', sessionId: paired.sessionId, seq: 1, ciphertext: 'Q1IfrB==x' }))
-  const atHost = await nextFrame(host, (f) => f.t === 'enc')
-  assert.equal(atHost.ciphertext, 'Q1IfrB==x')
-  assert.equal(atHost.sessionId, paired.sessionId)
-
-  host.send(JSON.stringify({ t: 'enc', sessionId: paired.sessionId, seq: 9, ciphertext: 'aG9zdA==' }))
-  const atClient = await nextFrame(cl, (f) => f.t === 'enc')
-  assert.equal(atClient.ciphertext, 'aG9zdA==')
-  assert.equal(atClient.seq, 1) // server numbers host->client stream
-
-  // ── pair token cannot be reused ──
-  const cl2 = await connect()
-  cl2.send(JSON.stringify({ t: 'hello', role: 'client', protocol: 1 }))
-  cl2.send(JSON.stringify({ t: 'pair-begin-client', pairingToken: '123456' }))
-  const fail = await nextFrame(cl2, (f) => f.t === 'pair-fail')
-  assert.equal(fail.reason, 'already_used')
-
-  // ── bad host token closes socket ──
-  const bad = await connect()
-  bad.send(JSON.stringify({ t: 'auth', role: 'host', token: 'wrong' }))
-  const f = await nextFrame(bad, (x) => x.t === 'auth-fail')
-  assert.equal(f.reason, 'bad_token')
-
-  host.close(); cl.close(); cl2.close(); bad.close()
+test('注册：客户端 hello 得到 hello-ok，且 relay 原样保留它带来的 clientId', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', protocol: 1, clientId: 'mdwx-abc', clientMeta: { platform: 'wechat-mp' } })
+    const ok = await client.until((f) => f.t === 'hello-ok')
+    assert.deepEqual({ role: ok.role, clientId: ok.clientId }, { role: 'client', clientId: 'mdwx-abc' })
+    assert.equal(ctx.relay.state.clients.get('mdwx-abc').meta.platform, 'wechat-mp')
+  } finally {
+    await ctx.close()
+  }
 })
 
-test('health endpoint', async (t) => {
-  await startServer()
-  t.after(() => proc?.kill())
-  const r = await (await fetch(`http://127.0.0.1:${PORT}/healthz`)).json()
-  assert.equal(r.ok, true)
+test('注册：不带 clientId 时中继代发一个（客户端会采纳并沿用）', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', protocol: 1 })
+    const ok = await client.until((f) => f.t === 'hello-ok')
+    assert.ok(ok.clientId && ok.clientId.length > 0)
+    assert.equal(ctx.relay.state.clients.has(ok.clientId), true)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('鉴权：错 token 被拒并在用尽次数后断开 4001', async () => {
+  const ctx = await startRelay({ DRC_HOST_AUTH_MAX_ATTEMPTS: '3' })
+  try {
+    const host = await Peer.connect(ctx.url)
+    ctx.open.push(host)
+    host.send({ t: 'hello', role: 'host', token: 'wrong-token-value-here-000000' })
+    for (let i = 0; i < 3; i++) {
+      host.send({ t: 'hello', role: 'host', token: 'wrong-token-value-here-00000' + i })
+      const err = await host.until((f) => f.t === 'error' && f.code === 'bad_token')
+      assert.ok(err)
+    }
+    const closed = await host.closed
+    assert.equal(closed.code, 4001)
+    assert.equal(ctx.relay.state.hosts.size, 0)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('配对全流程：pair-ready 带权威 ttlMs，paired 带 sessionId，主机收到带 pairingToken 的 peer-joined', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId, joined, hostId } = await pairUp(ctx)
+    assert.match(conversationId, /^c_[0-9a-f]{12}$/)
+    assert.equal(joined.sessionId, conversationId)
+    assert.equal(joined.pairingToken, '123456', '主机必须按码取自己那份 PSK（旧事故）')
+    assert.equal(joined.clientId, 'inst-1')
+    assert.equal(ctx.relay.state.conversations.size, 1)
+    assert.equal(ctx.relay.state.conversations.get(conversationId).hostId, hostId)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('配对前置：pair-begin 只能由主机发，认领只能由客户端发', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'pair-begin-client', pairingToken: '123456' })
+    assert.equal((await client.until((f) => f.t === 'error')).code, 'need_client')
+
+    const anon = await Peer.connect(ctx.url)
+    ctx.open.push(anon)
+    anon.send({ t: 'hello', role: 'client', clientId: 'i2' })
+    await anon.until((f) => f.t === 'hello-ok')
+    anon.send({ t: 'pair-begin', pairingToken: '123456' })
+    assert.ok(await anon.until((f) => f.t === 'error' && f.code === 'need_host'))
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('配对码：未知码 invalid_or_expired，重放 already_used（两个 reason 在理论文不同）', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', clientId: 'i3' })
+    await client.until((f) => f.t === 'hello-ok')
+    client.send({ t: 'pair-begin-client', pairingToken: '999999' })
+    assert.equal((await client.until((f) => f.t === 'pair-fail')).reason, 'invalid_or_expired')
+
+    const first = await pairUp(ctx, { clientId: 'i4', token: '456789' })
+    first.client.send({ t: 'pair-begin-client', pairingToken: '456789' })
+    assert.equal((await first.client.until((f) => f.t === 'pair-fail' && f.reason === 'already_used')).reason, 'already_used')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('下行转发：中继给 host→client 的帧编号，且密文原样搬运', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    const one = await client.until((f) => f.t === 'enc')
+    assert.equal(one.sessionId, conversationId)
+    assert.equal(one.ciphertext, CIPHER)
+    assert.equal(one.seq, 1)
+    const two = await client.next()
+    assert.equal(two.seq, 2)
+    assert.equal(two.ciphertext, CIPHER)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('上行转发：客户端的 seq 原样透传，并补上是谁发的', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    client.send({ t: 'enc', sessionId: conversationId, seq: 41, clientId: 'inst-1', ciphertext: CIPHER })
+    const got = await host.until((f) => f.t === 'enc')
+    assert.equal(got.seq, 41, '上行 seq 是元数据，中继不改写')
+    assert.equal(got.clientId, 'inst-1')
+    assert.equal(got.ciphertext, CIPHER)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('D3：客户端断开重连后，同一会话继续可路由，主机不会收到 unknown_session', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    client.ws.terminate()
+    const left = await host.until((f) => f.t === 'peer-left')
+    assert.equal(left.sessionId, conversationId)
+    assert.equal(left.clientId, 'inst-1')
+    // 会话必须还在（旧实现在这里删掉它，于是重连必然失败）。
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true)
+
+    const again = await Peer.connect(ctx.url)
+    ctx.open.push(again)
+    again.send({ t: 'hello', role: 'client', clientId: 'inst-1' })
+    await again.until((f) => f.t === 'hello-ok')
+    // 续用的判据是客户端一侧：它用原 convId 发指令，必须能直达主机。
+    again.send({ t: 'enc', sessionId: conversationId, seq: 1, clientId: 'inst-1', ciphertext: CIPHER })
+    const arrived = await host.until((f) => f.t === 'enc' && f.clientId === 'inst-1')
+    assert.equal(arrived.sessionId, conversationId)
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await again.until((f) => f.t === 'enc')).sessionId, conversationId, '下行也必须重新挂得上')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('D6：主机短暂掉线不通知客户端；超过宽限期才发 peer-left', async () => {
+  const ctx = await startRelay({ DRC_HOST_GRACE_MS: '300', DRC_SWEEP_MS: '60' })
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    host.ws.terminate()
+    await client.expectNone((f) => f.t === 'peer-left', 120)
+    const gone = await client.until((f) => f.t === 'peer-left', 1500)
+    assert.equal(gone.sessionId, conversationId)
+    assert.match(gone.clientId, /^[0-9a-f]{8}$/, 'peer-left 的 clientId 位置填的是主机 id')
+    assert.equal(ctx.relay.state.conversations.has(conversationId), false)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('D4：注册过但不属于该会话的客户端拿到 unknown_session（有恢复出口，复核 R2）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId } = await pairUp(ctx)
+    const stranger = await Peer.connect(ctx.url)
+    ctx.open.push(stranger)
+    stranger.send({ t: 'hello', role: 'client', clientId: 'intruder' })
+    await stranger.until((f) => f.t === 'hello-ok')
+    stranger.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    const err = await stranger.until((f) => f.t === 'error')
+    // 不是 not_member：小程序对 not_member 只会弹一句英文 toast，
+    // 而 unknown_session 会中文提示"会话已失效，请重新配对"——被拒的一方必须有出口。
+    assert.equal(err.code, 'unknown_session')
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true, '拒绝一帧不该顺手删会话')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('D4：从未注册的 socket 灌密文得到 not_member（它没有可恢复的配对）', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId } = await pairUp(ctx)
+    const blind = await Peer.connect(ctx.url)
+    ctx.open.push(blind)
+    blind.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await blind.until((f) => f.t === 'error')).code, 'not_member')
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('复核 R3：同一 clientId 的后来者顶掉前者，前者收到 4000 才会重连', async () => {
+  const ctx = await startRelay()
+  try {
+    const { conversationId, host } = await pairUp(ctx)
+    const newer = await Peer.connect(ctx.url)
+    ctx.open.push(newer)
+    newer.send({ t: 'hello', role: 'client', clientId: 'inst-1' })
+    await newer.until((f) => f.t === 'hello-ok')
+    const verdict = await ctx.open[1].closed
+    assert.equal(verdict.code, 4000, '前者必须被明确关掉，否则它的 socket 还"开着"、永不重连')
+    // 顶号之后新 socket 是合法成员，下行仍可路由。
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await newer.until((f) => f.t === 'enc')).sessionId, conversationId)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('复核 R1：主机重启后 resync 未列出的会话被回收，客户端下次发帧撞上 unknown_session', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId, hostId } = await pairUp(ctx)
+    // 模拟"主机进程重启"：新 socket、同一个 hostId、手里没有任何会话密钥。
+    const reborn = await Peer.connect(ctx.url)
+    ctx.open.push(reborn)
+    reborn.send({ t: 'hello', role: 'host', protocol: 1, token: TOKEN, hostId })
+    await reborn.until((f) => f.t === 'hello-ok')
+    reborn.send({ t: 'resync', sessionIds: [] })
+    await sleep(80)
+    assert.equal(ctx.relay.state.conversations.has(conversationId), false, 'resync 没列出的会话必须删掉')
+    // 关键判据：客户端不是被 peer-left 弹一句英文，而是撞 unknown_session 拿到中文提示。
+    client.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await client.until((f) => f.t === 'error')).code, 'unknown_session')
+    assert.ok(!client.has((f) => f.t === 'peer-left'), 'resync 不该向客户端广播 peer-left')
+    void host
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('未知会话：enc 得到 unknown_session（手机端据此提示重新配对）', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', clientId: 'lonely' })
+    await client.until((f) => f.t === 'hello-ok')
+    client.send({ t: 'enc', sessionId: 'c_deadbeefdead', ciphertext: CIPHER })
+    assert.equal((await client.until((f) => f.t === 'error')).code, 'unknown_session')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('主机在宽限期外、会话还在但主机不接时，客户端收到的是 host_unavailable 而不是 unknown_session', async () => {
+  const ctx = await startRelay({ DRC_HOST_GRACE_MS: '60000' })
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    host.ws.terminate()
+    client.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    const err = await client.until((f) => f.t === 'error')
+    assert.equal(err.code, 'host_unavailable')
+    assert.notEqual(err.code, 'unknown_session', '把"暂时没人接"报成"会话没了"会白白丢掉配对')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('批量帧：enc-batch 下行保持条目顺序与密文原样', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    host.send({
+      t: 'enc-batch',
+      sessionId: conversationId,
+      items: [{ ciphertext: CIPHER }, { ciphertext: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', seq: 9 }],
+    })
+    const batch = await client.until((f) => f.t === 'enc-batch')
+    assert.equal(batch.sessionId, conversationId)
+    assert.equal(batch.items.length, 2)
+    assert.equal(batch.items[0].ciphertext, CIPHER)
+    assert.equal(batch.items[1].ciphertext, 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('畸形输入一律被拒而不崩：非法 JSON、二进制帧、坏 base64、未知帧名、缺字段', async () => {
+  const ctx = await startRelay()
+  try {
+    const client = await Peer.connect(ctx.url)
+    ctx.open.push(client)
+    client.send({ t: 'hello', role: 'client', clientId: 'junk' })
+    await client.until((f) => f.t === 'hello-ok')
+
+    client.rawText('{not json')
+    assert.equal((await client.until((f) => f.t === 'error' && f.code === 'bad_json')).code, 'bad_json')
+
+    client.rawBinary([1, 2, 3, 4])
+    assert.equal((await client.until((f) => f.t === 'error' && f.code === 'bad_frame')).code, 'bad_frame')
+
+    client.send({ t: 'heartbeat' })
+    assert.equal((await client.until((f) => f.t === 'error' && f.code === 'unknown_frame')).code, 'unknown_frame')
+
+    client.send({ t: 'enc', sessionId: 'c_000000000000' })
+    assert.equal((await client.until((f) => f.t === 'error' && f.code === 'unknown_frame')).code, 'unknown_frame', '缺 ciphertext 的形状不合法')
+
+    client.send({ t: 'enc', sessionId: 'c_000000000000', ciphertext: '%%%not base64%%%' })
+    assert.equal((await client.until((f) => f.t === 'error' && f.code === 'bad_frame')).code, 'bad_frame')
+
+    assert.equal(ctx.relay.health().ok, true, '一堆坏帧之后进程仍然健康')
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('session-leave：客户端主动退出只摘自己，主机收到 peer-left，会话仍在', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx)
+    client.send({ t: 'session-leave', sessionId: conversationId })
+    const left = await host.until((f) => f.t === 'peer-left')
+    assert.equal(left.sessionId, conversationId)
+    assert.equal(ctx.relay.state.conversations.get(conversationId).clients.size, 0)
+    assert.equal(ctx.relay.state.conversations.has(conversationId), true)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('ping/pong 原样回带 ts；两个客户端互不干扰', async () => {
+  const ctx = await startRelay()
+  try {
+    const { host, client, conversationId } = await pairUp(ctx, { clientId: 'a' })
+    const other = await Peer.connect(ctx.url)
+    ctx.open.push(other)
+    other.send({ t: 'hello', role: 'client', clientId: 'b' })
+    await other.until((f) => f.t === 'hello-ok')
+    other.send({ t: 'pair-begin-client', pairingToken: 'nope-nope' })
+    assert.equal((await other.until((f) => f.t === 'pair-fail')).reason, 'invalid_or_expired')
+
+    host.send({ t: 'enc', sessionId: conversationId, ciphertext: CIPHER })
+    assert.equal((await client.until((f) => f.t === 'enc')).sessionId, conversationId)
+    await other.expectNone((f) => f.t === 'enc', 150)
+
+    other.send({ t: 'ping', ts: 12345 })
+    const pong = await other.until((f) => f.t === 'pong')
+    assert.equal(pong.ts, 12345)
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('/healthz 与 /api/info 的形状是测试与运维的依赖（T7）', async () => {
+  const ctx = await startRelay({ DRC_PUBLIC_URL: 'wss://drc.provid.cc' })
+  try {
+    await pairUp(ctx)
+    const health = await fetch(`http://127.0.0.1:${ctx.port}/healthz`).then((r) => r.json())
+    assert.equal(health.ok, true)
+    assert.equal(health.hosts, 1)
+    assert.equal(health.clients, 1)
+    assert.equal(health.conversations, 1)
+    assert.equal(health.pendingPairs, 1, '用过的码在 TTL 内仍留在表里（为了 already_used）')
+    assert.equal(health.shuttingDown, false)
+    assert.equal(typeof health.uptimeSec, 'number')
+    assert.equal(typeof health.version, 'string')
+
+    const info = await fetch(`http://127.0.0.1:${ctx.port}/api/info`).then((r) => r.json())
+    assert.deepEqual(info, { publicUrl: 'wss://drc.provid.cc', protocol: 1 })
+
+    const missing = await fetch(`http://127.0.0.1:${ctx.port}/nope`)
+    assert.equal(missing.status, 404)
+    assert.deepEqual(await missing.json(), { error: 'not_found' })
+  } finally {
+    await ctx.close()
+  }
+})
+
+test('/api/pair-status 默认 404：不给 6 位码留免认证的判定 oracle', async () => {
+  const ctx = await startRelay()
+  try {
+    const response = await fetch(`http://127.0.0.1:${ctx.port}/api/pair-status?token=123456`)
+    assert.equal(response.status, 404)
+    const enabled = await startRelay({ DRC_PAIR_STATUS: '1' })
+    try {
+      await pairUp(enabled, { token: '246810' })
+      const used = await enabled.relay.state.pendingPairs.get('246810')
+      assert.equal(used.used, true)
+      const body = await fetch(`http://127.0.0.1:${enabled.port}/api/pair-status?token=246810`).then((r) => r.json())
+      assert.equal(body.ok, false)
+    } finally {
+      await enabled.close()
+    }
+  } finally {
+    await ctx.close()
+  }
 })
