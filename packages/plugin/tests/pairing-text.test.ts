@@ -48,6 +48,7 @@ test('不出现任何"打开图片/查看器"的指示：这条命令不许把�
 test('开了 qrImage 时才报图片路径（报了就等于承诺写了文件），且不再塞那段扫不出来的文本码', () => {
   const withImage = pairingPairText(view({ qrImage: true }))
   assert.match(withImage, /pairing-qr\.png/, 'qrImage=true 时必须说清文件在哪')
+  assert.match(withImage, /右栏/, '右栏会自动弹出二维码，主路径就得写它：只报文件路径等于让用户白跑一趟去找图')
   assert.equal(withImage.includes(TERMINAL), false, '图片模式下不许再吐文本二维码：DSH 命令卡的行高会把它切成条（本轮事故）')
   assert.ok(withImage.includes(QR), 'URI 原文仍要留着：手输/粘贴是最后退路')
   assert.equal(pairingPairText(view({ qrImage: false })).includes('pairing-qr.png'), false, '没写图片却报路径：用户会去找一个不存在的文件')

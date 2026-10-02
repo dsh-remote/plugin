@@ -659,8 +659,9 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "De
 | `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里这是唯一排错入口） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
 
-日常配对路径：DSH 里执行 `/drc pair` → 按卡片给的路径打开 `~/.dsh/pairing-qr.png` 扫码
-（卡片另附可粘贴的 `dshr:/p?…` 一行兜底）。右栏那份图是 `~/.dsh/sidebar-qr.png`。
+日常配对路径：DSH 里执行 `/drc pair` → 右栏**自动弹出**当前配对码，直接扫（没弹出就按卡片给的
+路径打开 `~/.dsh/pairing-qr.png`；卡片另附可粘贴的 `dshr:/p?…` 一行兜底）。右栏那份图是
+`~/.dsh/sidebar-qr.png`。
 
 ### 10.4 排错第一入口：`status.json`
 

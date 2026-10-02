@@ -40,7 +40,10 @@ export function pairingPairText(view: PairingTextView): string {
   ]
   if (view.qrImage) {
     // 图片是默认路径：正文只说"扫这张图"，不再塞那段在 DSH 里扫不出来的文本码。
-    lines.push('', `二维码图片（打开这张 PNG 再扫）：${pairingImagePath(view.statusFile)}`)
+    // "打开这张 PNG"只能当兜底：`/drc pair` 之后右栏会**自己弹出**二维码
+    // （`packages/presentation`，装了那一行才成立），把开图写成主路径等于让用户
+    // 白跑一趟去找文件——而这正是本命令当初被要求别做的事。
+    lines.push('', `二维码会自动弹出到右栏；没弹出就打开这张 PNG 再扫：${pairingImagePath(view.statusFile)}`)
   } else if (view.terminalQr) {
     lines.push('', view.terminalQr)
   }
