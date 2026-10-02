@@ -655,11 +655,12 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "De
 | `approvalTimeoutSec` | `180` | — | 审批卡超时 |
 | `listingRefreshSec` | `15` | — | 会话列表刷新周期 |
 | `keepAwake.enabled` / `idleReleaseSec` / `keepDisplay` | `true` / `300` / `false` | — | `idleReleaseSec` 不是有效非负数会夹回 300 |
-| `qrImage` / `qrOpen` / `qrStyle` | `true` / `true` / `ascii` | `DRC_QR_IMAGE=0` / `DRC_QR_OPEN=0` / `DRC_QR_STYLE` | 终端二维码与 PNG |
+| `qrImage` / `qrOpen` / `qrStyle` | `true` / `false` / `half` | `DRC_QR_IMAGE=0` / `DRC_QR_OPEN=0` / `DRC_QR_STYLE` | `qrImage` 默认写 `pairing-qr.png`（DSH 命令卡的行高会把半块文本码切成条，只有图片扫得出来）；`qrOpen` 仍默认关（写图 ≠ 替你打开查看器）；`qrStyle` 只在关掉 `qrImage` 时当退路 |
 | `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里这是唯一排错入口） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
 
-日常配对路径：DSH 里执行 `/drc pair`（渲染终端二维码并写 PNG）→ 小程序扫码或粘贴链接内容。
+日常配对路径：DSH 里执行 `/drc pair` → 按卡片给的路径打开 `pairing-qr.png` 扫码
+（卡片另附可粘贴的 `dshr:/p?…` 一行兜底）。
 
 ### 10.4 排错第一入口：`status.json`
 

@@ -32,6 +32,7 @@ export interface PluginConfig {
   pairOnStartSec: number
   /** 向中继申请 PSK 有效期；服务端权威值会覆盖它（见 transport/relay.ts）。 */
   pairTtlMs: number
+  /** 是否把配对二维码写成 PNG（默认**开**：文本二维码在 DSH 命令卡里扫不出来，见下方默认值注释）。 */
   qrImage: boolean
   qrOpen: boolean
   /** 是否给文本二维码套 ANSI 反色。默认关：宿主按纯文本渲染时会把转义序列打成乱码。 */
@@ -66,11 +67,20 @@ export const DEFAULT_CONFIG: PluginConfig = {
   mockBridge: false,
   statusFile: path.join(homedir(), '.dsh', 'dsh-remote-control', 'status.json'),
   unarchiveOnPrompt: true,
-  // 配对码只在 `/drc pair` 的文本输出里给（半块字符最接近正方形取景）。
-  // 写图片、开图片查看器都是可选旁路，默认关——配对不该被赶到 DSH 外面去完成。
   pairOnStartSec: 0,
   pairTtlMs: 120_000,
-  qrImage: false,
+  // **默认走图片**。2026-10-02 取证推翻了原判断（原判断：文本二维码在任何等宽渲染器下
+  // 都能扫，图片是可有可无的旁路）：
+  //   · DSH 命令卡的等宽输出块是 `white-space: pre` + `line-height: 1.6`（app bundle 里
+  //     的那条规则，实测行间留白约占行高 37%），每两行模块之间被塞进一条整行宽的缝隙，
+  //     半块二维码被横切成条。
+  //   · 用用户真机贴出来的那段输出做受控实验：把字号行距调到 1.0 时 zxing 解得出来，
+  //     调到 ≥1.15 就扫不出来；而 DSH 固定 1.6。也就是说"文本码能扫"在**唯一宿主**上不成立。
+  //   · 而 ANSI 反色救不了：TerminalBlock 把每行渲染成内联 span，背景只覆盖字形盒，
+  //     不覆盖行间留白（见 dsh-client-ui-primitives 的 parseAnsiLines/renderLine）。
+  // 图片是自包含位图矩阵，跟宿主的行高、字体、配色都无关——这才是"扫得出来"的那条路。
+  qrImage: true,
+  // 写图片 ≠ 替用户打开查看器：仍然默认关（原话「不要用打开一个图片的方式」）。
   qrOpen: false,
   qrAnsi: false,
   qrStyle: 'half',
@@ -172,7 +182,7 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
     config.pairOnStartSec = 0
   }
   if (config.qrOpen && !config.qrImage) {
-    problems.push({ level: 'warn', field: 'qrOpen', message: 'qrOpen 需要 qrImage=true 才会写图片文件；现在只出文本二维码（这是默认且推荐的路径）' })
+    problems.push({ level: 'warn', field: 'qrOpen', message: 'qrOpen 需要 qrImage=true 才会写图片文件；现在只出文本二维码（文本码在 DSH 命令卡里扫不出来，见 config.ts 默认值注释）' })
   }
   if (!['ascii', 'block', 'half'].includes(config.qrStyle)) {
     problems.push({ level: 'warn', field: 'qrStyle', message: `qrStyle 只认 ascii/block/half，收到 ${JSON.stringify(config.qrStyle)}，已退回 half` })

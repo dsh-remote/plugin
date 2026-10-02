@@ -236,21 +236,21 @@ test('一份典型配置在合法输入下不该有任何 error：否则插件�
 })
 
 /**
- * 配对二维码的呈现默认值就是一条拍板：**不许把用户赶到 DSH 外面去扫码**。
- * 命令 API 只接受纯文本，所以主路径必须是文本二维码（半块字符，23×45 左右，
- * 一个终端格子约等于"高 = 2×宽"，所以半块最接近正方形取景）；
- * 写 PNG 与调用系统查看器都是显式开启才有的旁路。
- * 这条断言存在的意义是：哪天有人把默认值改回"写图 + open"，测试会拦住他。
+ * 配对二维码的呈现默认值是一条拍板，2026-10-02 翻转：
+ * 真机取证发现 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白把半块二维码
+ * 横切成条（zxing ≥1.15 行距即失败），文本码在唯一宿主上扫不出来——于是默认产物改成图片。
+ * **仍然不许把用户赶到 DSH 外面去"看预览"**：`qrOpen` 保持关（写图 ≠ 替用户开查看器）。
+ * 这条断言存在的意义是：哪天有人把 `qrOpen` 默认打开、或把关掉的文本默认改回来，测试会拦住他。
  */
-test('二维码默认只出文本：qrImage/qrOpen/qrAnsi 默认关，样式默认 half', () => {
-  assert.equal(DEFAULT_CONFIG.qrImage, false, '默认就写图片文件 = 默认走"离开 DSH 打开查看器"那条路')
+test('二维码默认出图片（qrImage 开）、但不自动打开（qrOpen 关）；qrAnsi 关、样式 half', () => {
+  assert.equal(DEFAULT_CONFIG.qrImage, true, '文本码在 DSH 命令卡里扫不出来（行高把它切条），默认必须出图片')
   assert.equal(DEFAULT_CONFIG.qrOpen, false, '默认调用系统打开图片：配对动作被搬到了宿主外面')
   assert.equal(DEFAULT_CONFIG.qrAnsi, false, '默认套 ANSI：宿主按纯文本渲染时会把转义序列打成乱码')
-  assert.equal(DEFAULT_CONFIG.qrStyle, 'half', '默认样式该是最紧凑且不需要 ANSI 的半块')
+  assert.equal(DEFAULT_CONFIG.qrStyle, 'half', '默认文本样式仍是半块（供关了图片时当退路）')
 })
 
 test('qr* 三个开关的环境变量只认 1/0/true/false，其余值退回上层值（不猜）', () => {
-  assert.equal(readConfig(undefined, { DRC_QR_IMAGE: '1' }).qrImage, true, 'DRC_QR_IMAGE=1 要能打开图片旁路')
+  assert.equal(readConfig(undefined, { DRC_QR_IMAGE: '1' }).qrImage, true, 'DRC_QR_IMAGE=1 要能把图片打开（默认已是开，这里要幂等）')
   assert.equal(readConfig({ qrImage: true }, { DRC_QR_IMAGE: '0' }).qrImage, false, '=0 要能关掉 patch 里开的值')
   assert.equal(readConfig({ qrAnsi: true }, { DRC_QR_ANSI: 'yes' }).qrAnsi, true, '无法识别的值必须退回上层值，而不是静默变成关')
   assert.equal(readConfig({ qrStyle: 'block' }, { DRC_QR_STYLE: 'fancy' }).qrStyle, 'block', '非法样式在 readConfig 阶段不猜')
@@ -260,7 +260,7 @@ test('qr* 三个开关的环境变量只认 1/0/true/false，其余值退回上�
   assert.ok(problems.some((problem) => problem.field === 'qrStyle'), '夹回必须 warn')
 })
 
-test('qrOpen 而 qrImage 关着是无效组合：要 warn（文本二维码才是主路径）', () => {
+test('qrOpen 而 qrImage 关着是无效组合：要 warn（关了图片就没有文件可开）', () => {
   const problems = validateConfig(base({ qrImage: false, qrOpen: true }))
   const warn = problems.find((problem) => problem.field === 'qrOpen')
   assert.ok(warn && warn.level === 'warn', `这个组合什么都没打开，却没人告诉运维：${JSON.stringify(problems.map((problem) => problem.field))}`)

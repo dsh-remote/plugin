@@ -37,7 +37,7 @@ if (!existsSync(PY)) {
   process.exit(2)
 }
 
-const { qrMatrix, qrPng } = await import(pathToFileURL(qrModule).href)
+const { qrMatrix, qrPng, renderTerminalQr } = await import(pathToFileURL(qrModule).href)
 
 const PAYLOADS = [
   'dshr:/p?v=1&s=wss%3A%2F%2Fdrc.provid.cc&n=bins-macbook&psk=u6ufzO%2BGNSmosc8y148Rew%3D%3D&t=173142',
@@ -56,15 +56,19 @@ for (const text of PAYLOADS) for (const ecc of ECCS) cases.push({ text, ecc })
 
 const request = []
 for (const { text, ecc } of cases) {
-  // 半块终端渲染本身就是最终产物 —— 校验它，而不是裸矩阵：把渲染文本原样画出来，
-  // 等价于"把 /drc pair 的输出截屏拿去扫"。矩阵取无 ANSI 的裸字符版，与
-  // renderTerminalQr 同源。
+  // 三条产物都要过：
+  //   1) 图片 PNG —— 这是 `/drc pair` 现在**默认**给用户的东西（唯一真能扫的产物）；
+  //   2) 半块文本 —— 按字形还原成矩阵再解码，证明 renderTerminalQr 的字符→模块映射忠实；
+  //      这里**不加行距**是刻意的：这是纯映射校验。真机扫不出来的原因是 DSH 命令卡把
+  //      每行按 `line-height:1.6` 渲染、行间被塞进整行宽的缝隙（zxing ≥1.15 行距即失败）——
+  //      那是宿主的渲染问题，不是映射问题，所以关掉 qrImage 时才回落文本，且默认关。
+  //   3) 裸矩阵 —— 控制对照。
   const rendered = await qrMatrix(text, ecc, 2)
   request.push({
     text,
     ecc,
     matrix: rendered.map((row) => row.map((v) => (v ? 1 : 0))),
-    // 图片输出才是主要的配对产物：它不依赖终端对块字符/ANSI 的支持
+    terminal: await renderTerminalQr(text, { ecc, style: 'half', quietZone: 2 }),
     png: (await qrPng(text, { ecc, scale: 8 })).toString('base64'),
   })
 }
@@ -74,31 +78,52 @@ import json, sys, base64, io
 from PIL import Image
 import zxingcpp
 
+# renderTerminalQr 的 half 分支：█=上下都亮、▀=仅上、▄=仅下、空格=不亮。
+GLYPH = {' ': (0, 0), '█': (1, 1), '▀': (1, 0), '▄': (0, 1)}
+
+def raster(m, scale=8, border=4):
+    h, w = len(m), len(m[0])
+    img = Image.new("L", (w * scale + border * 2, h * scale + border * 2), 255)
+    px = img.load()
+    for y in range(h):
+        for x in range(w):
+            if m[y][x]:
+                for dy in range(scale):
+                    for dx in range(scale):
+                        px[border + x * scale + dx, border + y * scale + dy] = 0
+    return img
+
+def from_glyphs(text):
+    # 每个字符还原成 2 个模块行（上/下）。检验的是字符→模块映射本身，不含宿主行距。
+    rows = []
+    for line in text.split("\\n"):
+        top, bot = [], []
+        for ch in line:
+            t, b = GLYPH.get(ch, (0, 0))
+            top.append(t)
+            bot.append(b)
+        rows.append(top)
+        rows.append(bot)
+    return rows
+
 req = json.load(sys.stdin)
 out = []
 for c in req["cases"]:
+    rec = {"png": False, "terminal": False, "matrix": False, "ok": True}
     try:
-        # 图片路径优先：这就是 /drc pair 真正给用户的东西
         img = Image.open(io.BytesIO(base64.b64decode(c["png"])))
         res = zxingcpp.read_barcode(img)
-        if res is None or res.text != c["text"]:
-            out.append({"ok": True, "decoded": res.text if res else None})
-            continue
-        m = c["matrix"]
-        scale, border = 8, 4
-        h, w = len(m), len(m[0])
-        img = Image.new("L", (w * scale + border * 2, h * scale + border * 2), 255)
-        px = img.load()
-        for y in range(h):
-            for x in range(w):
-                if m[y][x]:
-                    for dy in range(scale):
-                        for dx in range(scale):
-                            px[border + x * scale + dx, border + y * scale + dy] = 0
-        res = zxingcpp.read_barcode(img)
-        out.append({"ok": True, "decoded": res.text if res else None})
+        rec["png"] = bool(res is not None and res.text == c["text"])
+
+        res = zxingcpp.read_barcode(raster(from_glyphs(c["terminal"])))
+        rec["terminal"] = bool(res is not None and res.text == c["text"])
+
+        res = zxingcpp.read_barcode(raster(c["matrix"]))
+        rec["matrix"] = bool(res is not None and res.text == c["text"])
     except Exception as e:
-        out.append({"ok": False, "error": str(e)})
+        rec["ok"] = False
+        rec["error"] = str(e)
+    out.append(rec)
 print(json.dumps(out, ensure_ascii=False))
 `
 
@@ -111,6 +136,12 @@ try {
   process.exit(2)
 }
 
+const KINDS = [
+  ['png', '图片 PNG（默认产物）'],
+  ['terminal', '文本字形还原'],
+  ['matrix', '裸矩阵'],
+]
+
 let checked = 0
 let failed = 0
 for (let i = 0; i < request.length; i++) {
@@ -120,18 +151,21 @@ for (let i = 0; i < request.length; i++) {
   if (!r.ok) {
     failed++
     console.error(`✖ 解码器异常：${JSON.stringify(text.slice(0, 24))} ecc=${ecc}: ${r.error}`)
-  } else if (r.decoded !== text) {
-    failed++
-    console.error(
-      `✖ 解码不符：${JSON.stringify(text.slice(0, 24))} ecc=${ecc}\n    期望 ${JSON.stringify(text)}\n    实得 ${JSON.stringify(r.decoded)}`,
-    )
+    continue
+  }
+  for (const [key, label] of KINDS) {
+    if (!r[key]) {
+      failed++
+      console.error(`✖ ${label} 解不出或不符：${JSON.stringify(text.slice(0, 24))} ecc=${ecc}`)
+    }
   }
 }
 
 console.log('')
-console.log(`真实解码校验（zxing-cpp）：${checked} 组，${failed} 组失败`)
+console.log(`真实解码校验（zxing-cpp）：${checked} 组用例 × ${KINDS.length} 种产物，${failed} 项失败`)
 if (failed > 0) {
   console.error('✖ 校验失败')
   process.exit(1)
 }
-console.log('✅ 全部用例扫得出来且内容逐字节一致')
+console.log('✅ 网页图片、文本字形还原、裸矩阵三条路径都扫得出来且内容逐字节一致')
+

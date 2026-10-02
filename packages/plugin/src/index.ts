@@ -716,12 +716,12 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
       if (argument.startsWith('pair')) {
         const pairing = createPairing()
         if (!pairing) return { kind: 'success', text: PAIR_UNAVAILABLE_TEXT }
-        // **二维码就出在这条命令的文本里**：配对这件事不许把用户赶到另一个窗口去
-        // （写 PNG + `open` 就是把 DSH 里的问题拿到 DSH 外面回答）。文本渲染在
-        // 任何等宽渲染器下都能扫，默认用半块字符（`half`）——一个终端格子约等于
-        // "高 = 2×宽"，所以半块最接近正方形取景。
+        // **默认走图片**：DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白会把半块
+        // 二维码横切成条——实测 zxing 在 ≥1.15 行距就解不出来，而宿主固定 1.6，也就是
+        // 文本码在这个（唯一）宿主上扫不出来。图片是自包含位图矩阵，跟行高/字体/配色无关。
+        // 只有显式关掉 qrImage 时才渲染文本码当退路（另有可粘贴的 URI 兜底）。
         if (config.qrImage) writePairingImage(pairing.qr, config, log)
-        const terminal = await renderTerminalQr(pairing.qr, { style: config.qrStyle, ansi: config.qrAnsi })
+        const terminal = config.qrImage ? undefined : await renderTerminalQr(pairing.qr, { style: config.qrStyle, ansi: config.qrAnsi })
         return {
           kind: 'success',
           text: pairingPairText({
@@ -791,10 +791,14 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>): Runtime
 }
 
 /**
- * 图片版是**可选的旁路**，不是主路径：命令 API 只接受纯文本，所以主路径必须是文本二维码
- * （把图写到临时目录再用系统查看器打开，等于让用户离开 DSH 去完成一个在 DSH 里的动作）。
- * 只有 patch 里显式开了 `qrImage` 才写文件；`qrOpen` 再进一步才调用系统打开——
- * 两个开关默认都关。
+ * 图片版是**默认路径**（`qrImage` 默认 true）。
+ *
+ * 为什么翻转：DSH 命令卡把等宽输出按 `line-height:1.6` 渲染，行间留白把半块二维码
+ * 横切成条；用真机输出做的受控实验里，行距 1.0 时 zxing 解得出来、≥1.15 就扫不出来。
+ * 文本码在这个宿主上不可用，所以主产物只能是图片。
+ *
+ * 落到磁盘的仍然是**旁路**：命令 API 只收纯文本，我们写 PNG + 把**路径**写进卡片，
+ * 但绝不替用户打开查看器——`qrOpen` 默认关（原话「不要用打开一个图片的方式」）。
  */
 function writePairingImage(
   qrText: string,
@@ -813,7 +817,7 @@ function writePairingImage(
       const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
       const args = process.platform === 'win32' ? ['/c', 'start', '', file] : [file]
       execFile(opener, args, () => {
-        /* 打不开就算了：终端里仍有文本二维码 */
+        /* 打不开就算了：卡片里仍有图片路径与可粘贴的 URI */
       })
     })
     .catch((error: unknown) => log('qr png render failed', { message: String((error as Error)?.message ?? error) }))

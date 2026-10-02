@@ -385,10 +385,12 @@ pong 就 `terminate()`）。改判应用层心跳会周期性踢掉空闲客户�
   这正是 `pairOnStartSec > 0` 会被 warn 的原因（`shell/config.ts:176-181` 一带的告警、
   `packages/plugin/tests/config.test.ts:122`）。`pairOnStartSec` 默认 **0=关**
   （`shell/config.ts:71`），关掉时这里不会长期挂着码。
-- 二维码图片：只有 patch/env 显式打开 `qrImage` 才写 `pairing-qr.png`（0600，
-  `shell/status.ts:89-104`），再打开 `qrOpen` 才调用系统查看器；**两个开关现在默认都是关的**
-  （`shell/config.ts:69-73`，`qrStyle` 默认改成 `half`），主路径是 `/drc pair` 输出里的文本二维码
-  （`packages/plugin/src/index.ts:695-710`）。旧版"默认写 PNG 并 open"的残留面因此缩小了。
+- 二维码图片：`/drc pair` **默认**写出 `pairing-qr.png`（0600，`shell/status.ts:89-104`）并把
+  它的路径给用户——因为 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，会把半块文本二维码
+  横切成条（实测 zxing 在 ≥1.15 行距即失败），文本码在这个宿主上扫不出来。`qrOpen` 仍然
+  **默认关**：写图 ≠ 替用户打开查看器（`shell/config.ts`，`qrImage` 默认 true / `qrOpen` 默认
+  false / `qrStyle` 默认 `half`，后者只在显式关掉 `qrImage` 时当退路；命令段见
+  `packages/plugin/src/index.ts`）。旧版"默认写 PNG 并 **open**"里自动打开的那半仍然不存在。
 - `/drc unpair` 会把手里所有通道作废（对每条走 `voidConversation`，
   `packages/plugin/src/index.ts:720`）🟩（`relay-client.test.ts:352`），这是主机侧的主动解配。
 
@@ -579,8 +581,8 @@ key 是 `c2h`/`h2c` 派生后的**会话密钥**在内存里，PSK 留在存储�
     保持它关着。
 11. **status.json / pairing-qr.png 是本地敏感文件**，0600 + 原子改名是代码里的硬要求
     （`shell/status.ts:33-47`），但 `pairOnStartSec > 0` 或刚跑过 `/drc pair` 时里面可能躺着
-    一张仍然有效的 PSK（`index.ts:313`）。用完请关掉 `pairOnStartSec`（默认就是 0），
-    需要图片版时再显式开 `qrImage`。
+    一张仍然有效的 PSK（`index.ts:313`）。用完请关掉 `pairOnStartSec`（默认就是 0）。
+    `pairing-qr.png` 就是那张 PSK 的二维码，同样按敏感文件对待（用完即一次性失效）。
 12. **元数据没有保护**：中继（以及路上任何能看到 TLS 之外信息的人）知道谁在什么时候连了多久、
     帧的条数与字节数、host label、clientId、convId、6 位配对码。要更强的话需要
     padding 与覆盖控制面字段端到端的封装——都不在冻结面之外做不了，因为小程序一行不改。

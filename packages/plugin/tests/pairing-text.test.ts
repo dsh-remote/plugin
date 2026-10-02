@@ -1,9 +1,12 @@
 /**
  * pairing-text.test — `/drc pair` 的文本输出。
  *
- * 这条测试守的是一句拍板：「二维码不要用打开一个图片的方式，不要脱离 dsh」。
- * 默认值那半边由 `config.test.ts` 守着（`qrImage`/`qrOpen`/`qrAnsi` 默认关），
- * 这半边守的是**输出本身自足**：不用去别处看图，也仍然能完成配对。
+ * 这条测试守的是「配对输出必须自足」：不用去别处猜，也仍然能完成配对。
+ * 默认值那一半由 `config.test.ts` 守着（`qrImage` 默认 **开**、`qrOpen`/`qrAnsi` 默认关）。
+ *
+ * 2026-10-02：真机取证发现 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，会把半块二维码
+ * 横切成条（zxing ≥1.15 行距即失败），于是把默认产物从文本码翻转成图片路径；
+ * 文本码降级为 `qrImage:false` 时的退路。下面两条断言把这个结论锁住。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -42,9 +45,11 @@ test('不出现任何"打开图片/查看器"的指示：这条命令不许把�
   }
 })
 
-test('开了 qrImage 时才报图片路径（报了就等于承诺写了文件）', () => {
+test('开了 qrImage 时才报图片路径（报了就等于承诺写了文件），且不再塞那段扫不出来的文本码', () => {
   const withImage = pairingPairText(view({ qrImage: true }))
   assert.match(withImage, /pairing-qr\.png/, 'qrImage=true 时必须说清文件在哪')
+  assert.equal(withImage.includes(TERMINAL), false, '图片模式下不许再吐文本二维码：DSH 命令卡的行高会把它切成条（本轮事故）')
+  assert.ok(withImage.includes(QR), 'URI 原文仍要留着：手输/粘贴是最后退路')
   assert.equal(pairingPairText(view({ qrImage: false })).includes('pairing-qr.png'), false, '没写图片却报路径：用户会去找一个不存在的文件')
 })
 
