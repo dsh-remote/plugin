@@ -38,7 +38,7 @@ function harness({ now = 1_000, maxPendingPairs = 100 } = {}) {
   const state = new RelayState({ now: () => clock.now, maxPendingPairs })
   const host = new FakeSock('host')
   const client = new FakeSock('client')
-  state.attachHost('h1', host, 'bins-macbook')
+  state.attachHost('h1', host, 'my-macbook')
   state.attachClient('inst-1', client)
   return { state, clock, host, client, advance: (ms) => (clock.now += ms) }
 }
@@ -192,7 +192,7 @@ test('D6：主机断开先进宽限期，超时才判死；期间主机回来则
   h2.state.claim('654321', 'inst-1')
   h2.state.hostGone('h1', h2.host)
   const freshHost = new FakeSock('host-again')
-  h2.state.attachHost('h1', freshHost, 'bins-macbook')
+  h2.state.attachHost('h1', freshHost, 'my-macbook')
   h2.advance(999_000)
   assert.deepEqual(h2.state.expireOfflineHosts(120_000), [], '重连成功后不得再被判死')
   void client
@@ -203,7 +203,7 @@ test('D6 竞态：主机重连后，旧 socket 的 close 不得把会话打成�
   state.issuePair('h1', '123456', 180_000)
   const { conversationId } = state.claim('123456', 'inst-1')
   const newer = new FakeSock('host-new')
-  const { replaced } = state.attachHost('h1', newer, 'bins-macbook')
+  const { replaced } = state.attachHost('h1', newer, 'my-macbook')
   assert.equal(replaced, host)
   assert.equal(state.hostGone('h1', host), false, '旧 socket 的 close 必须被守卫跳过')
   assert.equal(state.conversations.get(conversationId).hostOfflineSince, undefined)

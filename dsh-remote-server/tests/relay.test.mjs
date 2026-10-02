@@ -564,7 +564,7 @@ test('ping/pong 原样回带 ts；两个客户端互不干扰', async () => {
 })
 
 test('/healthz 与 /api/info 的形状是测试与运维的依赖（T7）', async () => {
-  const ctx = await startRelay({ DRC_PUBLIC_URL: 'wss://drc.provid.cc' })
+  const ctx = await startRelay({ DRC_PUBLIC_URL: 'wss://drc.example.com' })
   try {
     await pairUp(ctx)
     const health = await fetch(`http://127.0.0.1:${ctx.port}/healthz`).then((r) => r.json())
@@ -578,7 +578,7 @@ test('/healthz 与 /api/info 的形状是测试与运维的依赖（T7）', asyn
     assert.equal(typeof health.version, 'string')
 
     const info = await fetch(`http://127.0.0.1:${ctx.port}/api/info`).then((r) => r.json())
-    assert.deepEqual(info, { publicUrl: 'wss://drc.provid.cc', protocol: 1 })
+    assert.deepEqual(info, { publicUrl: 'wss://drc.example.com', protocol: 1 })
 
     const missing = await fetch(`http://127.0.0.1:${ctx.port}/nope`)
     assert.equal(missing.status, 404)
