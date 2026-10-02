@@ -117,7 +117,7 @@ export function liveDeps(
       try {
         mkdirSync(path.dirname(file), { recursive: true })
         // 0600：这张图里就是那张一次性配对码（token + PSK），等同于凭据。
-        // 主插件的 pairing-qr.png 同款待遇。
+        // 主插件的 ~/.dsh/pairing-qr.png 同款待遇。
         writeFileSync(file, data, { mode: 0o600 })
         return true
       } catch {

@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { pairingImagePath, StatusFile, writePrivateFile } from '../src/shell/status.js'
 import { DEFAULT_SYSTEM_CLOCK, FakeClock } from '../src/core/clock.js'
@@ -207,10 +207,14 @@ test('嵌套字段（pairing / keepAwake / kernel）必须原样落地：那是�
   }
 })
 
-test('pairingImagePath：与 status.json 同目录，空串表示关闭', () => {
+test('pairingImagePath：DSH 配置目录根部，空串表示关闭', () => {
   assert.equal(pairingImagePath(''), '', 'statusFile 为空时二维码路径也必须为空，否则 PNG 会写到进程 CWD')
-  assert.equal(pairingImagePath('/home/u/.dsh/dsh-remote-control/status.json'), '/home/u/.dsh/dsh-remote-control/pairing-qr.png', '二维码与快照同目录：装到 profile 里时只有一个位置要管')
-  assert.equal(pairingImagePath('status.json'), 'pairing-qr.png', '相对路径同样只取目录部分')
+  assert.equal(
+    pairingImagePath('/home/u/.dsh/dsh-remote-control/status.json'),
+    path.join(homedir(), '.dsh', 'pairing-qr.png'),
+    '二维码放 ~/.dsh/ 根部：用户按卡片路径就能找到，不埋进实现目录',
+  )
+  assert.equal(pairingImagePath('status.json'), path.join(homedir(), '.dsh', 'pairing-qr.png'), '相对 statusFile 也落在同一个固定位置')
 })
 
 test('writePrivateFile 也是 0600：里面躺着一张仍然有效的配对二维码', () => {

@@ -17,7 +17,7 @@ import path from 'node:path'
 export interface PresentationConfig {
   /** 关掉就只留"什么都不做"这一种行为（路由不会注册）。 */
   enabled: boolean
-  /** 二维码 PNG 的落盘路径。默认与主插件的 status.json 同目录（DSH 配置目录，不是用户工作区）。 */
+  /** 二维码 PNG 的落盘路径。默认落在 DSH 配置目录根部（`~/.dsh/`，不是用户工作区）。 */
   imageFile: string
   /** 宿主侧刷新节拍：多久看一眼"当前配对码是不是换了"。 */
   refreshMs: number
@@ -25,7 +25,7 @@ export interface PresentationConfig {
 
 export const DEFAULT_PRESENTATION_CONFIG: PresentationConfig = {
   enabled: true,
-  imageFile: path.join(homedir(), '.dsh', 'dsh-remote-control', 'sidebar-qr.png'),
+  imageFile: path.join(homedir(), '.dsh', 'sidebar-qr.png'),
   refreshMs: 2000,
 }
 

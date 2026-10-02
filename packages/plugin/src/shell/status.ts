@@ -15,6 +15,7 @@
  *    "年龄 < 25s 且本轮未用过"的配对码（取证 HANDOFF.md §4.5 第 3 条）。
  */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import type { Clock, StatusSink } from '../ports/index.js'
 
@@ -86,10 +87,17 @@ export class StatusFile implements StatusSink {
   }
 }
 
-/** 配对二维码 PNG 的落点（与 status.json 同目录，同样 0600）。 */
+/**
+ * 配对二维码 PNG 的落点：**DSH 配置目录根部** `~/.dsh/pairing-qr.png`（同样 0600）。
+ *
+ * 为什么不与 status.json 同目录：PNG 是给用户/扫码器看的东西，不该埋进 `~/.dsh/dsh-remote-control/`
+ * 这个实现目录里；放根部一处，用户按卡片路径能直接找到。
+ * 参数只当开关用——statusFile 为空串表示这一行没配过，此时返回空串，调用方据此退回文本码
+ * （空串路径绝不能去 `path.join`，否则 PNG 会写到进程 CWD）。
+ */
 export function pairingImagePath(statusFile: string): string {
   if (!statusFile) return ''
-  return path.join(path.dirname(statusFile), 'pairing-qr.png')
+  return path.join(homedir(), '.dsh', 'pairing-qr.png')
 }
 
 export function writePrivateFile(file: string, data: Buffer | string): boolean {

@@ -109,7 +109,7 @@ node e2e/live-e2e.mjs                      # 真链路（本机 Harness 必须�
 - **配对二维码默认出图片**（2026-10-02 翻转原拍板）：真机取证发现 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白把半块文本码横切成条（用真机输出做受控实验：行距 1.0 时 zxing 解得出来、≥1.15 就扫不出来），文本码在这个宿主上根本扫不了。于是 `qrImage` 默认 **true**（写 `pairing-qr.png` 并把路径给用户）、`qrOpen` 仍默认 **false**（写图 ≠ 替你打开查看器）、`qrAnsi` 默认 false、`qrStyle` 默认 `half`（只在关掉 `qrImage` 时当退路）。命令 API 只接受纯文本，所以图片以"文件路径"的形式进卡片，卡片同时给可粘贴的 `dshr:/p?…` 一行。
 - **二维码自动进右栏**（2026-10-02，新增 `packages/presentation`）：`/drc pair` 之后
   右栏**自己弹出**当前配对码，用户不必再去点侧边栏。做法是一个 `dsh.client` 双面包——
-  宿主侧把码落成 `~/.dsh/dsh-remote-control/sidebar-qr.png` 并给一条同域只读路由
+  宿主侧把码落成 `~/.dsh/sidebar-qr.png` 并给一条同域只读路由
   `/plugins/dsh-remote-control-presentation/pairing`；浏览器侧每 2s 轮询它，
   `state==='ready'` 且 `epoch` 变了才 `ctx.sidebarRight.openResource(address)`。
   不切工作区、不写用户项目目录。**为什么拆成独立的包**：`openResource` 要用 `webServer`

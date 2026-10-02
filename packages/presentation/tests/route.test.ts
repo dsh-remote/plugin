@@ -54,7 +54,7 @@ async function ask(
 }
 
 const ready: PairingRouteOptions = {
-  imageFile: '/Users/x/.dsh/dsh-remote-control/sidebar-qr.png',
+  imageFile: '/Users/x/.dsh/sidebar-qr.png',
   snapshot: () => ({ state: 'ready', epoch: 'e1', expiresAt: 2_000_000 }),
 }
 const none: PairingRouteOptions = { imageFile: ready.imageFile, snapshot: () => ({ state: 'none' }) }
@@ -102,7 +102,7 @@ test('有码 + 可用 session → 200，地址就是那张图的会话作用域�
   assert.deepEqual(answer.body, {
     state: 'ready',
     epoch: 'e1',
-    address: 'dsh-resource://file/session/sess-1//Users/x/.dsh/dsh-remote-control/sidebar-qr.png',
+    address: 'dsh-resource://file/session/sess-1//Users/x/.dsh/sidebar-qr.png',
     expiresAt: 2_000_000,
   })
 })

@@ -7,7 +7,7 @@
  * （`sidebarRight: tab type "text" refuses "..."`）。会话 scope 里**允许直接放绝对路径**：
  * 这是宿主 `fileAddressFor()` 的既定语义（工作区外的绝对路径"keeps its absolute path
  * in that Session's address"），也是本包能"只编地址、不往用户工作区落文件"的全部依据。
- * 真机取证：把 `~/.dsh/dsh-remote-control/pairing-qr.png` 的绝对路径按会话 scope 编址，
+ * 真机取证：把 `~/.dsh/pairing-qr.png` 的绝对路径按会话 scope 编址，
  * 右栏直接把图渲染出来了。
  *
  * 编码规则与 `@deepseek-ai/dsh-util-workspace-path` 的 `encodeSegment` 同口径

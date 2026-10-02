@@ -5,7 +5,7 @@
  * （`sidebarRight: tab type "text" refuses "..."`），而屏幕上只会看到"什么都没发生"。
  * 具体形状来自 `@deepseek-ai/dsh-util-workspace-path` 的 `fileAddressFor` /
  * `parseFileAddress` 语义（绝对路径在会话作用域里保留前导斜杠 → 地址里出现双斜杠），
- * 以及真机上把 `~/.dsh/.../pairing-qr.png` 成功渲染出来的那次实验。
+ * 以及真机上把 `~/.dsh/pairing-qr.png` 成功渲染出来的那次实验。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,8 +13,8 @@ import { isUsableSessionId, sessionFileAddress } from '../src/address.js'
 
 test('工作区外绝对路径：前导斜杠必须保留（地址里出现双斜杠）', () => {
   assert.equal(
-    sessionFileAddress('sess-1', '/Users/x/.dsh/dsh-remote-control/pairing-qr.png'),
-    'dsh-resource://file/session/sess-1//Users/x/.dsh/dsh-remote-control/pairing-qr.png',
+    sessionFileAddress('sess-1', '/Users/x/.dsh/pairing-qr.png'),
+    'dsh-resource://file/session/sess-1//Users/x/.dsh/pairing-qr.png',
   )
 })
 
