@@ -1,1 +1,0 @@
-const props={globalConfig:{type:Object},themeVars:{type:Object}};export default props;

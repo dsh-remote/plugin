@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "对话",
-  "disableScroll": true,
-  "usingComponents": {
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
-  }
-}

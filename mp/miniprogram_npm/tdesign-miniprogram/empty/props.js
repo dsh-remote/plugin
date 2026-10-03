@@ -1,1 +1,0 @@
-const props={description:{type:String},icon:{type:null},image:{type:String}};export default props;
