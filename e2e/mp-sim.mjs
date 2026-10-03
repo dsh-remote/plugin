@@ -13,7 +13,7 @@
  *   页面用但协议层不用的：showToast / showModal / vibrateShort / vibrateLong（空实现）
  *
  * 两条顺序是硬要求：
- * 1. **先装 shim 再 import mp/core**（否则 `wx` 未定义，模块加载即坏）；
+ * 1. **先装 shim 再 import dsh-remote-mp/miniprogram/core**（否则 `wx` 未定义，模块加载即坏）；
  * 2. **绕过 require 缓存**（同一进程里多个测试用例要各自干净的 storage）。
  */
 import { createRequire } from 'node:module'
@@ -23,7 +23,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import WebSocket from 'ws'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-export const MP_DIR = path.join(here, '..', 'mp')
+// mp 的源码树在开源仓 `dsh-remote-mp` 里，小程序根目录是它的 `miniprogram/`
+// （`project.config.json` / `package.json` 在仓根，不在这一层——凡要读这两样的脚本都得往上一层取）。
+export const MP_DIR = path.join(here, '..', 'dsh-remote-mp', 'miniprogram')
 
 /** 记录所有经手的帧，供零知识审计与顺序断言使用。 */
 export function createRecorder() {

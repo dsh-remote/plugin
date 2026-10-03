@@ -4,12 +4,12 @@
  * 三个真实（照 docs/legacy-spec/testing-and-tooling.md §2 的纪律；把"线上中继 + 真内核"
  * 换成"本地中继 + mock 内核面"的那一条由 `e2e/live-e2e.mjs` 负责，不在本文件里）：
  *
- * 1. **真中继**：spawn `apps/server/dist/src/main.js` 这个真实进程，不是内存替身。
- * 2. **真插件运行时**：调用 `packages/plugin/dist/src/index.js` 的 `apply(ctx, injected)`
+ * 1. **真中继**：spawn `dsh-remote-server/dist/src/main.js` 这个真实进程，不是内存替身。
+ * 2. **真插件运行时**：调用 `dsh-remote-control/packages/plugin/dist/src/index.js` 的 `apply(ctx, injected)`
  *    真实入口（cordis 的 ctx 是假的——本机没有内核可挂）。`mockBridge: true` 让它挂
  *    `platform/mock-kernel.ts`，因此**会话 id 一律 `ses_mock*`**：这里证明的是"链路通"，
  *    绝不证明"内核通"。所有步骤输出都把这句话说在明处。
- * 3. **真小程序客户端**：`e2e/mp-sim.mjs` 把 `mp/core/{codec,session-store,client,env,socket}.js`
+ * 3. **真小程序客户端**：`e2e/mp-sim.mjs` 把 `dsh-remote-mp/miniprogram/core/{codec,session-store,client,env,socket}.js`
  *    原文件加载进 Node 驱动。这里没有任何"测试专用客户端"。
  *
  * 两条观察缝（都不替换被测组件，只是把已经在线上跑的字节抄一份下来看）：
@@ -29,15 +29,24 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
-import { EventEmitter } from 'node:events'
+import { createRequire } from 'node:module'
 import WebSocket from 'ws'
 import { createRecorder, installWxShim, loadMpModules, until, traceOf, MP_DIR } from './mp-sim.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT = path.join(here, '..')
-export const RELAY_MAIN = path.join(ROOT, 'apps/server', 'dist', 'src', 'main.js')
-export const PLUGIN_ENTRY = path.join(ROOT, 'packages', 'plugin', 'dist', 'src', 'index.js')
-export const MOCK_KERNEL_ENTRY = path.join(ROOT, 'packages', 'plugin', 'dist', 'src', 'platform', 'mock-kernel.js')
+export const RELAY_MAIN = path.join(ROOT, 'dsh-remote-server', 'dist', 'src', 'main.js')
+export const PLUGIN_ENTRY = path.join(ROOT, 'dsh-remote-control', 'packages', 'plugin', 'dist', 'src', 'index.js')
+export const MOCK_KERNEL_ENTRY = path.join(
+  ROOT,
+  'dsh-remote-control',
+  'packages',
+  'plugin',
+  'dist',
+  'src',
+  'platform',
+  'mock-kernel.js',
+)
 export { MP_DIR }
 
 /** 指令正文：含中文词，用于"这个词绝不出现在任何一帧里"的审计。 */
@@ -97,8 +106,11 @@ async function importBuildArtifact(file, label, attempts = 4) {
   }
   throw new Error(
     `加载${label}失败：${String(lastError?.message ?? lastError)}\n` +
-      '  先跑：env -u NODE_OPTIONS pnpm --filter @dsh-rc/protocol build && ' +
-      'env -u NODE_OPTIONS pnpm --filter dsh-remote-control build && env -u NODE_OPTIONS pnpm --filter @dsh-rc/server build',
+      // 三棵源码仓是**彼此独立的 pnpm workspace**，伞仓的 workspace 里只有 e2e，
+      // 所以这里不能再写 `pnpm --filter X build`（那个 filter 在伞仓根本匹配不到包）。
+      '  先逐仓构建：cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm build；' +
+      'cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm -r build；' +
+      'cd ../dsh-remote-server && env -u NODE_OPTIONS pnpm build',
   )
 }
 
@@ -110,25 +122,74 @@ export function frameT(text) {
   }
 }
 
-// ── 观察缝 1：全进程 ws 帧抓取 ────────────────────────────────────────
+// ── 观察缝 1：进程里**每一副本** ws 的帧抓取 ──────────────────────────
 
-export const tap = { frames: [], installed: false, phoneSocketLists: [] }
+/**
+ * 为什么这里要装"多副本"：私有树时期 e2e 与插件同属一个 pnpm workspace，`ws` 去重成同一个
+ * 物理文件，本文件 `import 'ws'` 拿到的类对象就是插件用的那个，补丁打一次两侧都看得见。
+ * 开源改造后插件住在 `dsh-remote-control/`（独立 workspace、独立 store），它解析到的是
+ * `dsh-remote-control/node_modules/.pnpm/ws@8.22.0/…`，与 e2e 那份是**两个不同的类对象**——
+ * `WebSocket.prototype` 上的补丁对它完全无效。表现极有迷惑性：中继日志里 `pair token issued`
+ * 在跳（说明 pair-begin 真的发出去了、配对码真的建了），而 e2e 断言却报"主机没发 hello /
+ * 等不到 pair-ready"，`tap.frames` 甚至是空的。那是**装置坏了**，不是产品坏了。
+ *
+ * 取副本按"被测产物实际解析到的位置"取（`createRequire(PLUGIN_ENTRY).resolve('ws')`），
+ * 不写死 store 路径：产物搬家这里自动跟上。解析不到就抛，绝不静默少装——少装一份等于
+ * 把主机侧断言全变成"看不到帧"，而最坏的一种通过就是绿得没有依据。
+ */
+const tapMarker = Symbol.for('drc.e2e.frameTap.patched')
 
-export function installFrameTap() {
-  if (tap.installed) return tap
-  const originalSend = WebSocket.prototype.send
-  const originalEmit = EventEmitter.prototype.emit
-  WebSocket.prototype.send = function patchedSend(data, ...rest) {
+export const tap = { frames: [], installed: false, phoneSocketLists: [], patched: [] }
+
+function patchWsClass(cls, label) {
+  const proto = cls?.prototype
+  if (!proto || proto[tapMarker] === true) return false
+  const originalSend = proto.send
+  const originalEmit = proto.emit
+  proto.send = function patchedSend(data, ...rest) {
     tap.frames.push({ side: sideOf(this), dir: 'sent', raw: String(data), at: Date.now() })
     return originalSend.call(this, data, ...rest)
   }
-  WebSocket.prototype.emit = function patchedEmit(event, ...args) {
+  proto.emit = function patchedEmit(event, ...args) {
     if (event === 'message') {
       const raw = Buffer.isBuffer(args[0]) ? args[0].toString('utf8') : String(args[0])
       tap.frames.push({ side: sideOf(this), dir: 'received', raw, at: Date.now() })
     }
     return originalEmit.apply(this, [event, ...args])
   }
+  Object.defineProperty(proto, tapMarker, { value: true, enumerable: false, configurable: true })
+  tap.patched.push(label)
+  return true
+}
+
+export function installFrameTap() {
+  if (tap.installed) return tap
+  // ① 本文件这份：手机侧（mp-sim 的 `wx.connectSocket`）用的就是它。
+  patchWsClass(WebSocket, 'e2e 自身（手机 shim）')
+  // ② 插件产物解析到的那份：主机侧的帧只有装了补丁才看得见。
+  const requireFromPlugin = createRequire(PLUGIN_ENTRY)
+  let pluginModule
+  try {
+    pluginModule = requireFromPlugin('ws')
+  } catch (error) {
+    throw new Error(
+      `装帧抓取失败：从 ${PLUGIN_ENTRY} 解析 'ws' 不通过（${String(error?.message ?? error)}）。` +
+        '要么插件的依赖没装（cd dsh-remote-control && env -u NODE_OPTIONS pnpm install），要么产物位置又变了。',
+    )
+  }
+  patchWsClass(pluginModule?.WebSocket ?? pluginModule, '插件产物（dsh-remote-control）')
+  // 判据写成"两侧各自用的类都带补丁标记"，而不是"装了几份"：
+  // 若哪天 pnpm 把两份 ws 去重成同一个物理文件，只数份数会假红一次（而那份数本身也不是产品事实）。
+  assert.equal(
+    WebSocket.prototype[tapMarker],
+    true,
+    '手机侧用的 ws 类没被装上帧抓取——手机侧断言将全部没有依据',
+  )
+  assert.equal(
+    (pluginModule?.WebSocket ?? pluginModule).prototype[tapMarker],
+    true,
+    '主机侧（插件产物）用的 ws 类没被装上帧抓取——主机侧断言将全部没有依据',
+  )
   tap.installed = true
   return tap
 }
@@ -385,10 +446,10 @@ export function installPhoneRig() {
   installFrameTap()
   const recorder = createRecorder()
   const shim = installWxShim({ recorder })
-  // 顺序硬要求：先装 wx shim，再加载 mp/core（mp-sim 的注释里写了为什么）。
+  // 顺序硬要求：先装 wx shim，再加载 dsh-remote-mp/miniprogram/core（mp-sim 的注释里写了为什么）。
   const mp = loadMpModules()
-  assert.equal(typeof mp.client.DrcClient, 'function', '必须加载到真实 mp/core/client.js 的 DrcClient')
-  assert.equal(typeof mp.codec.parsePairingQr, 'function', '必须加载到真实 mp/core/codec.js')
+  assert.equal(typeof mp.client.DrcClient, 'function', '必须加载到真实 dsh-remote-mp/miniprogram/core/client.js 的 DrcClient')
+  assert.equal(typeof mp.codec.parsePairingQr, 'function', '必须加载到真实 dsh-remote-mp/miniprogram/core/codec.js')
   tap.phoneSocketLists.push(shim.sockets)
   phoneRig = { mp, recorder, shim }
   return phoneRig
@@ -506,7 +567,7 @@ export async function pairPhone(host, phone, { pairing, expectedRelayUrl } = {})
  * 这个顺序是有意义的，不是洁癖：如果挂起的审批是在 `host.stop()` 的瞬间才被结算，
  * `KeepAwake.stop()` 之后的 `releaseHold() → evaluate() → ensureTimer()` 会再装一个
  * 10 秒自循环定时器，而 `stop()` 有 `stopped` 守卫、之后再也清不掉 —— 进程永不退出
- * （本次回报的源码 bug 之一，取证 packages/plugin/src/core/sleep-policy.ts:136-141、156-162）。
+ * （本次回报的源码 bug 之一，取证 dsh-remote-control/packages/plugin/src/core/sleep-policy.ts:136-141、156-162）。
  * 装置按"先结清、再停机"避开它，而不是把挂起态留到最后一步。
  */
 export async function shutdown({ phone, host, relay, signal = 'SIGTERM' } = {}) {
@@ -550,7 +611,7 @@ export function trailDump(phone, limit = 14) {
  * 实测代价就是"1.3s 打完全绿、进程 ~10s 后才退出"，而拖尾的正是提问卡那一步输掉的
  * `delay(10_000)`（它走 `node:timers/promises`，连包 global.setTimeout 的探针都看不见）。
  *
- * 产品侧同款写法在 `packages/plugin/src/platform/carrier-services.ts` 的 `withTimeout`：
+ * 产品侧同款写法在 `dsh-remote-control/packages/plugin/src/platform/carrier-services.ts` 的 `withTimeout`：
  * 那里 `finally` 里清了，所以没有这个问题——e2e 这边漏了，补齐。
  */
 export async function raceWithTimeout(promise, ms) {
@@ -644,7 +705,7 @@ export function auditRelayLogs(relay, { forbidden = [...CMD_LITERALS, ...PROMPT_
 // ── 载荷/字段级断言辅助 ───────────────────────────────────────────────
 
 /**
- * F7：会话行渲染。逐字照抄 `mp/pages/sessions/sessions.js:9-16、129-142` 的表达式，
+ * F7：会话行渲染。逐字照抄 `dsh-remote-mp/miniprogram/pages/sessions/sessions.js:9-16、129-142` 的表达式，
  * 特别是 `s.updatedAt.slice(11, 19)`——它就是"数字时间戳会让整屏列表静默不更新"的那一行。
  */
 export function renderSessionRow(s) {
@@ -703,7 +764,7 @@ export function assertListPushed({ resultPayload, sessionChangedPayload, cmdId, 
 /**
  * 宿主命令返回契约（`@deepseek-ai/dsh-commands` 的 `normalizeResult`）的最小复刻。
  *
- * 权威复刻件在 `packages/plugin/tests/command-result.test.ts`（含"带牙"反证与源码差分）；
+ * 权威复刻件在 `dsh-remote-control/packages/plugin/tests/command-result.test.ts`（含"带牙"反证与源码差分）；
  * 这里只保证"交给宿主的那一瞬形状合法"。线上事故 `command "drc" returned unknown result kind "text"`
  * 就发生在注册/调用边界上——所以在线分支也要在这里真的过一遍。
  */
@@ -747,7 +808,7 @@ export async function main() {
   }
 
   try {
-    await run('起真中继（apps/server/dist/src/main.js）并证明 /healthz 可达', async () => {
+    await run('起真中继（dsh-remote-server/dist/src/main.js）并证明 /healthz 可达', async () => {
       relay = await startRelay({ env: { DRC_SWEEP_MS: '1000' }, label: '本地中继' })
       const health = await relay.health()
       note(`中继 ${relay.url}：hosts=${health.hosts} clients=${health.clients} conversations=${health.conversations} version=${health.version}`)
@@ -780,7 +841,7 @@ export async function main() {
       note(`drc pair → kind=success/${pairResult.text.length}字符；drc status → relay=${snapshot.relay}`)
     })
 
-    await run('主机发布配对码 → pair-ready 带正整数 ttlMs → 手机用真实 mp/core 代码配对', async () => {
+    await run('主机发布配对码 → pair-ready 带正整数 ttlMs → 手机用真实 dsh-remote-mp/miniprogram/core 代码配对', async () => {
       phone = newPhone('主链路手机')
       const pairing = host.createPairing()
       const ready = await until(
@@ -850,8 +911,59 @@ export async function main() {
       note('列表里的 ses_mock* 恰恰证明这是 mock 内核；真内核列表非空由 live-e2e 取证')
     })
 
+    await run('cmd.new_session → 真 mp 代码 newSession 拿到新会话 id，且它立刻出现在列表里', async () => {
+      // 这一步为什么必须有：用户报过「新建会话用不了」，而当时的修法只落在**插件侧**
+      // （`sessionController.commands.create`）。链路层从没跑过这条命令 ——
+      // 单测能过、插件能应答，都不代表「手机点一下真能拿到 id」：
+      // 中继是否放行 `cmd.new_session`、`ev.result` 有没有回传、waiter 能不能结算，
+      // 这三件事只有真中继 + 真插件 + 真 mp 代码串起来才算验过。
+      //
+      // 判据分三段，缺一段都可能出现"点了没反应"：
+      //   ① 真的发出去过（`cmd.new_session` 上行，且带 cmdId）；
+      //   ② 真的结算了（`ok:true` 且 sessionId 是非空字符串）；
+      //   ③ 真的建出来了（主机推的列表里出现这个新 id —— 只回执不落库的话，
+      //      手机跳进 chat 页会看到一个不存在的会话，历史页永远空着）。
+      const before = phone.client.sessions.length
+      const created = await phone.client.newSession()
+      assert.ok(created, 'newSession() 返回 null = waiter 没结算（超时/断线/未被 ev.result 命中）')
+      const sent = phone.cmds.filter((c) => c.cmd.t === 'cmd.new_session').pop()
+      assert.ok(sent, '手机没发出 cmd.new_session')
+      assert.ok(sent.cmd.cmdId, 'cmd.new_session 必须带 cmdId（回执按它对答，缺了就永远等不到）')
+      assert.equal(created.ok, true, `新建失败：${created.message}`)
+      assert.equal(typeof created.sessionId, 'string', 'ok:true 时必须给 sessionId')
+      assert.ok(created.sessionId.length > 0, 'sessionId 不能是空串')
+      assert.notEqual(created.sessionId, MOCK_SESSION_ID, '新会话不能是那条既有的 mock 会话（那说明回执串了）')
+
+      // ③ 主机必须把新会话推回列表。列表是唯一数据源（F8），不推的话手机刷新也看不到它。
+      const pushed = await until(
+        () => phone.client.sessions.find((s) => s.id === created.sessionId),
+        { timeoutMs: 8000, label: `主机把新会话 ${created.sessionId} 推进列表` },
+      )
+      assert.ok(pushed, '主机回了 ev.result 但列表里没有这条会话（建了但没落库，手机会跳进一个不存在的会话）')
+      assert.ok(
+        phone.client.sessions.length > before,
+        `会话数应该变多：${before} → ${phone.client.sessions.length}`,
+      )
+
+      // 拿历史读一次：新会话的历史**该是空的**（用户还没发第一条指令），
+      // 但这一条要验的不是"空"而是"读得通"—— 返回 null 才是问题，
+      // 那正是用户「新建后进去一直转圈 / 空白」的路径。
+      //
+      // 注意别断言 items.length === 0：mock 内核的 readHistory 无条件返回
+      // `defaultHistory(sessionId)`（见 mock-kernel.ts），对**任何** sessionId 都给 3 条。
+      // 那是 mock 的简化，不是缺陷 —— 空会话真读出空内容由 live-e2e 在真内核上取证。
+      const emptyPage = await phone.client.loadHistory(created.sessionId, { limit: 3 })
+      assert.ok(emptyPage, '新会话的 loadHistory 返回 null（走不通的会话进 chat 页会一直转圈）')
+      assert.equal(emptyPage.sessionId, created.sessionId, '历史页的 sessionId 要与请求的一致')
+      assert.ok(Array.isArray(emptyPage.items), `新会话的历史页必须有 items 字段，收到 ${JSON.stringify(emptyPage).slice(0, 120)}`)
+      note(
+        `new_session → ${created.sessionId}（列表 ${before}→${phone.client.sessions.length} 条；` +
+          `新会话历史页读得通，${emptyPage.items.length} 条 —— mock 恒返回 defaultHistory，空会话为空要靠真内核取证）`,
+      )
+    })
+
     await run('cmd.session_history → 真 mp 代码 loadHistory 拿到一页历史，且游标能真的往前翻', async () => {
-      // 主机上**已有的**对话要能同步到手机：这一条走的是真 `mp/core/client.js` 的
+      // 主机上**已有的**对话要能同步到手机：这一条走的是真 `dsh-remote-mp/miniprogram/core/client.js` 的
       // `loadHistory`（不是测试自己拼帧），验的就是两端对 `cmd/ev.session_history` 的口径一致。
       const first = await phone.client.loadHistory(MOCK_SESSION_ID, { limit: 3 })
       assert.ok(first, 'loadHistory 返回 null = 这一页没拿到（未配对 / 超时 / 断线）')

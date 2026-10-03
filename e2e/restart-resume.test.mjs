@@ -16,8 +16,8 @@
  *     本条不要求是哪一种出口，只要求**必须观察到 `unknown_session` 或 `peer-left` 之一**，
  *     也就是"不许静默"。
  *
- * 三个真实：真中继（apps/server 产物，(b) 里真的 SIGTERM 再起重启）、真插件运行时
- * （`apply()` 真入口，(c) 里真的停机再重挂）、真 `mp/core/client.js`；
+ * 三个真实：真中继（dsh-remote-server 产物，(b) 里真的 SIGTERM 再起重启）、真插件运行时
+ * （`apply()` 真入口，(c) 里真的停机再重挂）、真 `dsh-remote-mp/miniprogram/core/client.js`；
  * **内核面是 `platform/mock-kernel.ts`**（会话 id 一律 `ses_mock*`，不证明真内核）。
  */
 import { after, describe, test } from 'node:test'

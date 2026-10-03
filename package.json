@@ -7,12 +7,14 @@
   "license": "MIT",
   "engines": { "node": ">=20" },
   "scripts": {
-    "build": "pnpm -r build",
     "test": "pnpm -r test",
     "e2e": "node e2e/run.mjs",
-    "check:mp-ui": "node scripts/check-mp-ui.mjs && node scripts/check-mp-contrast.mjs",
+    "repos:build": "cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm build && cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm -r build && cd ../dsh-remote-server && env -u NODE_OPTIONS pnpm build",
+    "install:profile": "sh dsh-remote-control/scripts/install-to-profile.sh",
+    "relay:local": "sh dsh-remote-server/scripts/relay-start.sh",
+    "check:mp-ui": "node scripts/check-mp-ui.mjs && node dsh-remote-mp/scripts/check-mp-contrast.mjs",
     "mp:lazyload": "node scripts/mp-lazyload-report.mjs",
-    "mp:theme": "node scripts/gen-mp-theme.mjs",
+    "mp:theme": "node dsh-remote-mp/scripts/gen-mp-theme.mjs",
     "mp:shots": "node scripts/mp-shots.mjs",
     "mp:probe": "node scripts/mp-probe.mjs",
     "mp:upload": "node scripts/mp-upload.mjs"

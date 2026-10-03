@@ -279,6 +279,32 @@ const CASES = {
     const p = await mini.currentPage()
     await p.waitFor(600)
 
+    // 造出「已配对 + 有会话」的状态：字色判据要读主机名、会话标题那些节点，
+    // 没配对时它们根本不渲染 —— 那样判据会静默退化成"跳过"，看起来全绿。
+    // 这里只摆**渲染需要的字段**，不碰 themeClass（主题要走真实切换链）。
+    await p.setData({
+      paired: true,
+      status: 'online',
+      hostLabel: 'Linbin 的 MacBook',
+      statusLabel: '在线',
+      statusTheme: 'success',
+      statusText: '已连接到主机',
+      keepAwakeOn: true,
+      keepAwakeText: '当前持锁中 · caffeinate',
+      sessions: [
+        {
+          id: 'p-1',
+          title: '探针用的会话标题',
+          workspace: '/Users/linbin/dsh-remote-control',
+          badgeText: '空闲',
+          badgeTheme: 'default',
+          running: false,
+          updatedAt: '23:40',
+        },
+      ],
+    })
+    await p.waitFor(400)
+
     // 默认态：没选过就是浅色
     const root0 = await p.$('.page-pad')
     const bg0 = await root0.style('background-color')
@@ -293,6 +319,9 @@ const CASES = {
     const bg1 = await root1.style('background-color')
     const data1 = await p.data()
     const rootClass = (await root1.attribute('class')) || ''
+
+    // 字色必须在**深色态**读 —— 切回浅色之后再读就全绿了，等于没测。
+    const inkChecks = await darkInkChecks(p)
 
     // 再点回来，验证**双向**（这是本次的核心：之前"固定浅色"只能压住深色、切不回来）
     await p.callMethod('onToggleTheme')
@@ -323,8 +352,68 @@ const CASES = {
       [l1 !== null && l0 !== null && l1 < l0 - 0.4, `深浅差得开（亮度 ${l0?.toFixed(2)} → ${l1?.toFixed(2)}）`],
       [data2.themeName === 'light', '再点一下切回浅色（双向可切）'],
       [l2 !== null && l0 !== null && Math.abs(l2 - l0) < 0.02, `切回来的底色与初始一致（亮度 ${l2?.toFixed(2)} vs ${l0?.toFixed(2)}）`],
+
+      // ── 字色（补上「深色下字全黑了」那个真机缺陷）──────────────────────
+      // 上面那组只验底色，漏了这个：底色确实变深了、class 也挂对了、页面 data 也对，
+      // 但**正文颜色**没跟着变 —— 主机名、会话标题凡是没显式写 color 的文字
+      // 全是近黑字压在深底上。根因是 `page { color: var(--td-text-color-primary) }`：
+      // page 自己身上没有 .theme-dark，var() 在那儿就解析成浅色表的近黑色，
+      // 算出的 color 作为**计算值**继承下去，后代重定义变量也不会重算。
+      //
+      // 所以判据必须落在**具体文字节点**上，且要与它所在容器的底色比：
+      // 底色验对了不代表字色验对了，这两件事互不蕴含。
+      ...inkChecks,
     ]
   },
+}
+
+/**
+ * 深色下逐个读文字节点的实际 color，与所在卡片底色比亮度。
+ * 挑的每个类名都是**故意没写 color** 的（靠继承），也就是这个 bug 的受害者；
+ * 一旦有人在这些类上补了显式 color，判据依然成立（读了真值再比），不会假红。
+ */
+async function darkInkChecks(page) {
+  // 主机名与列表标题只有在已配对、有会话时才渲染得出；没有就跳过（不判 ≠ 判过）
+  const data = await page.data()
+  if (!data.paired) return [[true, '未配对，跳过字色判据（这一组只在有主机卡时成立）']]
+
+  const lum = (c) => {
+    const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(String(c))
+    if (!m) return null
+    const [r, g, b] = [1, 2, 3].map((i) => Number(m[i]) / 255)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+
+  const out = []
+  const targets = [
+    ['.host-name', '主机名'],
+    ['.host-sub', '主机副标题'],
+    ['.keep-title', '防休眠标题'],
+    ['.keep-desc', '防休眠说明'],
+  ]
+  if ((data.sessions || []).length) {
+    targets.push(['.sess-title', '会话标题'], ['.sess-sub', '会话路径'])
+  }
+
+  const card = await page.$('.card')
+  const bgRaw = card ? await card.style('background-color') : null
+  const lBg = lum(bgRaw)
+
+  for (const [sel, label] of targets) {
+    const el = await page.$(sel)
+    if (!el) {
+      out.push([false, `${label}（${sel}）没渲染出来，无法验字色`])
+      continue
+    }
+    const fg = await el.style('color')
+    const lFg = lum(fg)
+    // 关键判据：深色底上字必须**比底亮**。反过来（字比底暗）就是隐形字。
+    out.push([
+      lFg !== null && lBg !== null && lFg > lBg,
+      `${label}的字要比底色亮（字 ${fg} 亮度 ${lFg?.toFixed(2)} vs 底 ${bgRaw} 亮度 ${lBg?.toFixed(2)}）`,
+    ])
+  }
+  return out
 }
 
 async function main() {

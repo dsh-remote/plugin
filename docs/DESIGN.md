@@ -213,9 +213,9 @@ pairing/qr.ts      矩阵 → 终端文本 / PNG（编码器来自 npm，见 §6
 `workspace:*`，取证：该文件头注释）、`src/vendor/qrcode-generator.ts`（数千行移植）、
 `qr.ts` 里手写的 CRC32 + grayscale PNG 编码器（其注释写着"因为插件装进外部 profile 必须保持零依赖"）。
 依赖被内联之后，"零依赖"这个理由不再成立，那些轮子就不必再自己造。
-`install-to-profile.sh` 也随之简化：产物只有 bundle + package.json，复制即可，
+`dsh-remote-control/scripts/install-to-profile.sh` 也随之简化：产物只有 bundle + package.json，复制即可，
 且不再受"pnpm 对 `file:` 依赖是硬链接拷贝、重建后 inode 变了 profile 里仍是旧副本"这个坑影响
-（取证：`HANDOFF.md:74-75`、`scripts/install-to-profile.sh` 注释）。
+（取证：`HANDOFF.md:74-75`、`dsh-remote-control/scripts/install-to-profile.sh` 注释）。
 
 ### 5.4 `e2e/` — 测试装置（不是产品代码，但它是契约的执行机构）
 

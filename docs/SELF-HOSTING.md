@@ -1,5 +1,10 @@
 # 自建中继服务部署指南
 
+> ⚠️ **这份是伞仓里的旧命名副本，权威在 `dsh-remote-server/docs/SELF-HOSTING.md`**（开源那份已按
+> `dsh-remote-*` 改名、版本号是 1.0.x，并多了 §4.1 容量基线）。两份已经分叉（本份多的是本机 host 侧
+> 一节与线上域名），别在这里新增内容——要改先改开源那份，再把本机特有的部分并回来。
+> 下面的 `apps/server`、`@dsh-rc/protocol/*`、`2.0.0` 都是改名前的叫法。
+
 `apps/server` 是一个单进程、纯内存的零知识 WebSocket 中继。运行时只有 `ws` 与 `zod`，
 而**生产入口只有一个文件**：`apps/server/dist/bundle/main.js`。
 
@@ -28,7 +33,7 @@ env -u NODE_OPTIONS pnpm --filter @dsh-rc/server build
 这条 `build` 做两件事（`apps/server/package.json`）：`tsc -p tsconfig.json`（类型检查 +
 `dist/src/**`）与 `node ../../scripts/bundle-relay.mjs`（esbuild 打成单文件）。
 
-打包结果（事实，出处 `scripts/bundle-relay.mjs`）：
+打包结果（事实，出处 `dsh-remote-server/scripts/bundle-relay.mjs`）：
 
 - **`ws` 与协议层全部内联**，端点 `import` 的 `@dsh-rc/protocol/frames`、`outbound`、`ids`
   都在产物里；只有 `bufferutil` / `utf-8-validate` 这两个**可选**原生加速模块留在外面，
@@ -142,12 +147,12 @@ grep -nE 'DRC_(MAX_AUTH_ATTEMPTS|MAX_PAIR_ATTEMPTS|MAX_PAIR_ATTEMPTS_PER_SEC)\b'
 凭据，手工同步两次就会有一边改了另一边没改，表现是"永远 `bad_token`"）：
 
 ```sh
-./scripts/relay-start.sh              # 127.0.0.1:8787，跑 tsc 产物 dist/src/main.js
-DRC_PORT=9000 ./scripts/relay-start.sh
-./scripts/relay-start.sh --bundle     # 跑单文件产物，与生产形态完全一致
+./dsh-remote-server/scripts/relay-start.sh              # 127.0.0.1:8787，跑 tsc 产物 dist/src/main.js
+DRC_PORT=9000 ./dsh-remote-server/scripts/relay-start.sh
+./dsh-remote-server/scripts/relay-start.sh --bundle     # 跑单文件产物，与生产形态完全一致
 ```
 
-脚本行为（照 `scripts/relay-start.sh` 的实现）：优先用环境变量 `DRC_HOST_TOKEN`，没有才从
+脚本行为（照 `dsh-remote-server/scripts/relay-start.sh` 的实现）：优先用环境变量 `DRC_HOST_TOKEN`，没有才从
 `${DSH_PROFILE:-~/.dsh/profiles/desktop}/cordis.patch.yml` 里抓 `hostToken:` 那一行（只打印前
 4 位，完整值不外泄）；两处都没有就报错退出，不会起来一个"没人能连上"的进程。缺产物时提示先跑
 `env -u NODE_OPTIONS pnpm --filter @dsh-rc/server build`。它固定导出
@@ -588,7 +593,7 @@ host 插件是跑在 DSH 进程里的 cordis bundle，它的产物同样是**自
 
 ```sh
 env -u NODE_OPTIONS pnpm --filter @dsh-rc/server build
-./scripts/relay-start.sh --bundle     # 127.0.0.1:8787，token 复用 profile 里那一份
+./dsh-remote-server/scripts/relay-start.sh --bundle     # 127.0.0.1:8787，token 复用 profile 里那一份
 ```
 
 细节见 §3。生产部署不走这个脚本（走 systemd + `/etc/dsh-remote-control.env`），它只服务本地。
@@ -596,14 +601,14 @@ env -u NODE_OPTIONS pnpm --filter @dsh-rc/server build
 ### 10.2 装插件
 
 ```sh
-./scripts/install-to-profile.sh                      # 目标 ~/.dsh/profiles/desktop
-DSH_PROFILE=~/.dsh/profiles/tui ./scripts/install-to-profile.sh
+./dsh-remote-control/scripts/install-to-profile.sh                      # 目标 ~/.dsh/profiles/desktop
+DSH_PROFILE=~/.dsh/profiles/tui ./dsh-remote-control/scripts/install-to-profile.sh
 ```
 
 按脚本内容逐条说明它会做什么：
 
 1. **构建**：`env -u NODE_OPTIONS pnpm --filter @dsh-rc/protocol build` +
-   `node scripts/bundle-plugin.mjs`。刻意**不跑 tsc**——装 profile 只需要产物，
+   `node dsh-remote-control/scripts/bundle-plugin.mjs`。刻意**不跑 tsc**——装 profile 只需要产物，
    单元测试编译失败不该挡住"把当前代码装进宿主验一把"；类型检查是
    `env -u NODE_OPTIONS pnpm -r typecheck` / CI 的事。
 2. **目标必须是真目录**：`$PROFILE/node_modules/dsh-remote-control` 若是**软链**，
@@ -626,7 +631,7 @@ DSH_PROFILE=~/.dsh/profiles/tui ./scripts/install-to-profile.sh
 **再物化一份**进 profile，于是宿主里同时跑着**两个插件实例**：两个 `hostId`、中继里两份会话、
 手机连到哪一个全凭运气，而 `status.json` 的计数来自另一个实例——表现就是"改了的代码没生效"
 和"数字怎么都对不上"。现在的安装方式只有这一条：单文件 bundle + `bundles` 列表里的名字。 **[已验证：
-`scripts/install-to-profile.sh` + `HANDOFF.md` §4.2；本机 profile 现在 `bundles` 里有名字、
+`dsh-remote-control/scripts/install-to-profile.sh` + `HANDOFF.md` §4.2；本机 profile 现在 `bundles` 里有名字、
 `dependencies` 里没有该条目、`node_modules/dsh-remote-control` 是真目录]**
 
 改完代码必须**重启 Harness**：HMR 只热更 `cordis.patch.yml` 里的配置，不会重新 `import` dist。
@@ -702,7 +707,7 @@ curl -s https://drc.provid.cc/healthz          # version 必须是新版本，�
 升级 host 插件：
 
 ```sh
-./scripts/install-to-profile.sh
+./dsh-remote-control/scripts/install-to-profile.sh
 # 然后重启 Harness（不重启等于没升级：HMR 不会重新 import dist）
 osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 6; open -a "DeepSeek Harness"
 cat ~/.dsh/dsh-remote-control/status.json      # relay 应回到 online
@@ -828,8 +833,8 @@ curl -s https://drc.provid.cc/healthz
 journalctl -u dsh-remote-control -o cat | grep '"level":"warn"'
 
 # 本机（host 侧）
-./scripts/relay-start.sh --bundle
-./scripts/install-to-profile.sh
+./dsh-remote-server/scripts/relay-start.sh --bundle
+./dsh-remote-control/scripts/install-to-profile.sh
 cat ~/.dsh/dsh-remote-control/status.json
 
 # 取证

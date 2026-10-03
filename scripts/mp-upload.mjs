@@ -27,7 +27,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const MP_DIR = path.join(ROOT, 'mp')
+// 小程序现在是独立开源仓：`--project` 与 `package.json` 都取仓根
+// （`project.config.json` 里 `miniprogramRoot: "miniprogram/"`，代码在它的下一层）。
+const MP_DIR = path.join(ROOT, 'dsh-remote-mp')
 
 const argv = process.argv.slice(2)
 const flag = (name, fallback) => {
@@ -71,12 +73,12 @@ function resolveCli() {
 }
 
 /**
- * 描述默认取**最近一次动到 mp/ 的提交**，而不是仓库最近一条 ——
- * 这是多 agent 协作的仓库，HEAD 很可能是后端或文档的提交，
- * 拿去当小程序版本描述会驴唇不对马嘴。
+ * 描述默认取**小程序仓自己**的最近一条提交 subject。
+ * 开源改造前 mp 是伞仓的一个目录，那时必须带 `-- mp/` 路径限定，否则拿到的是后端/文档提交；
+ * 现在 `dsh-remote-mp` 本身就是独立 git 仓，HEAD 天然就是"最近一次动到小程序"的那条。
  */
 function defaultDesc() {
-  const r = spawnSync('git', ['log', '-1', '--format=%s', '--', 'mp/'], {
+  const r = spawnSync('git', ['-C', 'dsh-remote-mp', 'log', '-1', '--format=%s'], {
     cwd: ROOT,
     encoding: 'utf8',
   })

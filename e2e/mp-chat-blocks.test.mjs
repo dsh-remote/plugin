@@ -52,7 +52,7 @@ let captured = null
 globalThis.Page = (cfg) => {
   captured = cfg
 }
-require(path.join(ROOT, 'mp/pages/chat/chat.js'))
+require(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'))
 assert.ok(captured, 'Page() 没被调用 —— 页面代码没加载起来')
 
 /**
@@ -264,6 +264,34 @@ test('流式 delta 合并成一块，done 落在块上', () => {
   assert.equal(texts[0].done, true)
 })
 
+test('空正文帧（reasoning-only 的 assistant 消息）不许留下空白块', () => {
+  // 宿主里绝大多数 assistant/message 带的是 reasoning + tool-call，正文是空的；
+  // 按 M28 只有 type==='text' 的分片出站，于是每一条都变成一帧 delta:'' + done:true。
+  // 第一版照样给它建了一个空text 块，界面上就是一排只有 padding 的空白窄条
+  // （真机截图：回复正文下面三个空壳）。这一页的主题是"看结论"，凭空三行空白更糟。
+  const p = makePage()
+  p.data.inputText = '跑一下'
+  p.onSend()
+  const before = p.data.blocks.length
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'started' })
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-empty', delta: '', done: true, role: 'assistant' })
+  p._flushDelta()
+  assert.equal(
+    p.data.blocks.filter((b) => b.kind === 'text').length,
+    0,
+    '空正文不许建块：.reply 只剩 padding，屏幕上是一条什么都没有的窄条',
+  )
+  assert.equal(p.data.blocks.length, before + 1, '只有那条工具块该留下（步骤组默认不渲染，但数据要落）')
+
+  // 关键：紧随其后的**带字**帧必须照常建块，不能被这一帧"用过就没了"连累。
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-real', delta: '结论是这样。', done: true, role: 'assistant' })
+  p._flushDelta()
+  const texts = p.data.blocks.filter((b) => b.kind === 'text')
+  assert.equal(texts.length, 1, '带正文的帧必须正常落块')
+  assert.equal(texts[0].text, '结论是这样。')
+  assert.equal(texts[0].done, true)
+})
+
 test('宿主回传的用户消息要与本地回显去重', () => {
   const p = makePage()
   p.data.inputText = '看下 git status'
@@ -375,8 +403,8 @@ test('过程窗口：组内自动滚到组尾，但只有还在跑的组才给 -
 })
 
 test('「回到最新」的锚点必须是两个静态 id；过程窗口必须限高且用 scroll-view', () => {
-  const wxml = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxml'), 'utf8')
-  const wxss = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxss'), 'utf8')
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8')
 
   // 锚点曾写成 <view id="{{toView}}"> —— 同一个元素跟着 toView 改名。那要赌
   // "元素改名"与"scroll-into-view 生效"谁先落到渲染层上，赌输了 scroll-view 会
@@ -420,7 +448,7 @@ test('过程块默认不渲染，但数据照样落块', () => {
   assert.equal(tool.result, 'ok')
 
   // 渲染层：wxml 里那一支必须由 showSteps 门住
-  const wxml = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxml'), 'utf8')
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
   assert.match(
     wxml,
     /wx:if="\{\{item\.kind === 'steps' && showSteps\}\}"/,
@@ -651,7 +679,7 @@ test('历史：第一页读到了但不许自动跟底（用户在读旧内容�
 })
 
 test('历史头的文案不许自相矛盾（这类缺陷只有截图看得见，所以用断言补一道闸）', () => {
-  const wxml = fs.readFileSync(path.join(ROOT, 'mp/pages/chat/chat.wxml'), 'utf8')
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
   // 「还有更早」那一支只在 hasMore 为真时渲染。它左边曾写着「已到最早加载的位置」——
   // 恰好是反的，而旁边紧跟着「加载更早的内容」。控件都是对的时候，只有放大看文案才发现。
   const from = wxml.indexOf('wx:elif="{{hasMore}}"')

@@ -1,10 +1,10 @@
 /**
- * mp-client.test — **真实 `mp/core/client.js`** 驱动的本地闭环。
+ * mp-client.test — **真实 `dsh-remote-mp/miniprogram/core/client.js`** 驱动的本地闭环。
  *
  * 三个真实（对照 docs/legacy-spec/testing-and-tooling.md §2）：
- * - 中继是真的（`apps/server/dist/src/main.js` 真进程）
- * - 插件运行时是真的（`packages/plugin/dist/src/index.js` 的 `apply(ctx, injected)` 真入口）
- * - 小程序客户端是真的（`e2e/mp-sim.mjs` 把 `mp/core/*.js` 原文件加载进 Node 驱动）
+ * - 中继是真的（`dsh-remote-server/dist/src/main.js` 真进程）
+ * - 插件运行时是真的（`dsh-remote-control/packages/plugin/dist/src/index.js` 的 `apply(ctx, injected)` 真入口）
+ * - 小程序客户端是真的（`e2e/mp-sim.mjs` 把 `dsh-remote-mp/miniprogram/core/*.js` 原文件加载进 Node 驱动）
  *
  * **内核面是 mock**：`mockBridge: true` 走 `platform/mock-kernel.ts`，所以列表里的会话 id
  * 一律是 `ses_mock*`。这些用例证明的是"链路 + 字段契约通"，**不**证明真内核能跑
@@ -44,7 +44,7 @@ import { until } from './mp-sim.mjs'
 
 const SESSION_STATES = ['idle', 'running', 'detached', 'archived', 'awaiting-permission', 'awaiting-answer']
 
-describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 = mock-kernel）', () => {
+describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件运行时（内核面 = mock-kernel）', () => {
   const workDir = path.join(os.tmpdir(), `drc-e2e-mpclient-${process.pid}`)
   let relay = null
   let host = null
@@ -144,7 +144,7 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
     assert.doesNotThrow(() => assertSessionShape(iso))
 
     // 为什么手机上的表现是"静默"：抛错被 client.emit() 吞掉，后面的监听器照常跑，
-    // 用户看不到任何提示（mp/core/client.js:53-61）。这条用真实客户端证明"没有出口"。
+    // 用户看不到任何提示（dsh-remote-mp/miniprogram/core/client.js:53-61）。这条用真实客户端证明"没有出口"。
     const seen = []
     const offThrowing = phone.client.on(() => {
       throw new TypeError('模拟页面渲染抛错：s.updatedAt.slice is not a function')
@@ -440,7 +440,7 @@ describe('真 mp/core/client.js × 真中继 × 真插件运行时（内核面 =
 
   test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {
     // 为什么这条值得占一个用例：中继只要把 sessionId→conv 映射搞错一次（或用错 PSK 派生密钥），
-    // 手机在两帧之后就会**永久**丢掉配对并要求重新扫码（mp/core/client.js:294-304）。
+    // 手机在两帧之后就会**永久**丢掉配对并要求重新扫码（dsh-remote-mp/miniprogram/core/client.js:294-304）。
     // 这里不替换任何组件：直接拿真实 client 的收帧入口 `_onEncrypted` 喂两条"格式完全正确、
     // 但用另一条通道的密钥封出来"的记录——这就是那种故障在手机上呈现的字节。
     const client = phone.client

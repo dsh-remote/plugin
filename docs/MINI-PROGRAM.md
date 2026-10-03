@@ -99,7 +99,7 @@ TDesign 把浅色和深色**两套变量都包在 `@media (prefers-color-scheme)
 
 ### 生成物
 
-`theme/light.wxss` 与 `theme/dark.wxss` **都是 `node scripts/gen-mp-theme.mjs` 的生成物，
+`theme/light.wxss` 与 `theme/dark.wxss` **都是 `node dsh-remote-mp/scripts/gen-mp-theme.mjs` 的生成物，
 不要手改**（`pnpm mp:theme`，`--check` 在 CI 里发现"忘了重新生成"）。
 
 脚本会做**变量覆盖对账**：浅色定义过、而深色没有的变量会直接报错退出。已知有两处 ——
@@ -343,9 +343,9 @@ pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（�
 底色更深，几个变量真机上明显偏暗。2026-10-02 实测：238 组前景/背景里 **45 组
 不达标**，`placeholder` 压卡片底只有 3.16:1，晚上看会话的时间戳与路径基本靠猜。
 
-`check:mp-ui` 里的 `check-mp-contrast.mjs` 会展开两套变量表、算真实的前景/背景、
+`check:mp-ui` 里的 `dsh-remote-mp/scripts/check-mp-contrast.mjs` 会展开两套变量表、算真实的前景/背景、
 按 WCAG 判阈值（正文 4.5，大字与图形 3）。**改任何颜色前先跑它**，
-调整后的值与实测前后对比写在 `gen-mp-theme.mjs` 的
+调整后的值与实测前后对比写在 `dsh-remote-mp/scripts/gen-mp-theme.mjs` 的
 `DARK_READABILITY` / `LIGHT_READABILITY` 两张表里。
 
 **一个颜色变量不要同时当前景和背景用。** `--td-brand-color` 就同时扛两个互斥角色：
@@ -356,7 +356,7 @@ pnpm mp:lazyload                      # 按需注入前后各注入多少 JS（�
 
 **做法：先算出两个角色各自的可行区间，无解就拆变量，别找折中值。**
 
-生成期还有两个护栏（都在 `gen-mp-theme.mjs`）：
+生成期还有两个护栏（都在 `dsh-remote-mp/scripts/gen-mp-theme.mjs`）：
 `checkCssSanity` 验拼出的 CSS 合法 —— **一段非法声明会让整条规则作废**，
 同规则里其他修正跟着静默失效；`checkReadabilityOrder` 验灰阶序，判据用
 **对比度递减**而不是亮度（深色白字越往后越暗、浅色黑字越往后越**亮**，方向相反）。

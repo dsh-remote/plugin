@@ -22,7 +22,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const MP_DIR = path.join(here, '..', 'mp')
+// 开源改造后小程序住在独立仓 `dsh-remote-mp`：`app.json`/`pages`/`theme` 在 `miniprogram/` 下，
+// 而 `project.config.json` 在**仓根**（`miniprogramRoot: "miniprogram/"`），两层要分开取。
+const MP_REPO = path.join(here, '..', 'dsh-remote-mp')
+const MP_DIR = path.join(MP_REPO, 'miniprogram')
 const quiet = process.argv.includes('--quiet')
 
 const problems = []
@@ -188,10 +191,13 @@ if (Object.keys(globalComponents).length) {
   )
 }
 
-// ⑤ 打包排除项必须在：TDesign 是预置产物，node_modules 不该进包
-const projectConfig = readJson(path.join(MP_DIR, 'project.config.json'))
+// ⑤ 打包排除项必须在：TDesign 是预置产物，node_modules 不该进包。
+//    `project.config.json` 现在在**仓根**，所以它里面的 ignore 路径是相对仓根的
+//    （`miniprogram/core/package.json`），不再是旧 mp/ 时代的 `core/package.json`——
+//    层级变了但守的还是那三样，别把它当成"检查变松了"。
+const projectConfig = readJson(path.join(MP_REPO, 'project.config.json'))
 const ignored = (projectConfig?.packOptions?.ignore ?? []).map((x) => x.value)
-for (const must of ['node_modules', 'core/package.json', 'package-lock.json']) {
+for (const must of ['node_modules', 'miniprogram/core/package.json', 'package-lock.json']) {
   if (!ignored.includes(must)) problems.push(`project.config.json: packOptions.ignore 少了 ${must}`)
 }
 
@@ -333,6 +339,68 @@ if (!quiet) {
     console.log('提示（不算错）：')
     for (const n of notes) console.log(`  · ${n}`)
     console.log('')
+  }
+}
+
+// ── 主题：挂在根容器上的 .theme-dark 必须自己声明正文色 ────────────────
+// 这条是**真机截图逼出来的**：深色模式下主机名、会话标题凡是没显式写 color 的
+// 文字全变成了近黑字压在深底上，看着像"深色配色坏了"。
+// 根因不是某处写错了颜色，而是 `page { color: var(--td-text-color-primary) }`：
+// CSS 自定义属性在**声明它的元素上**解析，而 `page` 自己身上没有 .theme-dark
+// （那个 class 挂在页面的根容器 view 上），所以 var() 取到浅色表的 #1f2329；
+// 算出的 color 作为**计算值**继承给后代，后代重定义了变量也不会重算 ——
+// 继承来的计算值与变量的当前值是两回事。
+// 修法：在挂了 .theme-dark 的那个节点上重新声明一次 color。
+//
+// 这里只做**结构**断言（挂 class 的节点有没有声明 color）。它抓不到具体色值，
+// 色值由 scripts/mp-probe.mjs 在渲染层读真实计算样式来判。
+{
+  // 页面根容器 = wxml 里第一个带 {{themeClass}} 的节点；它用的类就是主题挂载点。
+  const pageDirs = readdirSync(path.join(MP_DIR, 'pages'), { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+
+  for (const page of pageDirs) {
+    const wxmlPath = path.join(MP_DIR, 'pages', page, `${page}.wxml`)
+    if (!existsSync(wxmlPath)) continue
+    const wxml = read(wxmlPath).replace(/<!--[\s\S]*?-->/g, '')
+
+    // 找出所有同时出现 {{themeClass}} 的 class="..."，取其第一个类名作为挂载点
+    const mounts = new Set()
+    for (const m of wxml.matchAll(/class="([^"]*\{\{\s*themeClass\s*\}\}[^"]*)"/g)) {
+      const first = m[1].trim().split(/\s+/)[0]
+      if (first) mounts.add(first)
+    }
+    if (!mounts.size) {
+      problems.push(
+        `pages/${page}/${page}.wxml: 没有任何节点挂 {{themeClass}} —— 这一页不会跟着主题切换`,
+      )
+      continue
+    }
+
+    // 挂载点类名可能定义在本页 wxss，也可能定义在 app.wxss（.page-pad 就是）
+    const localWxss = path.join(MP_DIR, 'pages', page, `${page}.wxss`)
+    const appWxss = path.join(MP_DIR, 'app.wxss')
+    const haystacks = [localWxss, appWxss].filter(existsSync).map((f) => ({
+      file: f,
+      text: read(f).replace(/\/\*[\s\S]*?\*\//g, ''),
+    }))
+
+    for (const cls of mounts) {
+      // 取该类的规则块（到下一个 `}` 为止），看里面有没有 color
+      const found = haystacks.some(({ text }) => {
+        const re = new RegExp(`\\.${cls}\\s*(,[^{]*)?\\{([^}]*)\\}`)
+        const m = text.match(re)
+        return m && /(^|[;{\s])color\s*:/.test(m[2])
+      })
+      if (!found) {
+        problems.push(
+          `pages/${page}: 主题挂载点 .${cls} 没有声明 color —— ` +
+            '深色下所有没显式写 color 的文字会继承 page 的浅色计算值（近黑），在深底上等于隐形。' +
+            `在 .${cls} 的规则里加 color: var(--td-text-color-primary);`,
+        )
+      }
+    }
   }
 }
 

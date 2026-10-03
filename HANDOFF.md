@@ -15,10 +15,14 @@
 scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回到 1（线上宿主插件自动重连
 到新中继）——"能换"是这么证的，不是猜的。私有那套 2.x 编号作废，以后只有开源的号。
 
-> ⚠️ **接手第一件事：把 e2e 跑绿。** 这轮只做了"把引用改指开源仓"（22 个文件），
-> **没有做"跑绿"**。协议层的分组重构（`frames`→`wire/`、`keys`→`crypto/`、`ids`→`identity/`）、
-> 插件产物位置、mp 的目录层级都变了，而且这批文件正被并行会话同时编辑（见 §4 第 9 条）。
-> **在 `node e2e/run.mjs` 与 `node --test e2e/*.test.mjs` 重新跑绿之前，任何 e2e 结论都别引用。**
+> ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **112 pass / 0 fail**，
+> `node e2e/run.mjs` = **16 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×3 产物 0 失败。
+> 上一轮只做了"把注释与 import 改指开源仓"，**代码里的路径还指着已删的私有树**，本轮补完：
+> `mp/` → `dsh-remote-mp/miniprogram/`、`packages/{protocol,plugin}` → 各开源仓产物、
+> 协议层分组（`frames`→`wire/`、`keys`→`crypto/`、`ids`→`identity/`）。
+> 期间抓到一条**装置级**缺陷（不是产品缺陷）：帧抓取只装了本文件 import 的那份 `ws`，
+> 而插件住在独立 workspace、解析到自己那份物理副本，主机侧帧一条都进不来——
+> 症状是"中继日志明明 `pair token issued`，e2e 却说主机没发 hello"。详见 §4 第 10 条。
 
 ### 0.1 剩下的事（源码副本已删，开源仓为准）
 
@@ -28,8 +32,9 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 | 移植 mp 的在飞改动 | ✅ 已移植（mp `aac0f60`，verify/theme:check/contrast 三道闸全过）；presentation 的功能按用户拍板要折进主插件，见 §9.1 |
 | 开源仓不含设计文档 | ✅ 已执行（control `a6aebc5` 删掉整个 docs/，连带修好 README 与 feature_request.yml 里会 404 的两处引用）。**保留**：server 仓 `docs/SELF-HOSTING.md`、mp 仓 `docs/ARCHITECTURE.md`、四仓根目录的 README/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG |
 | 删除伞仓五棵私有树 | ✅ **已删**（提交 f5a6853）；同轮把 e2e/scripts 的 22 个文件改指开源仓，残留私有路径引用 0 |
-| 重接 `e2e/`、`scripts/` 到开源仓路径 | 已改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs,package.json}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs,check-mp-ui.mjs,mp-probe.mjs}`。包名与目录结构都变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`；协议层从扁平改成 `crypto/`、`identity/` 等分组） | **但没跑绿**——这是接手第一件事，见 §0 的警告框
-| ⚠️ 协作冲突 | `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` **正被并行会话编辑**。改这批文件前先确认它停了，否则两边互相覆盖 |
+| 重接 `e2e/`、`scripts/` 到开源仓路径 | ✅ **已跑绿**：路径改完（`run.mjs` 的 `PLUGIN_ENTRY`/`MOCK_KERNEL_ENTRY`、6 个 e2e 文件、`validate-qr/check-mp-ui/mp-shots/mp-upload/mp-lazyload-report`），判据见 §0 的绿框。**顺带删掉伞仓 7 个与开源仓重复的脚本**（`bundle-{plugin,presentation,relay}`、`install-to-profile.sh`、`relay-start.sh`、`check-mp-contrast.mjs`、`gen-mp-theme.mjs`）——唯一事实源在各仓自己的 `scripts/` 里，伞仓那 7 份是改名前的旧副本 |
+| 伞仓 `.github/workflows/ci.yml` | ✅ **已删**：伞仓没有 remote 所以它永远不会跑，而且内容描述的还是已删的 `apps/server` 布局；CI 的家在四个开源仓（各自 ci.yml + Release 工作流，全绿）。**代价**：伞仓的 e2e 取证套件从此没有自动闸门，跑与不跑靠人（它需要四棵平行仓在场，GitHub 上拿不到） |
+| ⚠️ 协作冲突（已结算） | 并行会话（WorkBuddy）在 `e2e/**`、`scripts/**` 的在飞改动**已随本轮提交进伞仓**（用户 2026-10-03 授权"直接在混合工作树上改并提交"）：含新增未跟踪文件 `e2e/mp-pair-recovery.test.mjs`（新建会话链路取证，16 步里第 7 步的作者就是它）。`.workbuddy/**` 的日志改动**没替它提交**，仍留在工作树 |
 
 并行会话的在飞改动**已整份备份**到 `~/.provid/backups/dsh-umbrella-inflight-20261003.patch`（600，
 含未跟踪的新测试文件），生产旧产物也在服务器上留了 `relay.mjs.bak-20261003-075757` 可回滚。
@@ -56,7 +61,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
    在 npm 上已被第三方占用（发布者 `weijf14-gmail`）。指仓库写 `dsh-remote-protocol`，
    指包写 `dsh-remote-wire`。
 2. **`dsh-remote-control-presentation` 刻意不发 npm**（用户 2026-10-03 拍板）。
-   `packages/presentation` 是 `private: true`，随 `scripts/install-to-profile.sh` 以 bundle 装进
+   `packages/presentation` 是 `private: true`，随 `dsh-remote-control/scripts/install-to-profile.sh` 以 bundle 装进
    profile。`pnpm -r publish --dry-run` 只会列出插件包一个——这是可复核的判据。
 3. **协议是 npm 依赖（`^1.0.0`），不是 git 依赖**。别退回 git 依赖：pnpm 11.7 下 git 包的
    `prepare` 只认含 commit 的精确 `allowBuilds` 键，四种宽松写法全被拒，每次升版都要手改两个消费仓。
@@ -141,6 +146,17 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 9. **同一工作树有第二个 agent 在跑**（`fullAccess`）。截至本文写下时它在飞的改动：
    `mp/**`、`e2e/**`（含新文件 `e2e/mp-pair-recovery.test.mjs`）、`packages/plugin/{src,tests}/platform/carrier*`、
    `scripts/mp-*.mjs`、`.workbuddy/**`。**别替它提交**，也别跑全量 build 打断它。
+   —— 2026-10-03 本轮：该会话已无进程（最后写入 08:21），用户授权后 e2e/scripts 的在飞改动**已替它提交**，
+   只剩 `.workbuddy/**` 仍在工作树里没动。
+10. **进程里现在有两份物理的 `ws`，观察缝必须都装**。私有树时期 e2e 与插件同属一个 pnpm workspace，
+    `ws` 去重成同一个文件，`WebSocket.prototype` 打一次补丁两侧都看得见。开源改造后插件住在
+    `dsh-remote-control/`（独立 workspace、独立 store），它 `import 'ws'` 拿到的是
+    `dsh-remote-control/node_modules/.pnpm/ws@8.22.0/…`——**与 e2e 那份是两个不同的类对象**。
+    于是 `e2e/run.mjs` 的帧抓取对主机侧完全失明：`tap.frames` 是空的，报出来的却像产品缺陷
+    （"主机没发 hello""等不到 pair-ready"），而中继日志里 `pair token issued` 明明在跳。
+    现在的装法是**按被测产物实际解析到的位置取副本**（`createRequire(PLUGIN_ENTRY)('ws')`），
+    装不上就抛——少装一份等于把主机侧断言全变成"看不到帧"，那是最坏的一种通过。
+    **同类坑还在**：`qrcode`/`tweetnacl` 也是两份副本，将来谁想用 prototype 补丁观察它们，得同样按位置取。
 
 ## 5. 命令速查
 
@@ -156,11 +172,13 @@ gh run watch --repo providcc/dsh-remote-control          # 看 Release 工作流
 curl -s https://registry.npmjs.org/dsh-remote-wire | head -c 200
 
 
-# 生产与私有树（伞仓）
-curl -s https://drc.provid.cc/healthz                    # 线上真相（现在=开源仓产物 version 1.0.0）
+# 生产与伞仓资产（取证/运维，伞仓已不含源码树）
+curl -s https://drc.provid.cc/healthz                    # 线上真相（现在=开源仓已发布产物 version 1.0.1）
 cat ~/.dsh/dsh-remote-control/status.json                 # 插件侧真相
 env -u NODE_OPTIONS node e2e/run.mjs                      # 本地全链路
-env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑
+env -u NODE_OPTIONS pnpm -r test                          # 伞仓闸门 = e2e 全部 *.test.mjs + run.mjs
+env -u NODE_OPTIONS npm --prefix dsh-remote-mp run check   # 小程序三道闸（verify/theme/contrast）
+env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑（28 组 ×3 产物）
 gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 ```
 

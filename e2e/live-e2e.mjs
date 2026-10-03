@@ -8,7 +8,7 @@
  *   node e2e/live-e2e.mjs --pair <码> --qr '<dshr:/p?...>'   手动给码
  *
  * "三个真实"是本仓库最高一档验收（取证 docs/legacy-spec/testing-and-tooling.md §2）：
- *   ① 真实的小程序客户端代码 —— `mp/core/client.js` 本体经 wx shim 在 Node 里跑，
+ *   ① 真实的小程序客户端代码 —— `dsh-remote-mp/miniprogram/core/client.js` 本体经 wx shim 在 Node 里跑，
  *      绝不写"测试专用客户端"；
  *   ② 真实中继 —— 默认打线上 `wss://drc.provid.cc`（nginx TLS + 限流都在路上）；
  *   ③ 真实内核载体 —— 本机 Harness 里跑着的插件，`carrier=services`。

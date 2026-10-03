@@ -20,7 +20,7 @@ import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
-const mpCore = path.join(here, '..', 'mp', 'core')
+const mpCore = path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core')
 const env = require(path.join(mpCore, 'env.js'))
 const sock = require(path.join(mpCore, 'socket.js'))
 

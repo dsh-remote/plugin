@@ -22,7 +22,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const MP = path.resolve(fileURLToPath(new URL('../mp', import.meta.url)))
+// 小程序现在是独立仓 `dsh-remote-mp`，`app.json` / `pages/` 这些都在它的 `miniprogram/` 下。
+const MP = path.resolve(fileURLToPath(new URL('../dsh-remote-mp/miniprogram', import.meta.url)))
 const args = process.argv.slice(2)
 const asJson = args.includes('--json')
 const onlyPage = args.find((a) => !a.startsWith('-'))

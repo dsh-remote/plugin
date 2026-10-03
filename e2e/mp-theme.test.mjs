@@ -16,7 +16,7 @@ import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
-const themePath = path.join(here, '..', 'mp', 'core', 'theme.js')
+const themePath = path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core', 'theme.js')
 
 /** 装一个假的 wx，并把 storage / 导航栏调用都记下来 */
 function fakeWx(opts = {}) {

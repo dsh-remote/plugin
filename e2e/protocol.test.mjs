@@ -3,9 +3,9 @@
  *
  * 两条独立的路径都要绿，缺一不可：
  *
- * - **fixtures**：`e2e/tools/gen-vectors.mjs` 从小程序那份 `mp/core/codec.js` 导出的
+ * - **fixtures**：`e2e/tools/gen-vectors.mjs` 从小程序那份 `dsh-remote-mp/miniprogram/core/codec.js` 导出的
  *   golden vector，新实现必须逐字节复现。它能离线跑，且向量本身可 diff。
- * - **live oracle**：把 `mp/core/codec.js` 当模块 `require` 进 Node，随机生成新向量，
+ * - **live oracle**：把 `dsh-remote-mp/miniprogram/core/codec.js` 当模块 `require` 进 Node，随机生成新向量，
  *   两侧各算一遍并互解对方产生的密文。fixtures 防"改坏了自己不知道"，
  *   live 防"fixtures 是照着新实现生成的"这个循环论证。
  *
@@ -42,11 +42,11 @@ import {
   seal,
   toBase64,
   utf8,
-} from '../packages/protocol/dist/src/index.js'
+} from '../dsh-remote-protocol/dist/src/index.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const require_ = createRequire(import.meta.url)
-const mp = require_(path.join(here, '..', 'mp', 'core', 'codec.js'))
+const mp = require_(path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core', 'codec.js'))
 const FIXTURES = JSON.parse(readFileSync(path.join(here, 'fixtures', 'wire-vectors.json'), 'utf8'))
 
 const hex = (b) => Buffer.from(b).toString('hex')
@@ -54,8 +54,8 @@ const b64 = (b) => Buffer.from(b).toString('base64')
 const unhex = (h) => new Uint8Array(Buffer.from(h, 'hex'))
 
 test('fixtures 的出处可信：oracle 文件未被改动', () => {
-  const actual = createHash('sha256').update(readFileSync(path.join(here, '..', 'mp', 'core', 'codec.js'))).digest('hex')
-  assert.equal(actual, FIXTURES._meta.oracleSha256, 'mp/core/codec.js 变了但向量没重生成——先跑 gen-vectors')
+  const actual = createHash('sha256').update(readFileSync(path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core', 'codec.js'))).digest('hex')
+  assert.equal(actual, FIXTURES._meta.oracleSha256, 'dsh-remote-mp/miniprogram/core/codec.js 变了但向量没重生成——先跑 gen-vectors')
 })
 
 test('fixtures：UTF-8 与 base64 字节层逐个相同', () => {
@@ -245,8 +245,8 @@ test('base64 严格度边界：小程序拒的一定被我们拒；我们只允�
 })
 
 test('原语层三方一致：npm tweetnacl、小程序 vendored nacl、node:crypto 的 SHA-512', async () => {
-  // 从协议包的位置解析 tweetnacl（pnpm 把它链在 packages/protocol/node_modules 下）。
-  const reqFromProtocol = createRequire(path.join(here, '..', 'packages', 'protocol', 'dist', 'src', 'index.js'))
+  // 从协议包的位置解析 tweetnacl（pnpm 把它链在 dsh-remote-protocol/node_modules 下）。
+  const reqFromProtocol = createRequire(path.join(here, '..', 'dsh-remote-protocol', 'dist', 'src', 'index.js'))
   const naclNpm = reqFromProtocol('tweetnacl')
   const naclMp = mp.nacl
   for (let i = 0; i < 25; i++) {
@@ -290,7 +290,7 @@ test('反证：把 KDF 的末尾分隔符去掉，向量立刻全红（证明这
  * F6 的机械防线：`pair-fail.reason` 的取值集合必须是**小程序认识的那些**。
  *
  * 这条是被真 bug 逼出来的：中继在"全局配对配额用尽"时回过 `rate_limited`，
- * 而 `mp/core/client.js:translatePairFail` 的表里没有这个键 —— 它的兜底是
+ * 而 `dsh-remote-mp/miniprogram/core/client.js:translatePairFail` 的表里没有这个键 —— 它的兜底是
  * `map[reason] || reason`，于是手机上弹出一条英文字面量 "rate_limited"。
  * 小程序是冻结的（一行都不改），所以能改的只有我们这一侧：
  * 内部原因进日志，落到线上的 reason 必须是这张表里的一个。
@@ -299,10 +299,10 @@ test('反证：把 KDF 的末尾分隔符去掉，向量立刻全红（证明这
  * 协议层放宽枚举才成为可能；反过来协议层擅自加一个，测试立刻红。
  */
 test('F6：pair-fail 的 reason 枚举必须落在小程序 translatePairFail 的表里（读冻结源文件比对）', async () => {
-  const { pairFailFrame } = await import(new URL('../packages/protocol/dist/src/frames.js', import.meta.url).href)
-  const source = readFileSync(path.join(here, '..', 'mp', 'core', 'client.js'), 'utf8')
+  const { pairFailFrame } = await import(new URL('../dsh-remote-protocol/dist/src/wire/frames.js', import.meta.url).href)
+  const source = readFileSync(path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core', 'client.js'), 'utf8')
   const block = source.match(/function translatePairFail[\s\S]*?\n\}/)
-  assert.ok(block, 'mp/core/client.js 里找不到 translatePairFail：小程序那份冻结代码变了，这条防线要看的东西也没了')
+  assert.ok(block, 'dsh-remote-mp/miniprogram/core/client.js 里找不到 translatePairFail：小程序那份冻结代码变了，这条防线要看的东西也没了')
   const keys = [...block[0].matchAll(/^\s*([a-z_]+):\s*'/gm)].map((match) => match[1])
   assert.ok(keys.length >= 3, `从冻结源里只解析出 ${keys.length} 个键，解析方式怕是错了：${JSON.stringify(keys)}`)
   const ours = pairFailFrame.options?.reason?.options ?? pairFailFrame.shape?.reason?.options

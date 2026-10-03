@@ -24,10 +24,10 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(here, '..')
 // 重写之后 qr 编码器住在 platform/ 下（只有它认识渲染细节，core 不认），
 // 而且全部改成异步：node-qrcode 的 API 是 promise 形的。
-const qrModule = path.join(root, 'packages', 'plugin', 'dist', 'src', 'platform', 'qr.js')
+const qrModule = path.join(root, 'dsh-remote-control', 'packages', 'plugin', 'dist', 'src', 'platform', 'qr.js')
 
 if (!existsSync(qrModule)) {
-  console.error(`✖ 先构建：找不到 ${qrModule}（cd packages/plugin && env -u NODE_OPTIONS pnpm build）`)
+  console.error(`✖ 先构建：找不到 ${qrModule}（cd dsh-remote-control/packages/plugin && env -u NODE_OPTIONS pnpm build）`)
   process.exit(2)
 }
 

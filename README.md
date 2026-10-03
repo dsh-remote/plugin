@@ -66,10 +66,10 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 ### 起本地中继 / 装插件
 
 ```sh
-./scripts/relay-start.sh            # 127.0.0.1:8787，token 复用 profile 里那一份
-./scripts/relay-start.sh --bundle    # 跑单文件产物，与生产形态一致
+./dsh-remote-server/scripts/relay-start.sh            # 127.0.0.1:8787，token 复用 profile 里那一份
+./dsh-remote-server/scripts/relay-start.sh --bundle    # 跑单文件产物，与生产形态一致
 
-./scripts/install-to-profile.sh      # 构建 + 装进 ~/.dsh/profiles/desktop + 注册 bundle
+./dsh-remote-control/scripts/install-to-profile.sh      # 构建 + 装进 ~/.dsh/profiles/desktop + 注册 bundle
 # 改代码后必须重启 Harness（HMR 只热更 patch，不重新 import dist）
 ```
 

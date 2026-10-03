@@ -27,7 +27,9 @@ import path from 'node:path'
 
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const MP_DIR = path.join(ROOT, 'mp')
+// 微信开发者工具的 `--project` 要的是**项目根**（放着 project.config.json 的那一层），
+// 开源改造后就是独立仓 `dsh-remote-mp/`，小程序代码在它下面的 `miniprogram/`。
+const MP_DIR = path.join(ROOT, 'dsh-remote-mp')
 
 const argv = process.argv.slice(2)
 const flag = (name, fallback) => {
@@ -316,6 +318,36 @@ const SHOTS = {
       theme: 'light',
       data: { title: '重做小程序对话页信息流' },
     },
+    {
+      // **空正文帧不许留下空白块** —— 用户真机截图里那三个空白窄条就是它。
+      //
+      // 为什么这一张要**走真实路径**而不是 setData 摆状态：缺陷在 `_applyText`
+      // 那个"text 为空也建块"的判断上。摆一个空 text 块进去，wxml 一定会把它画出来
+      //（那只能证明 wxml 忠实渲染，不能证明这条路径不再产生它）。
+      // 这里直接调页面自己的方法：先摆一个有字的正文块（作为对照），
+      // 再喂两条 `delta:'' + done:true` 的助手帧（宿主里reasoning-only 的
+      // assistant/message 就是这个形状），最后再喂一条带字的，验证它照常建块。
+      name: 'chat-empty-frame',
+      url: '/pages/chat/chat',
+      data: {
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '23:20' },
+          { key: 'u1', kind: 'user', text: '继续', confirmed: true },
+          { key: 'm0', kind: 'text', text: '（下面这条是宿主只有 reasoning、没有正文的消息）', done: true },
+        ],
+      },
+      // 每一步是 [方法名, ...参数]；'flush' 是这一页自己的批处理落块入口。
+      calls: [
+        ['_applyDelta', 'm-empty-1', '', true, 'assistant'],
+        ['_applyDelta', 'm-empty-2', '', true, 'assistant'],
+        ['_applyDelta', 'm-empty-3', '', true, 'assistant'],
+        ['flush'],
+        // 关键：空帧之后**带字的**帧必须照常出现，否则这个修复是"把内容也丢了"。
+        ['_applyDelta', 'm-real', '已经改好了，重新跑一遍测试全绿。', true, 'assistant'],
+        ['flush'],
+      ],
+    },
   ],
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
@@ -397,8 +429,8 @@ const SHOTS = {
                 tool: 'Bash',
                 title: 'git status --short',
                 args: '{"command":"git status --short"}',
-                result: 'M mp/pages/chat/chat.js',
-                preview: 'M mp/pages/chat/chat.js',
+                result: 'M dsh-remote-mp/miniprogram/pages/chat/chat.js',
+                preview: 'M dsh-remote-mp/miniprogram/pages/chat/chat.js',
                 open: false,
               },
               { key: 'k2', type: 'think', msText: '0.8s', done: true },
@@ -431,8 +463,8 @@ const SHOTS = {
                 phase: 'completed',
                 tool: 'Grep',
                 title: 'settleHistory',
-                result: 'mp/core/client.js:404 / 412',
-                preview: 'mp/core/client.js:404 / 412',
+                result: 'dsh-remote-mp/miniprogram/core/client.js:404 / 412',
+                preview: 'dsh-remote-mp/miniprogram/core/client.js:404 / 412',
                 open: false,
               },
               { key: 'k5', type: 'think', msText: '1.7s', done: true },
@@ -441,7 +473,7 @@ const SHOTS = {
                 type: 'tool',
                 phase: 'completed',
                 tool: 'Edit',
-                title: 'mp/core/client.js',
+                title: 'dsh-remote-mp/miniprogram/core/client.js',
                 result: '已更新 1 个文件',
                 preview: '已更新 1 个文件',
                 open: false,
@@ -589,12 +621,12 @@ const SHOTS = {
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '16:20' },
           { key: 'u1', kind: 'user', text: '把构建产物清掉重来一遍', confirmed: true },
-          { key: 'm1', kind: 'text', text: '要跑 rm -rf packages/plugin/dist，这一步需要你确认。', done: true },
+          { key: 'm1', kind: 'text', text: '要跑 rm -rf dsh-remote-control/packages/plugin/dist，这一步需要你确认。', done: true },
         ],
         pendingPermission: {
           requestId: 'p1',
           action: 'Bash',
-          resource: 'rm -rf packages/plugin/dist',
+          resource: 'rm -rf dsh-remote-control/packages/plugin/dist',
           reason: '删除构建产物以便重新构建，会丢失未提交的 dist 改动',
           options: [
             { id: 'approve', label: '允许' },
@@ -774,6 +806,19 @@ async function main() {
           await page.setData(shot.data)
           // wait：setData 到截图之间的等待。默认 700ms 够渲染完；
           // 想抓「占位组件还没被替换」的那一帧就调小（用时注入验证用）。
+          await sleep(shot.wait || 700)
+        }
+        // 走页面**自己的方法**（而不是 setData 摆状态）：只有这样验的才是那条真实路径。
+        // 摆状态只能证明 wxml 忠实渲染，证明不了"这条路径不再产生那个坏块"。
+        if (shot.calls) {
+          const page = await miniProgram.currentPage()
+          for (const [method, ...args] of shot.calls) {
+            if (method === 'flush') {
+              page.callMethod('_flushDelta')
+              continue
+            }
+            await page.callMethod(method, ...args)
+          }
           await sleep(shot.wait || 700)
         }
         const file = path.join(OUT, `${shot.name}.png`)

@@ -54,7 +54,7 @@ let captured = null
 globalThis.Page = (cfg) => {
   captured = cfg
 }
-require(path.join(ROOT, 'mp/pages/sessions/sessions.js'))
+require(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'))
 assert.ok(captured, 'Page() 没被调用 —— 页面代码没加载起来')
 
 /** 页面里的 client 换成可控的假货，避免真的去连网 */
@@ -144,7 +144,7 @@ test('容器没有扫码能力：不调用 scanCode，展开手动输入并说�
   // 所以要让下一次采集看到"没有 scanCode"必须用 onScan 内部那条路径：
   // 直接把 probe 的缓存打掉，再删 API。
   globalThis.wx.scanCode = undefined
-  const env = require(path.join(ROOT, 'mp/core/env.js'))
+  const env = require(path.join(ROOT, 'dsh-remote-mp/miniprogram/core/env.js'))
   env.probe(true) // 强制重采，缓存里 scanCode 变成 false
   try {
     p.onScan()
@@ -288,7 +288,7 @@ test('解除配对被取消：什么都不做', () => {
 // ── 静态护栏：wxml 层面的接线 ─────────────────────────────────────────
 
 test('wxml：未配对态有扫描按钮，底部有重新配对与解除配对', () => {
-  const wxml = readFileSync(path.join(ROOT, 'mp/pages/sessions/sessions.wxml'), 'utf8')
+  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
   const unpaired = wxml.split('wx:if="{{paired}}"')[0]
   assert.match(unpaired, /bindtap="onScan"/, '未配对时首要动作就是扫码')
   const paired = wxml.split('wx:if="{{paired}}"')[1]
@@ -298,7 +298,7 @@ test('wxml：未配对态有扫描按钮，底部有重新配对与解除配对'
 })
 
 test('页面里不再残留任何跳转配对页的死代码', () => {
-  const js = readFileSync(path.join(ROOT, 'mp/pages/sessions/sessions.js'), 'utf8')
+  const js = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'), 'utf8')
   assert.equal(/pages\/pair/.test(js), false, '配对页已删除，不能再 navigateTo 过去')
   assert.equal(/onGoPair/.test(js), false)
 })

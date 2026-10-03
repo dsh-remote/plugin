@@ -7,10 +7,10 @@
  * 而手机用的是"它扫的那张"——握手全绿、`paired` 也到了，但**每一帧都解不开**，
  * 手机表现为"会话列表永远空白 + 一句莫名的无法解密"。
  * 新实现两侧都必须是 `Map<token,{psk,expiresAt}>`，中继的 `peer-joined` 必须回传 `pairingToken`
- * （packages/plugin/src/core/keys.ts:98-148 与 transport/relay.ts:194-210）。
+ * （dsh-remote-control/packages/plugin/src/core/keys.ts:98-148 与 transport/relay.ts:194-210）。
  *
- * 三个真实里本文件与其它本地用例同构：真中继（apps/server 产物）+ 真插件运行时
- * （`apply()` 真入口）+ **真 `mp/core/client.js`**；只有内核面是 `platform/mock-kernel.ts`
+ * 三个真实里本文件与其它本地用例同构：真中继（dsh-remote-server 产物）+ 真插件运行时
+ * （`apply()` 真入口）+ **真 `dsh-remote-mp/miniprogram/core/client.js`**；只有内核面是 `platform/mock-kernel.ts`
  * （所以会话 id 一律 `ses_mock*`，这不证明真内核）。
  *
  * 独立端口、独立 hostId、`DRC_LOG_LEVEL=warn`：这个文件必须能在别的用例旁边并行跑。

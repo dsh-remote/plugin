@@ -27,7 +27,7 @@ let captured = null
 globalThis.Page = (cfg) => {
   captured = cfg
 }
-require(path.join(ROOT, 'mp/pages/sessions/sessions.js'))
+require(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'))
 assert.ok(captured, 'Page() 没被调用 —— 页面代码没加载起来')
 
 function makePage() {

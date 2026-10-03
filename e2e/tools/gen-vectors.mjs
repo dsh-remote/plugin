@@ -1,7 +1,7 @@
 /**
  * gen-vectors — 用**保留的小程序代码**生成 golden vector。
  *
- * 为什么拿 mp 当 oracle：小程序一行不改，它那份 `mp/core/codec.js` 就是这套线格式的
+ * 为什么拿 mp 当 oracle：小程序一行不改，它那份 `dsh-remote-mp/miniprogram/core/codec.js` 就是这套线格式的
  * 权威实现。让被测方自己给期望值是自欺欺人；让不可改的那一方给，才叫对拍。
  *
  * 为什么固化成 JSON（现跑对拍在 protocol.test.mjs 里也有）：固化后字节回归在任何环境
@@ -19,7 +19,7 @@ import path from 'node:path'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(here, '..', '..')
-const MP_CODEC = path.join(ROOT, 'mp', 'core', 'codec.js')
+const MP_CODEC = path.join(ROOT, 'dsh-remote-mp', 'miniprogram', 'core', 'codec.js')
 const OUT = path.join(ROOT, 'e2e', 'fixtures', 'wire-vectors.json')
 
 const require_ = createRequire(import.meta.url)
@@ -206,8 +206,8 @@ const mpSource = createHash('sha256').update(readFileSync(MP_CODEC)).digest('hex
 const counts = Object.fromEntries(Object.entries(vectors).map(([k, v]) => [k, v.length]))
 const doc = {
   _meta: {
-    note: '由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 mp/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。',
-    oracle: 'mp/core/codec.js',
+    note: '由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 dsh-remote-mp/miniprogram/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。',
+    oracle: 'dsh-remote-mp/miniprogram/core/codec.js',
     oracleSha256: mpSource,
     generatedBy: 'e2e/tools/gen-vectors.mjs',
     counts,

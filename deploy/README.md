@@ -85,7 +85,7 @@ ssh root@HOST 'nginx -t && systemctl enable --now nginx'
 # ~/.dsh/profiles/desktop/cordis.patch.yml 里
 #   serverUrl: wss://drc.provid.cc
 #   hostToken: <同一个 token>
-./scripts/install-to-profile.sh        # 构建单文件 + 装进 profile + 注册 bundle
+./dsh-remote-control/scripts/install-to-profile.sh        # 构建单文件 + 装进 profile + 注册 bundle
 # 然后重启 DSH Harness（新代码不会被热加载）
 ```
 
