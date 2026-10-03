@@ -492,5 +492,5 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 的并行会话清 `dist/`，不是想象出来的竞态）。另外用户拍板**保留** `validate-qr` 的"裸矩阵"那条腿
 ——它是插件 `qrMatrix` 的唯一外部消费者，删了编码器几何回归就只能靠 PNG 间接发现。
 
-闸门（清理后全绿）：protocol **80**、server **78（1 skip）**、control **261**、伞仓 e2e **17 步 0 失败**、
+闸门（清理后全绿）：protocol **80**、server **78（1 skip）**、control **262**、伞仓 e2e **17 步 0 失败**、
 `node --test e2e/*.test.mjs` **113**、`validate-qr` 28 ×2、四仓 `format:check` 与 `noUnusedLocals`/`noUnusedParameters` 干净。
