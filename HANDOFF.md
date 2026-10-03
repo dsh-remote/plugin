@@ -7,21 +7,32 @@
 ## 0. 一句话状态
 
 产品已经开源成 **GitHub 上四个独立仓**（账号 `providcc`，MIT），两个 npm 包已发布，四仓 CI 全绿。
-生产入口 `wss://drc.provid.cc` 在跑，真机链路通。**伞仓（本目录）不是交付物**，它是私有工作区：
-线上部署、e2e 取证、小程序端未提交的改动、设计史都只在这里。
+**中继已经合并成一条线**：生产 `wss://drc.provid.cc` 现在跑的就是开源仓 `dsh-remote-server/`
+打出来的产物（`/healthz` 实测 `version:"1.0.0"`，935 345 B，与 `dist/bundle/main.js` 同尺寸），
+重启后 5 秒内 `hosts` 回到 1 —— 线上宿主插件对新中继自动重连成功，这是"能换"的实证而不是猜测。
+伞仓 `apps/server/` **已不再是生产来源**，它现在是待删的重复品。
 
-**最容易搞错的一件事：有两条版本线，它们不是同一个东西。**
+**版本决定（用户 2026-10-03 拍）**：开源仓保持 **1.0.0**，生产版本号从 2.0.0 **降到 1.0.0**。
+私有那套 2.x 编号作废，以后只有开源的号。
+
+### 0.1 还没合完的部分（下一步就按这个清单做）
+
+| 待办 | 现状 |
+|---|---|
+| 移植 `packages/plugin`、`packages/presentation`、`mp/` 的**未提交在飞改动**进开源仓 | 8 个文件 +240/−9 行（carrier-services 与其两组测试）+ mp 页面/主题。改动来自**并行会话**，尚未跑绿过任何一棵树 |
+| 删除伞仓 `apps/server/`、`packages/protocol/`、`packages/plugin/`、`packages/presentation/`、`mp/` | 前四者的开源对应物已验证为超集或等价；**但伞仓 e2e/scripts 有 12 个文件还在引用这些路径**，不先重接就删等于把取证能力砸了 |
+| 重接 `e2e/`、`scripts/` 到开源仓路径 | 需改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs}`。注意包名也变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`）且协议层目录已从扁平改成 `crypto/`、`identity/` 分组 |
+| ⚠️ 协作冲突 | `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` **正被并行会话编辑**。改这批文件前先确认它停了，否则两边互相覆盖 |
+
+并行会话的在飞改动**已整份备份**到 `~/.provid/backups/dsh-umbrella-inflight-20261003.patch`（600，
+含未跟踪的新测试文件），生产旧产物也在服务器上留了 `relay.mjs.bak-20261003-075757` 可回滚。
+
+### 0.2 其余三棵树的关系（仍要注意"改哪边"）
 
 | | 版本 | 从哪来 | 现状 |
 |---|---|---|---|
-| 生产中继 | **`2.0.0`** | 伞仓 `apps/server/`（私有树） | `curl -s https://drc.provid.cc/healthz` 实测 `version:"2.0.0"`，`uptimeSec`≈42 400 |
-| 开源仓发布 | **`1.0.0`** | `dsh-remote-server/` | tag `v1.0.0` + GitHub Release |
-
-两边**已经实测漂移**：`apps/server/src/server.ts` 与 `dsh-remote-server/src/server.ts` **内容不同**
-（开源那份有 C1 心跳分桶 + C2 遍历改造，私有那份没有）。
-`packages/plugin/src/**` 与 `dsh-remote-control/packages/plugin/src/**` 目前逐文件相同（刚比对过）。
-
-→ **改开源仓不等于改线上；改线上不等于改开源仓。** 先想清楚要动哪一边。
+| 生产中继 | **`1.0.0`** | `dsh-remote-server/`（开源仓） | ✅ 已合并成一条线 |
+| 宿主插件 / 协议 | 开源 `1.0.0` | 伞仓 `packages/*` 与开源仓**同源但会漂**：私有树最后提交都是 2026-10-02，开源拷贝是 2026-10-03 从已提交快照做的，所以**只差那份未提交的在飞改动** | 待移植 + 删除（见 §0.1） |
 
 ## 1. 四个开源仓（这是要长期留存的东西）
 
@@ -54,8 +65,8 @@
 
 | 路径 | 为什么不能删 |
 |---|---|
-| `apps/server/` | **线上跑的就是这份**（version 2.0.0）。开源那份是清理过的拷贝，两者会漂 |
-| `packages/protocol/`、`packages/plugin/` | 私有开发树；插件是线上宿主实际加载的源码 |
+| `apps/server/` | **已不是生产来源**（生产改跑开源产物了）。现在删它只需先重接 e2e——见 §0.1，别再当"唯一线上代码"供着 |
+| `packages/protocol/`、`packages/plugin/` | 私有开发树，与开源仓同源只差在飞改动；移植完那批改动才能删（§0.1） |
 | `mp/` | 小程序端源码 + **并行会话正在改的未提交改动** |
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
 | `scripts/` | `validate-qr.mjs`（改二维码必跑）、`read-session-log.mjs`、`mp-*.mjs` 等 |
@@ -151,7 +162,7 @@ curl -s https://registry.npmjs.org/dsh-remote-wire | head -c 200
 cd dsh-remote-server && env -u NODE_OPTIONS pnpm build && node scripts/loadtest-conns.mjs --n=10000 --seconds=30
 
 # 生产与私有树（伞仓）
-curl -s https://drc.provid.cc/healthz                    # 线上真相（version 2.0.0）
+curl -s https://drc.provid.cc/healthz                    # 线上真相（现在=开源仓产物 version 1.0.0）
 cat ~/.dsh/dsh-remote-control/status.json                 # 插件侧真相
 env -u NODE_OPTIONS node e2e/run.mjs                      # 本地全链路
 env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑
