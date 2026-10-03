@@ -847,8 +847,9 @@ curl -sS -o /tmp/pair.png http://127.0.0.1:<port>/plugins/dsh-remote-control/pai
 按三段斜杠写正则会假报"形状不对"——我第一遍就这么差点误判。
 
 **闸门（这一节）**：control `pnpm -C packages/plugin test` **282 pass / 0 fail**（§9.10 那轮 273）、
-`typecheck` 过、`format:check` 全绿；伞仓 `node --test e2e/*.test.mjs` **125 / 0 失败**、
-`node e2e/run.mjs` **17 步 0 失败**、`node scripts/validate-qr.mjs` 28 组 ×2 产物 0 失败、
+`typecheck` 过、`format:check` 全绿；伞仓在 **hostId 那次改动之后重跑**（改的是插件入口，
+之前那一次绿不算数）：`node --test e2e/*.test.mjs` **125 / 0 失败**、
+`node e2e/run.mjs` **17 步 0 失败**；`node scripts/validate-qr.mjs` 28 组 ×2 产物 0 失败、
 `node e2e/live-e2e.mjs` **18 项全过**。提交：control `f0e9308`（`feat(host-id)`），
 伞仓随本次提交走这一节与 §3.4 的结算。
 

@@ -120,6 +120,10 @@ cat ~/.dsh/dsh-remote-control/status.json
 - `carrier`：`services`=真内核 / `mock`=内存替身 / `probing`=还没探到 / `none`=没起来（`reason` 会写 `disabled` 或 `invalid-config`）。
 - `relay` + `relayProblem`：`online`/`connecting`/`offline`，runtime 还没起来时是 `idle`（**"没启动"与"断了"是两件事**，pill 抬头那句也照这个口径说）。**长时间停在 `connecting` 且不报错**是一种特定的病：版本不匹配（见开源手册的成对回滚那节），不是网络问题。
 - `conversations` / `pendingPairs`：配对通道数与待配码数。空闲 TTL 之后会自己掉下去（实测两张码在约 120s 后归零）。
+- `hostId`：这台主机在中继上的身份。**两次重启之间它不该变**——变了就意味着旧 socket 顶不掉
+  （中继日志会打 `host online … replaced:0`），而手机连的那条会话指向"没有钥匙的对端"，
+  表现就是丢帧涨与"手机连不上"。落点是同目录那个 `host-id`（0600）；
+  `config.hostId` 给了就以配置为准，不给就读/写这个文件（取证 HANDOFF §3.4 与 §9.11）。
 - `pill`：**配对入口为什么没起来，只有这里能答**。`{"webServer":"via inject","routes":"registered"}` 是正常态；`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `pill:"disabled"` / `routes:"register threw: …"` 各对应一种坏法。**只要它不是 `routes:"registered"`，`problems` 里就一定有 `warn:pill`；挂上了就一定没有**——这条是每次写快照时现判的，不是启动那一次的结论：`webServer` 由 `ctx.inject` 的回调晚到时，一次性判断会留下"路由已挂上却仍报 warn:pill"的假警报（2026-10-03 真机重启实测到）。命令行兜底已经删了，"配不了对"必须留得下原因。
 - `problems`：`level:field` 形态的诊断清单。除配置问题外还包括 `warn:pill`（没有配对入口）与 `warn:pairOnStartSec`（status.json 里带着有效码）。配置那条的原因全文在宿主日志里（`apply` 时逐条 log），**`warn:pill` 的原因只在同一个快照的 `pill` 探针里**——所以那一条要看上面那个字段，别在日志里找。
 - 已经删掉的键（`qrImage`/`qrOpen`/`qrAnsi`/`qrStyle`/`sidebarQr`）留在 profile 里**什么效果都没有**，也不会有一条 warn——2026-10-03 曾经为这五把键留过告警表，当天按"删了就不会回来，用到再重写"撤了。看到 `problems` 里没有它们**不是漏报**。
