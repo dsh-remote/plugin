@@ -19,7 +19,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 线上"已发布的产物"与"在跑的字节"是同一个（sha256 两侧实测相同）。
 
 > ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
-> `node e2e/run.mjs` = **16 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×3 产物 0 失败。
+> `node e2e/run.mjs` = **17 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
 > 上一轮只做了"把注释与 import 改指开源仓"，**代码里的路径还指着已删的私有树**，本轮补完：
 > `mp/` → `dsh-remote-mp/miniprogram/`、`packages/{protocol,plugin}` → 各开源仓产物、
 > 协议层分组（`frames`→`wire/`、`keys`→`crypto/`、`ids`→`identity/`）。
@@ -64,15 +64,18 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 1. **仓名 ≠ 包名**。协议发到 npm 的名字是 `dsh-remote-wire`——`dsh-remote-protocol` 这个名
    在 npm 上已被第三方占用（发布者 `weijf14-gmail`）。指仓库写 `dsh-remote-protocol`，
    指包写 `dsh-remote-wire`。
-2. **control 仓现在只有一个包**（用户 2026-10-03 拍板并已执行，见 §9.1）。
+2. **control 仓只有一个包**（用户 2026-10-03 拍板并已执行，见 §9.1）。
    `packages/presentation`（包名 `dsh-remote-control-presentation`，原来 `private: true`、不发 npm）
-   已折进 `packages/plugin`，右栏那一半的产物现在是同一个 bundle 的两半
+   已折进 `packages/plugin`，界面上那一半的产物现在是同一个 bundle 的两半
    （`dist/bundle/index.js` + `dist/bundle/client.cjs`），一起由
    `dsh-remote-control/scripts/install-to-profile.sh` 装进 profile。
    `pnpm -r publish --dry-run` 只会列出 `dsh-remote-control` 一个——这是可复核的判据。
-   **历史**：拆两包的理由是"宿主缺 `webServer` 时只有那一行不激活"；折并后这个隔离由
-   `src/presentation/sidebar.ts` 的软探测提供，并由 `tests/presentation-isolation.test.ts`
-   用逐字段对照钉住。**别再把它拆回去**，也别往 npm 加第二个包。
+   **别再把它拆回去**，也别往 npm 加第二个包。
+   折并的理由（"宿主缺 `webServer` 时只有那一行不激活"）现在由
+   `src/presentation/pill.ts` 的软探测提供，`tests/presentation-isolation.test.ts` 逐字段对照钉住。
+   ⚠️ **那一半的内容已经换了**：1.1.0 是"右栏自动弹码"，`[未发布]`（1.2.0）把它与终端文本码
+   一起删掉，换成状态栏那颗 pill——**配对入口只剩 pill，`/drc pair` 已不存在**。
+   §9.1 里那些 `sidebar.*` / `/pairing?session=` 的取证是**当时**的事实，别当成现状。
 3. **协议是 npm 依赖（`^1.0.0`），不是 git 依赖**。别退回 git 依赖：pnpm 11.7 下 git 包的
    `prepare` 只认含 commit 的精确 `allowBuilds` 键，四种宽松写法全被拒，每次升版都要手改两个消费仓。
 
@@ -277,6 +280,30 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     **每一行**都前缀上替换文本。本轮真毁过一次 `README.md`，靠"改动已提交"用 `git checkout --` 拉回。
     改文档一律用编辑工具，非要批量就跑一次 `wc -l` + `head -3` 看有没有被前缀。
 
+15. **`pnpm build` 不清 `dist/`，于是删掉的测试还会继续"通过"**。`test` 脚本跑的是
+    `node --test "dist/tests/*.test.js"`，而 tsc 只覆盖不删除——2026-10-03 删掉右栏与文本码那两条路时
+    连带删了 6 个测试文件，`pnpm test` 仍报 **337 全绿**，其中 **72 项跑的是已经不存在的源码编出来的
+    旧 JS**。逐文件数一遍 `^test(` 与 TAP 的 `ok` 条数对不上才暴露。
+    已修：`build` 现在先跑 `pnpm clean`。**推论**：报测试数之前先确认产物目录是干净的，
+    删过文件的仓库里"绿"和"绿的是当前代码"是两件事。
+
+16. **把 `inject` 闸门清空，等于把 `apply()` 的时机提前**（2026-10-03 同一轮里两侧各栽一次）：
+    宿主侧 `webServer` 与浏览器侧 `slots` 都是 `ctx.inject` 的回调**晚到**才给的服务。
+    ①宿主侧 `warn:pill` 原来在 apply 里一次性 push，成为"路由已 `registered` 却仍报配对入口不可用"
+    的永久假警报 → 改成每次写快照现判（`state()` 里），并给假 ctx 加 `lateWeb`/`flushInject` 演晚到。
+    ②浏览器侧 `mountPill` 原来只软探一次就返回，删掉右栏时把 `inject: ['sidebarRight']` 改成 `[]`，
+    那颗 pill 在真机上**整颗不出现**。**这条我第一次没修对**：只加"软探测 + `ctx.inject(['slots'])`
+    晚到补挂"之后 262→263 项单测全绿，屏幕上仍然什么都没有——因为真正决定时机的是模块那句
+    `inject` 声明。按宿主自带模板 `templates/decoration/client.js`（`inject: ['slots']` +
+    `ctx.slots.inject(...)`）改完，pill 才回到屏幕上，点下去出 QR + 6 位码 + 倒计时，
+    `epoch`/`ETag`/`sha256` 三者原子核对上（`ff5d01936e40437d` / `057482`）。
+    **推论两条**：软探测要配"晚到补挂"，但**别指望它能替代闸门**——要"服务到位之后再激活"就声明它；
+    而只有一个**同步返回服务的假 ctx** 的 fixture 抓不到这类 bug（"绿"和"绿的是当前代码"是两件事，
+    见第 15 条；这里还要再加一条："绿"和"绿的是屏幕上的东西"也是两件事）。
+    现在两侧假 ctx 都能演晚到：`presentation-isolation.test.ts` 的 `lateWeb`/`flushInject`，
+    `presentation-client-bundle.test.ts` 的 `lateSlots`/`flushInject` + `ctx.slots` 那个 getter。
+
+
 ## 5. 命令速查
 
 ```sh
@@ -320,7 +347,7 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 | `dsh-remote-control@1.1.0` 发出去了 | 标签 `v1.1.0` → Release 工作流 success → `npm view dsh-remote-control versions` = `[1.0.0, 1.1.0]`；`npm pack` 解包核对：tarball 只有 `dist/bundle/{index.js,client.cjs}` + `cordis.patch.yml` + `LICENSE`，232 KB；**provenance 没挂上**（§3 第 1 条附日志原文） |
 | 1.1.0 装进真宿主 profile | `sh dsh-remote-control/scripts/install-to-profile.sh` → `node_modules/dsh-remote-control/package.json` 里 `version:"1.1.0"`、`dsh.client.platform:"web"`、`exports` 含 `./client`；退役条目连目录一起摘掉（**这条做过变异验证**：回插后再跑，脚本把它删掉） |
 | **live-e2e 真机全绿** | `node e2e/live-e2e.mjs --rounds 2` → **合计 36 项检查，通过 36，失败 0**（真中继 `wss://drc.provid.cc` + 真内核 `carrier=services`）：配对→会话列表 14 条→发指令回合跑完（`done:true`、正文非空）→防休眠 `backend=caffeinate`→零知识（上行 3 帧 enc、经中继无明文）→解配 `needs-pair` |
-| **右栏那条路由在真宿主上取证** | `GET http://127.0.0.1:19387/plugins/dsh-remote-control/pairing?session=<真会话>` → `{"state":"ready","epoch":"575e1d4172857484",address:"dsh-resource://file/session/…//Users/linbin/dsh-remote-control/.dsh/sidebar-qr.png",expiresAt:…}`；zxing 解出落盘 PNG（392×392，0600）→ **解出文本的 sha256 前 16 位 == 路由给的 epoch**，且与 `status.pairing.qr` 逐字节一致；负面四条也实测：非环回 `Host` → 403、跨站 `Origin` → 403、缺 `session` → 400、**旧包路径 `/plugins/dsh-remote-control-presentation/pairing` → 404** |
+| **右栏那条路由在真宿主上取证**（⚠️ 该方案已在同日 `[未发布]` 里删除，这行是当时的取证） | `GET http://127.0.0.1:19387/plugins/dsh-remote-control/pairing?session=<真会话>` → `{"state":"ready","epoch":"575e1d4172857484",address:"dsh-resource://file/session/…//Users/linbin/dsh-remote-control/.dsh/sidebar-qr.png",expiresAt:…}`；zxing 解出落盘 PNG（392×392，0600）→ **解出文本的 sha256 前 16 位 == 路由给的 epoch**，且与 `status.pairing.qr` 逐字节一致；负面四条也实测：非环回 `Host` → 403、跨站 `Origin` → 403、缺 `session` → 400、**旧包路径 `/plugins/dsh-remote-control-presentation/pairing` → 404** |
 | 线上中继"发布的就是在跑的" | Release `v1.0.1` 下载 + `shasum -a 256 -c SHA256SUMS` OK；与服务器 `/opt/dsh-remote-control/server/relay.mjs` 的 `sha256sum` **完全相同**（`45526fd5…180c9`）→ 本轮中继侧无需重部（control 的改动不碰中继产物） |
 | 临时改的配置已还原 | 为让 live-e2e 能自动取真码，临时在 profile 的 patch 里加了 `pairOnStartSec: 120`；**跑完立刻删掉并重启宿主**，现在 `grep -c pairOnStartSec cordis.patch.yml` = 0、`status.json` 的 `pairing:null`、`problems:[]` |
 
@@ -378,18 +405,56 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 把"是哪一道守卫拒的"印进 403 回答（再让 pill 把它显示出来）才查得出来；这条判据现在的形状与
 它为什么不能是 `Origin`，都写在 `pair-actions.ts` 文件头与 `docs/HOST-SIDE.md` §6.1。
 
+### 9.5 收敛成"只有 pill"（2026-10-03，control `[未发布]` = 1.2.0）
+
+用户拍板："清理掉之前的 sidebar 方案和 ansi 方案，只保留这个 pill"。三问三答定了边界：
+`/drc pair` **全删**（配对只有 pill）、配置键**改名成 `pill`**（旧键不静默失效）、
+`PairingWindow` 那条"屏幕上永远有一张码"的自动续码**保留**。
+
+| 删掉的东西 | 连带 |
+|---|---|
+| 右栏自动弹码 | `src/presentation/{address,presenter,route,sidebar}.ts` 四个模块（守卫与 `pairingEpoch` 搬进 `pill-routes.ts`）、只读路由 `GET /pairing`、浏览器面 `sidebarRight` 轮询、`<workspace>/.dsh/sidebar-qr.png` 落盘、`config.sidebarQr.*`、`status.json` 的 `sidebar` 探针，以及**为算那个落点而开的内核口**：`provide('dshRemoteControl').sessionWorkspace` + `kernel.sessionWorkspace` + 诊断字段 `kernel.workspaceFace`（pill 的图是路由当场渲染的，不写磁盘，所以这条路上一个调用方都不剩） |
+| 终端文本码 | `platform/qr.ts` 的 `renderTerminalQr` 与 `ascii`/`block`/`half` + ANSI、`config` 的 `qrImage`/`qrOpen`/`qrAnsi`/`qrStyle` 与四个 `DRC_QR_*`、`pairing-text.ts` 整个模块、`validate-qr.mjs` 的第三条产物 |
+| 命令行配对入口 | `/drc pair` 与 `pair force`（`/drc` 只剩 `status`/`unpair`）、`pairingImagePath` 与 CLI 那张 PNG |
+
+**删掉兜底之后补的那道锁**：配对入口不可用（没 `webServer` / 路由挂不上 / `pill.enabled:false`）
+现在必须在 `status.json` 里留 `warn:pill` + `pill` 探针——否则表现是"这台主机配不了对，
+而没有任何地方说为什么"。`tests/presentation-isolation.test.ts` 五种形态各钉一条。
+**这条 warn 是每次写快照时现判的，不是在 `apply()` 里 push 一次的**：真机重启后抓到过
+`pill.routes="registered"` 与 `problems=["warn:pill"]` 并存——`webServer` 是 `ctx.inject`
+的回调晚到的，apply 那一刻它还不在，一次性判断就把启动快照冻成了永久告警。
+钉它的是"webServer 晚到"那条用例（变异验证：把判据改回 apply 时的快照，只有那条红）。
+
+**浏览器那一半也栽了个跟"看不见"有关的坑**（详见 §4 第 16 条）：`inject: []` 让 `apply()` 跑在
+槽位服务之前，那颗 pill 整颗不出现，而单测全绿。最终按宿主自带模板改成 `inject: ['slots']`
+（软探测与晚到回调留作退路），并在真屏幕上复核：`● 点一下配对` → 点下去出 QR + `057482` +
+倒计时 + "换一张" → 抬头变 `● 配对中` → Escape 收掉；同一轮里 `POST /pairing/new` 复点回同一张、
+`pairing.png` 的 `ETag` 与 `status.json` 那张 `qr` 的 `sha256` 前 16 位都是 `ff5d01936e40437d`，
+解出的 URI 尾号 `t=057482`；`status.json` 是 `pill.routes="registered"` **且 `problems=[]`**。
+
+**这一轮新抓到的一个真缺陷**（是新写的对照测试抓的，不是老测试）：三条路由依次 `register`，
+第二条抛错时第一条**没被回滚**，于是它永久留在宿主上、`stop()` 再也拿不到注销函数——
+表现会是"重载一次之后那颗 pill 再也不出现"。修法在 `registerPillRoutes` 里，
+判据是 `presentation-pill-routes.test.ts` 的"第二条挂不上时第一条必须被回滚掉"。
+
+**e2e 补上了此前那条空白**（§9.4 说过"e2e 没覆盖那三条新路由"）：`e2e/run.mjs` 现在给假
+`webServer`，在**真中继在线**时点那三条——发码、幂等复点同一张、PNG 的 `ETag` 与主机维护的
+那张码的 URI 哈希同一个口径。此前单测里的发码分支永远是"中继不可达"，那条路从没走过。
+闸门：control **263 项全绿**、e2e **17 步 0 失败**、`node --test e2e/*.test.mjs` 113 全绿、
+`validate-qr` 28 组 ×2 产物 0 失败、**真屏幕复验通过**（上面那段）。
+
 **还欠着的：**
 
 1. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
    而且 §3 第 1 条的 Trusted Publishing 还没配——用户 2026-10-03 已拍板"先配 TP 再发"。
-2. **本机 profile 现在跑的是未发布的 HEAD 产物**（`index.js` 的 sha256 前缀 `af5ca4b4`，
-   与 `packages/plugin/dist/bundle/` 逐字节相同），不是 npm 上的 1.1.0。要么发版把它转正，要么还原：
-   备份在 `/tmp/drc-profile-backup/dsh-remote-control-1.1.0`（**/tmp 重启就没**，届时改用
-   `npm pack dsh-remote-control@1.1.0` 解出来的 `package/dist/bundle/*` 覆盖回去），
-   两条路都要再重启一次宿主才算数。
-3. **e2e 没覆盖那三条新路由**。`e2e/run.mjs` 走的是中继链路，不碰 webServer 路由；宿主侧的守卫与
-   幂等由上面那些单测/对照测试钉住。要加的话是在 e2e 里对 `http://127.0.0.1:<port>` 发真请求，
-   端口要像 §6 那样用 `lsof` 现找。
+2. **本机 profile 跑的是未发布的 HEAD 产物**，不是 npm 上的 1.1.0（§9.4 那轮装进去的字节
+   已经被 §9.5 这轮的删除改掉，所以别再引用旧哈希——要现值就 `shasum -a 256` 比
+   `~/.dsh/profiles/desktop/node_modules/dsh-remote-control/{index.js,client.cjs}` 与
+   `packages/plugin/dist/bundle/`）。要么发版把它转正，要么还原成 1.1.0：
+   `/tmp/drc-profile-backup/dsh-remote-control-1.1.0`（**/tmp 重启就没**，届时改用
+   `npm pack dsh-remote-control@1.1.0` 解出来的产物覆盖回去），两条路都要再重启一次宿主才算数。
+3. **删完要在真屏幕上再看一眼**（§9.4 那套配方）：pill 仍该出现、点一下仍该出码，
+   而 `/drc pair` 该落到状态快照上。这一步要重启用户本机的 Harness。
 
 
 

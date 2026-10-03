@@ -23,6 +23,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -333,6 +334,22 @@ export async function startRelay({ port, env = {}, label = '中继' } = {}) {
 
 // ── 真插件运行时（内核面 = mock）─────────────────────────────────────
 
+/** 路由回答尽力按 JSON 解析；解析不动就原样给字符串（断言要能印出来说话）。 */
+function safeJson(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk ?? '')
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+/** 一版码的标识：URI 文本的 sha256 前 16 位。与插件里 `pairingEpoch` 同一口径（两处各写一遍，
+ * 对不上就是 e2e 与产物在骗同一个 epoch）。 */
+function sha256_16(text) {
+  return createHash('sha256').update(text).digest('hex').slice(0, 16)
+}
+
 let hostSequence = 0
 
 export async function bootHost({
@@ -353,8 +370,22 @@ export async function bootHost({
   const provided = {}
   const commands = {}
   const disposers = []
+  /**
+   * 假 `webServer`：状态栏那颗 pill 的三条路由要挂在它上面（宿主没这个服务时那一半整个不起）。
+   * 这里给一个真的注册表，是为了让本链路能**带着真中继在线**去点那三条——
+   * 单测里的发码分支永远是"中继不可达"，那条路在 e2e 之前从没被走过。
+   */
+  const routes = new Map()
   const context = {
-    get: () => undefined,
+    get: (name) =>
+      name === 'webServer'
+        ? {
+            register: (route) => {
+              routes.set(route.path, route)
+              return () => routes.delete(route.path)
+            },
+          }
+        : undefined,
     inject: () => undefined,
     provide: (name, value) => {
       provided[name] = value
@@ -378,8 +409,6 @@ export async function bootHost({
     statusFile,
     pairOnStartSec,
     pairTtlMs,
-    qrImage: false,
-    qrOpen: false,
     keepAwake: { enabled: keepAwakeEnabled, idleReleaseSec: 300, keepDisplay: false },
     listingRefreshSec: 15,
     carrierGraceMs: 1000,
@@ -425,6 +454,41 @@ export async function bootHost({
     kernelIndex: kernelCountBefore,
     kernel() {
       return kernelAt(kernelCountBefore)
+    },
+    /** pill 挂上去的那三条路由（路径 → {kind, path, handler}）。 */
+    pillRoutes: routes,
+    /**
+     * 打一条 pill 路由：真 handler、真 req/res 对，返回 {status, headers, body}。
+     * `body` 对 JSON 是解析过的对象，对图片是 Buffer。
+     */
+    async callPill(path, { method = 'GET', headers } = {}) {
+      const route = routes.get(path)
+      assert.ok(route?.handler, `pill 路由 ${path} 没挂上（挂上的：${[...routes.keys()].join(', ') || '无'}）`)
+      // 浏览器发出的每一条请求都必然带 `Host`，环回守卫判的就是它——所以这里默认给一个，
+      // 让"忘了传"不至于伪装成"守卫把合法请求拒了"。
+      const requestHeaders = { host: '127.0.0.1:19387', ...(headers ?? {}) }
+      let status = 0
+      let headersOut = {}
+      let chunk
+      const response = {
+        writeHead(code, extra) {
+          status = code
+          headersOut = { ...(extra ?? {}) }
+          return response
+        },
+        end(data) {
+          chunk = data
+          return response
+        },
+      }
+      await route.handler({ method, url: path, headers: requestHeaders }, response)
+      const isImage = String(headersOut['Content-Type'] ?? '').startsWith('image/')
+      return {
+        status,
+        headers: headersOut,
+        body: isImage ? Buffer.from(chunk ?? []) : safeJson(chunk),
+        raw: Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk ?? '')),
+      }
     },
     stop() {
       for (const dispose of disposers) {
@@ -827,18 +891,86 @@ export async function main() {
       const definition = host.commands?.drc
       assert.ok(definition && typeof definition.handler === 'function', 'apply() 必须把 drc 命令注册进 ctx.commands')
 
-      // 在线分支：此刻中继已 online，handler 会真的渲染二维码文本并返回 ——
-      // 这正是用户敲 `/drc pair` 踩到的那个返回点（离线分支在插件单测里覆盖）。
-      const pairResult = assertCommandResult('pair', await definition.handler({ commandId: 'e2e-cmd-pair', rawInput: 'pair' }))
-      assert.equal(pairResult.kind, 'success', `drc pair 的 kind 必须是 success，收到 ${JSON.stringify(pairResult)?.slice(0, 120)}`)
-      assert.ok(typeof pairResult.text === 'string' && pairResult.text.length > 0, 'drc pair 必须给出可读文本（二维码就渲染在文本里，不另开图片）')
-      assert.match(pairResult.text, /dshr:\/p\?|配对/, 'drc pair 文本里要能看出是配对信息')
-
+      // 在线分支：`status` 那条要真去读快照。
       const statusResult = assertCommandResult('status', await definition.handler({ commandId: 'e2e-cmd-status', rawInput: 'status' }))
       assert.equal(statusResult.kind, 'success')
       const snapshot = JSON.parse(statusResult.text)
       assert.equal(snapshot.relay, 'online', 'drc status 快照必须反映中继已连通（这是排错入口）')
-      note(`drc pair → kind=success/${pairResult.text.length}字符；drc status → relay=${snapshot.relay}`)
+
+      // **`/drc pair` 已经不是子命令**（2026-10-03：配对唯一入口是状态栏那颗 pill）。
+      // 它落到默认分支 = 状态快照；这一条断的是"命令行不再发出第二张码"——
+      // 那正是当初多码事故的形状，而在线时 `createPairing()` 是会真发一张的。
+      const pairResult = assertCommandResult('pair', await definition.handler({ commandId: 'e2e-cmd-pair', rawInput: 'pair' }))
+      assert.equal(pairResult.kind, 'success', `drc pair 的 kind 必须是 success，收到 ${JSON.stringify(pairResult)?.slice(0, 120)}`)
+      assert.doesNotMatch(String(pairResult.text), /dshr:\/p\?|psk/, '命令行不许再把配对凭据印出来')
+      assert.ok(JSON.parse(pairResult.text).relay === 'online', 'pair 落到默认分支 = 状态快照')
+      assert.ok(
+        !/\bpair\b/.test(String(definition.input?.hint ?? '')),
+        `命令提示里不该再有 pair：${String(definition.input?.hint)}`,
+      )
+      note(`drc status → relay=${snapshot.relay}；drc pair → 状态快照（不再发码）；hint=${definition.input?.hint}`)
+    })
+
+    await run('点一下配对：pill 那三条路由在真中继在线时发码、出图、说实话', async () => {
+      const marker = { host: '127.0.0.1:19387', 'x-drc-pair': '1' }
+      const NEW = '/plugins/dsh-remote-control/pairing/new'
+      const PNG = '/plugins/dsh-remote-control/pairing.png'
+      const STATUS = '/plugins/dsh-remote-control/status'
+      assert.deepEqual(
+        [...host.pillRoutes.keys()].sort(),
+        [NEW, PNG, STATUS].sort(),
+        '三条路由都要挂上（假 webServer 在场）',
+      )
+
+      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。
+      const before = await host.callPill(STATUS)
+      assert.equal(before.status, 200)
+      assert.equal(before.body.relay, 'online', `pill 要说实话：${JSON.stringify(before.body)}`)
+
+      // 2) 点一下：真向中继申请一张码。回答带 token/epoch，**不带 psk、不带完整 URI**。
+      const minted = await host.callPill(NEW, { method: 'POST', headers: marker })
+      assert.equal(minted.status, 200, JSON.stringify(minted.body))
+      assert.equal(minted.body.state, 'ready')
+      assert.match(String(minted.body.token), /^\d{6}$/, '6 位码要给——弹窗上"或手输这 6 位数字"靠它')
+      assert.match(String(minted.body.epoch), /^[0-9a-f]{16}$/, 'epoch 必须是码文本 sha256 的前 16 位')
+      assert.ok(Number(minted.body.expiresInMs) > 0, '剩余寿命必须是正数')
+      assert.doesNotMatch(JSON.stringify(minted.body), /psk|dshr:/, '发码回答里不许出现凭据（红线 D1）')
+
+      // 3) 幂等：连点两次是同一张码（多码事故的原形状就是这里退化成"每次一张"）。
+      const again = await host.callPill(NEW, { method: 'POST', headers: marker })
+      assert.equal(again.body.token, minted.body.token, '连点必须复用那张仍然有效的码')
+      assert.equal(again.body.epoch, minted.body.epoch)
+
+      // 4) 图：真 PNG 字节 + 不许缓存 + ETag 与 epoch 同一个口径。
+      const image = await host.callPill(PNG)
+      assert.equal(image.status, 200)
+      assert.equal(image.headers['Content-Type'], 'image/png')
+      assert.equal(image.headers['Cache-Control'], 'no-store')
+      assert.equal(String(image.headers.ETag).replace(/"/g, ''), minted.body.epoch, 'ETag 与发码回答的 epoch 必须同一个')
+      assert.deepEqual([...image.raw.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'PNG 魔数字节')
+
+      // 5) 守卫：缺那个头 → 403；跨站 Origin → 403；GET 打写路由 → 405。
+      assert.equal((await host.callPill(NEW, { method: 'POST', headers: { host: marker.host } })).status, 403)
+      assert.equal(
+        (await host.callPill(NEW, { method: 'POST', headers: { ...marker, origin: 'https://evil.example.com' } })).status,
+        403,
+      )
+      assert.equal((await host.callPill(NEW, { method: 'GET', headers: marker })).status, 405)
+      assert.equal(
+        (await host.callPill(NEW, { method: 'POST', headers: { ...marker, origin: 'dsh-app://app' } })).status,
+        200,
+        '宿主自己的自定义 scheme 算"自己"（真机上文档 origin 就是这个形状）',
+      )
+
+      // 6) 这张码就是主机在维护的那一张：token 对得上、URI 的哈希对得上 epoch。
+      //    路由**故意不返回完整 URI**（那里面带着 PSK），所以只能从主机内部对回来——
+      //    对不上就说明"屏幕上是一张、中继认的是另一张"，那正是多码事故的形状。
+      const active = host.state().pairing
+      assert.ok(active?.qr, '点一下之后主机必须在维护一张有效码')
+      assert.equal(active.token, minted.body.token, 'pill 发的码与窗口维护的必须是同一张')
+      assert.equal(sha256_16(active.qr), minted.body.epoch, 'epoch 就是这张码 URI 的哈希，同一个口径')
+      assert.ok(String(active.qr).includes(`t=${minted.body.token}`), 'URI 里那位 6 位码要和回答一致')
+      note(`pill：status=online → 发码 token=${minted.body.token}（幂等复点同码、与主机维护的那张同 URI）→ PNG ${image.raw.length}B，三条守卫各回 403/403/405`)
     })
 
     await run('主机发布配对码 → pair-ready 带正整数 ttlMs → 手机用真实 dsh-remote-mp/miniprogram/core 代码配对', async () => {

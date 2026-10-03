@@ -18,7 +18,7 @@
 |---|---|---|
 | **协议层** | `dsh-remote-protocol/`（npm 包名 `dsh-remote-wire`） | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
 | **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继（`ws` + `zod`）。生产入口是**单文件产物** `dist/bundle/main.js` |
-| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`）：右栏自动弹码（2026-10-03 折并）+ 状态栏那颗"点一下配对"的 pill（同日加的） |
+| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`）：状态栏那颗"点一下配对"的 pill 是**配对的唯一入口**（右栏自动弹码与终端文本码 2026-10-03 删除） |
 | **小程序客户端** | `dsh-remote-mp/`（代码在它的 `miniprogram/` 下） | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
 | **测试装置** | `e2e/`（伞仓） | 本地全链路 + 逐字节对拍 + 生命周期 + 真实链路取证（见「测试」） |
 | **取证脚本** | `scripts/`（伞仓） | `validate-qr.mjs`（改二维码必跑）、`check-mp-ui.mjs`、`mp-*.mjs`、`read-session-log.mjs` |
@@ -76,7 +76,7 @@ cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile &
 cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
 
 # 伞仓：取证与运维
-env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（112）+ 本地全链路 16 步
+env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（113）+ 本地全链路 17 步
 env -u NODE_OPTIONS node e2e/run.mjs    # 只跑本地全链路
 ```
 
@@ -115,10 +115,10 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 82 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 78（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半：右栏（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域**）+ 状态栏那颗 pill（发码幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**、**pill 挂了也不许把右栏拖死**） | 319 |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的三条路由：发码幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂**） | 263 |
 | `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
-| `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 16 步 |
-| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 112 |
+| `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 17 步 |
+| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 113 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
 | `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（网页图片 / 文本字形还原 / 裸矩阵三条路径） | 28 组 ×3 |
 
@@ -130,7 +130,7 @@ node e2e/live-e2e.mjs --session <id>        # 指定会话（可验归档自动�
 ```
 
 > `pairOnStartSec` 默认是 `0`（不自发出码），所以裸跑会报"没有 pairing.qr"——先在 DSH 里
-> 执行一次 `/drc pair`，再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
+> 点一下状态栏那颗 pill（或临时开 `pairOnStartSec` 从 `status.json` 读），再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
 
 CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22（typecheck + test + 产物校验），
 另一个作业在 Node 20 上从**空目录**起单文件产物，验 `/healthz` 的 version、优雅停机 exit 0、
@@ -168,7 +168,7 @@ cat ~/.dsh/dsh-remote-control/status.json
 - [`docs/DESIGN-REVIEW.md`](docs/DESIGN-REVIEW.md) — 对设计的独立复核（哪几处判据不足以守住什么）
 - [`docs/legacy-spec/`](docs/legacy-spec/) — 旧实现的**需求与事实档案**（不是参考代码）
 - [`docs/SECURITY.md`](docs/SECURITY.md) / [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)
-- [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) — **本机宿主侧**：profile 安装、配置键表、`status.json` 排错、右栏路由与真机取证配方
+- [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) — **本机宿主侧**：profile 安装、配置键表、`status.json` 排错、pill 三条路由与真机取证配方
 - 中继侧部署手册在开源仓：[`dsh-remote-server/docs/SELF-HOSTING.md`](dsh-remote-server/docs/SELF-HOSTING.md)（伞仓那份旧命名副本 2026-10-03 已删）
 - [`deploy/README.md`](deploy/README.md) — 生产部署
 

@@ -385,13 +385,14 @@ pong 就 `terminate()`）。改判应用层心跳会周期性踢掉空闲客户�
   这正是 `pairOnStartSec > 0` 会被 warn 的原因（`shell/config.ts:176-181` 一带的告警、
   `packages/plugin/tests/config.test.ts:122`）。`pairOnStartSec` 默认 **0=关**
   （`shell/config.ts:71`），关掉时这里不会长期挂着码。
-- 二维码图片：`/drc pair` **默认**写出 `<会话工作区>/.dsh/pairing-qr.png`（0600，
-  `shell/status.ts:104-108`；工作区解析不出来时退回 `~/.dsh/pairing-qr.png`）并把
-  它的路径给用户——因为 DSH 命令卡按 `line-height:1.6` 渲染等宽输出，会把半块文本二维码
-  横切成条（实测 zxing 在 ≥1.15 行距即失败），文本码在这个宿主上扫不出来。`qrOpen` 仍然
-  **默认关**：写图 ≠ 替用户打开查看器（`shell/config.ts`，`qrImage` 默认 true / `qrOpen` 默认
-  false / `qrStyle` 默认 `half`，后者只在显式关掉 `qrImage` 时当退路；命令段见
-  `packages/plugin/src/index.ts`）。旧版"默认写 PNG 并 **open**"里自动打开的那半仍然不存在。
+- **配对二维码不落磁盘**（2026-10-03 起）。它只有一条出口：状态栏那颗 pill 点开后，
+  `<img>` 走同域 `GET /plugins/dsh-remote-control/pairing.png`，宿主**按需现渲染**、
+  回 `Cache-Control: no-store` + `ETag: "<epoch>"`，全程不落文件。
+  这条路由**只回像素，不回 `psk` 也不回完整 URI**——红线 D1（PSK 从不上网）在浏览器面
+  的那个开口因此是"能看见这张码的人本来就能看见这张码"，而不是"能读到密钥"。
+  历史上这里曾是 `/drc pair` 写一张 `<会话工作区>/.dsh/pairing-qr.png`（0600）+ 一条
+  终端文本码退路；两者都删了（文本码在 DSH 命令卡 `line-height:1.6` 下被行间留白横切成条，
+  实测 zxing ≥1.15 行距就解不出来，也就是它在这个唯一宿主上从来没扫通过）。
 - `/drc unpair` 会把手里所有通道作废（对每条走 `voidConversation`，
   `packages/plugin/src/index.ts:720`）🟩（`relay-client.test.ts:352`），这是主机侧的主动解配。
 
@@ -580,12 +581,12 @@ key 是 `c2h`/`h2c` 派生后的**会话密钥**在内存里，PSK 留在存储�
    配上了；没配的话上限只由 `DRC_PAIR_GLOBAL_PER_SEC` 决定。
 10. **`/api/pair-status` 一旦打开就是免认证判定 oracle**（默认关，`config.ts:115`）。
     保持它关着。
-11. **status.json / pairing-qr.png 是本地敏感文件**，0600 + 原子改名是代码里的硬要求
-    （`shell/status.ts:33-47`），但 `pairOnStartSec > 0` 或刚跑过 `/drc pair` 时里面可能躺着
-    一张仍然有效的 PSK（`index.ts:313`）。用完请关掉 `pairOnStartSec`（默认就是 0）。
-    `/drc pair` 那张 PNG 落在 `<会话工作区>/.dsh/pairing-qr.png`（解析不出工作区时落
-    `~/.dsh/pairing-qr.png`），右栏那份落在 `<会话工作区>/.dsh/sidebar-qr.png`（同理有 home 兜底），
-    同样按敏感文件对待（用完即一次性失效）。
+11. **status.json 是本地敏感文件**，0600 + 原子改名是代码里的硬要求
+    （`shell/status.ts`），但 `pairOnStartSec > 0` 时里面可能躺着一张仍然有效的 PSK
+    （`describeActivePairing`）。用完请关掉 `pairOnStartSec`（默认就是 0）。
+    配对二维码本身**不落磁盘**（见上面那条），所以这里少了一个曾经存在的敏感文件；
+    同一条改动也让"pill 的三条路由"成为攻击面上唯一新增的浏览器可达部分——
+    它由环回 `Host` 守卫 + 只读/写两档判据（写那条要 `x-drc-pair` 头）看着。
 12. **元数据没有保护**：中继（以及路上任何能看到 TLS 之外信息的人）知道谁在什么时候连了多久、
     帧的条数与字节数、host label、clientId、convId、6 位配对码。要更强的话需要
     padding 与覆盖控制面字段端到端的封装——都不在冻结面之外做不了，因为小程序一行不改。

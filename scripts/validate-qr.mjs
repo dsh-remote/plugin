@@ -37,7 +37,7 @@ if (!existsSync(PY)) {
   process.exit(2)
 }
 
-const { qrMatrix, qrPng, renderTerminalQr } = await import(pathToFileURL(qrModule).href)
+const { qrMatrix, qrPng } = await import(pathToFileURL(qrModule).href)
 
 const PAYLOADS = [
   'dshr:/p?v=1&s=wss%3A%2F%2Frelay.example.invalid&n=demo-host&psk=ZmFrZS1wc2srZmFrZQ%2BZmFrZQ%3D%3D&t=424242',
@@ -56,19 +56,17 @@ for (const text of PAYLOADS) for (const ecc of ECCS) cases.push({ text, ecc })
 
 const request = []
 for (const { text, ecc } of cases) {
-  // 三条产物都要过：
-  //   1) 图片 PNG —— 这是 `/drc pair` 现在**默认**给用户的东西（唯一真能扫的产物）；
-  //   2) 半块文本 —— 按字形还原成矩阵再解码，证明 renderTerminalQr 的字符→模块映射忠实；
-  //      这里**不加行距**是刻意的：这是纯映射校验。真机扫不出来的原因是 DSH 命令卡把
-  //      每行按 `line-height:1.6` 渲染、行间被塞进整行宽的缝隙（zxing ≥1.15 行距即失败）——
-  //      那是宿主的渲染问题，不是映射问题，所以关掉 qrImage 时才回落文本，且默认关。
-  //   3) 裸矩阵 —— 控制对照。
+  // 两条产物都要过：
+  //   1) 图片 PNG —— 配对二维码唯一的出口（状态栏那颗 pill 的 `GET /pairing.png`）；
+  //   2) 裸矩阵 —— 控制对照：证明解码失败时该怪渲染层，不是编码器。
+  // 曾经这里还有第三条"半块文本字形"（`renderTerminalQr` 的字符→模块映射）。文本码整个删了：
+  // DSH 命令卡把等宽输出按 `line-height:1.6` 渲染，行间留白将半块码横切成条，
+  // 实测 zxing ≥1.15 行距即失败，而宿主固定 1.6 —— "文本码能扫"在唯一宿主上从来不成立。
   const rendered = await qrMatrix(text, ecc, 2)
   request.push({
     text,
     ecc,
     matrix: rendered.map((row) => row.map((v) => (v ? 1 : 0))),
-    terminal: await renderTerminalQr(text, { ecc, style: 'half', quietZone: 2 }),
     png: (await qrPng(text, { ecc, scale: 8 })).toString('base64'),
   })
 }
@@ -78,8 +76,6 @@ import json, sys, base64, io
 from PIL import Image
 import zxingcpp
 
-# renderTerminalQr 的 half 分支：█=上下都亮、▀=仅上、▄=仅下、空格=不亮。
-GLYPH = {' ': (0, 0), '█': (1, 1), '▀': (1, 0), '▄': (0, 1)}
 
 def raster(m, scale=8, border=4):
     h, w = len(m), len(m[0])
@@ -93,30 +89,14 @@ def raster(m, scale=8, border=4):
                         px[border + x * scale + dx, border + y * scale + dy] = 0
     return img
 
-def from_glyphs(text):
-    # 每个字符还原成 2 个模块行（上/下）。检验的是字符→模块映射本身，不含宿主行距。
-    rows = []
-    for line in text.split("\\n"):
-        top, bot = [], []
-        for ch in line:
-            t, b = GLYPH.get(ch, (0, 0))
-            top.append(t)
-            bot.append(b)
-        rows.append(top)
-        rows.append(bot)
-    return rows
-
 req = json.load(sys.stdin)
 out = []
 for c in req["cases"]:
-    rec = {"png": False, "terminal": False, "matrix": False, "ok": True}
+    rec = {"png": False, "matrix": False, "ok": True}
     try:
         img = Image.open(io.BytesIO(base64.b64decode(c["png"])))
         res = zxingcpp.read_barcode(img)
         rec["png"] = bool(res is not None and res.text == c["text"])
-
-        res = zxingcpp.read_barcode(raster(from_glyphs(c["terminal"])))
-        rec["terminal"] = bool(res is not None and res.text == c["text"])
 
         res = zxingcpp.read_barcode(raster(c["matrix"]))
         rec["matrix"] = bool(res is not None and res.text == c["text"])
@@ -137,8 +117,7 @@ try {
 }
 
 const KINDS = [
-  ['png', '图片 PNG（默认产物）'],
-  ['terminal', '文本字形还原'],
+  ['png', '图片 PNG（配对唯一的出口）'],
   ['matrix', '裸矩阵'],
 ]
 
@@ -167,5 +146,5 @@ if (failed > 0) {
   console.error('✖ 校验失败')
   process.exit(1)
 }
-console.log('✅ 网页图片、文本字形还原、裸矩阵三条路径都扫得出来且内容逐字节一致')
+console.log(`✅ ${KINDS.map(([, label]) => label).join('、')}两条路径都扫得出来且内容逐字节一致`)
 
