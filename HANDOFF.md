@@ -94,16 +94,22 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
 | `scripts/` | `validate-qr.mjs`（改二维码必跑）、`read-session-log.mjs`、`mp-*.mjs` 等 |
 | `docs/DESIGN.md`、`docs/DESIGN-REVIEW.md` | 契约表 B1-B9 / F1-F13 / T1-T8、偏离 D1-D9、复核结论。开源仓的 `docs/` 是它们的**换算过名字的历史副本** |
+| `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（含 `sidebarQr`）、`status.json` 字段与本机实测值、右栏路由的 curl 取证配方、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
 | `docs/legacy-spec/` | 重写前从旧实现提取的事实档案 |
 | `HANDOFF.md`（本文） | 伞仓**没有 remote**，这些提交只在本地 |
 
 同步方法（唯一安全的一种）：`git archive HEAD <path> | tar -x -C <目标>`，取**已提交**快照，
 别拿工作区对拷——尤其别把并行会话的在飞改动带进开源仓。
 
-> **一处已知副作用**：`docs/DESIGN.md:239`（伞仓与开源 `dsh-remote-control` 两份都是）
-> 用**行号**引用旧交接文 `HANDOFF.md:180-181`。本文整体重写后那个行锚已经指错地方。
+> **两处已知的行号锚烂掉**（同一类病，别新增这种引用）：
+> ① `docs/DESIGN.md:239`（伞仓与开源 `dsh-remote-control` 两份都是）
+> 用**行号**引用旧交接文 `HANDOFF.md:180-181`，本文重写后那个锚已经指错地方。
 > 下次动设计文时把它改成不依赖行号的引用（比如指提交号 `d058d8f` 或指条文名），
-> 别再新增行号锚——这类锚点每次重写文档都会烂。
+> ② `docs/legacy-spec/relay-and-wireformat.md` 有十几条证据锚写成
+> `docs/SELF-HOSTING.md:<行号>`，而那份副本已删除——它们现在指向不存在的文件。
+> 档案本身不用改（它就是按当时的实现写的），要读原文用 `git show HEAD~1:docs/SELF-HOSTING.md`
+> （删除前最后一次提交的版本）。下次动 legacy-spec 时把这类锚改成"文件名 + 条文名"，
+> **别再新增行号锚**——这类锚点每次重写文档都会烂。
 
 ## 3. 待办（按价值排序）
 

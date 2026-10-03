@@ -227,8 +227,8 @@ installId 与配对一起消失。主机→手机方向用随机 nonce（Node �
 | `DRC_PAIR_STATUS` | 关 | 打开才提供 `/api/pair-status` | 默认 404 | 🟩 `relay.test.mjs:550-568` |
 | `DRC_MAX_CONNS` / `DRC_MAX_FRAMES_PER_SEC` | 200 / 500 | 连接数与单连接帧速率 | 1013 / 违规 3 次后 1008 | 🟩 `hardening.test.mjs:232`、`:157` |
 
-改名表（**旧文档里的名字全部作废**；顺带提醒 `docs/SELF-HOSTING.md:17-19` 的表格还写着旧名，
-按本文这张改）：
+改名表（**旧文档里的名字全部作废**。伞仓那份旧命名的 `docs/SELF-HOSTING.md` 已于 2026-10-03 删除，
+中继侧手册只剩开源仓那一份，它有一节专门写"三个变量改名了（迁移风险）"；下面这张是原始对照表）：
 
 | 旧名 | 现名 | 默认 | 出处 |
 |---|---|---|---|
@@ -589,10 +589,12 @@ key 是 `c2h`/`h2c` 派生后的**会话密钥**在内存里，PSK 留在存储�
 12. **元数据没有保护**：中继（以及路上任何能看到 TLS 之外信息的人）知道谁在什么时候连了多久、
     帧的条数与字节数、host label、clientId、convId、6 位配对码。要更强的话需要
     padding 与覆盖控制面字段端到端的封装——都不在冻结面之外做不了，因为小程序一行不改。
-13. **文档与实现的漂移**：`docs/SELF-HOSTING.md:17-19` 的环境变量表还是旧名字
-    （`DRC_MAX_AUTH_ATTEMPTS` / `DRC_MAX_PAIR_ATTEMPTS` / `DRC_MAX_PAIR_ATTEMPTS_PER_SEC`）。
-    以本文那张改名表与 `apps/server/src/config.ts:102-115` 为准；照旧名写进
-    `/etc/dsh-remote-control.env` 会**静默落回默认值**（解析器不认未知变量，也不报"没读过这个变量"）。
+13. **文档与实现的漂移**：这条原来的例子是"伞仓 `docs/SELF-HOSTING.md` 的环境变量表还写着旧名字
+    （`DRC_MAX_AUTH_ATTEMPTS` / `DRC_MAX_PAIR_ATTEMPTS` / `DRC_MAX_PAIR_ATTEMPTS_PER_SEC`）"。
+    那份副本已删除，所以**例子本身过期了，但教训要留着**：改名一旦发生，权威只有一个来源
+    （`dsh-remote-server` 的 `src/config.ts` 与它那本手册的迁移节），任何第二份表都必须当场跟着改或干脆删掉：
+    照旧名写进 `/etc/dsh-remote-control.env` 会**静默落回默认值**
+    （解析器不认未知变量，也不报"没读过这个变量"）。
 
 ## 报告安全问题
 

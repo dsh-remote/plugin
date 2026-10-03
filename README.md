@@ -165,7 +165,9 @@ cat ~/.dsh/dsh-remote-control/status.json
 - [`docs/DESIGN.md`](docs/DESIGN.md) — 重写设计：冻结契约表、偏离清单 D1-D9、分层与阶段门禁
 - [`docs/DESIGN-REVIEW.md`](docs/DESIGN-REVIEW.md) — 对设计的独立复核（哪几处判据不足以守住什么）
 - [`docs/legacy-spec/`](docs/legacy-spec/) — 旧实现的**需求与事实档案**（不是参考代码）
-- [`docs/SECURITY.md`](docs/SECURITY.md) / [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) / [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)
+- [`docs/SECURITY.md`](docs/SECURITY.md) / [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)
+- [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) — **本机宿主侧**：profile 安装、配置键表、`status.json` 排错、右栏路由与真机取证配方
+- 中继侧部署手册在开源仓：[`dsh-remote-server/docs/SELF-HOSTING.md`](dsh-remote-server/docs/SELF-HOSTING.md)（伞仓那份旧命名副本 2026-10-03 已删）
 - [`deploy/README.md`](deploy/README.md) — 生产部署
 
 ## License
