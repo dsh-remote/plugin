@@ -211,6 +211,15 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    不是依赖不兼容；唯一真实的不兼容是 **typescript 7**：协议仓的 `tsc` 不再自动纳入 `@types/node`
    （`Cannot find name 'TextEncoder'` 一类），加一行 `"types": ["node"]` 就修好，且对 TS 5.9 中性。
    **本轮没有合任何一个**（用户只要证据清单）。
+   **2026-10-04 凌晨复看（只读，没动任何 PR）**：还是 19 个开放。协议仓那 5 个的 CI 在
+   **5~6 秒就红**，`gh run view --log-failed` 的原文是
+   `…version pnpm@11.7.0 in the package.json with the key "packageManager" / Remove one of these
+   versions to avoid version mismatch errors like ERR_PNPM_BAD_PM_VERSION`
+   ——**死在装依赖之前**，所以"typescript 7 不兼容"这一条现在**没法从 CI 上读到**（它只在本地验过）。
+   顺带一条坑：`gh pr list --json mergeable` 会返回 `UNKNOWN`（GitHub 是惰性算的），
+   第一次查报"3 个不可合"，隔几秒再查同一批全是 `MERGEABLE`——**别拿一次 `UNKNOWN` 当冲突证据**。
+   要让这些 PR 变绿，动作是"把 PR 分支更新到最新 base"（`gh pr update-branch`），
+   那是改别人看得见的状态，**等用户点头再做**。
 6. **✅ 审批卡已真机闭环（2026-10-04 凌晨，见 §9.10）**；**还欠一条：提问卡**。
     审批那条以前"没弹"不是策略问题也不是手机问题，是我们登记 `approval/request` 的方式
     （要 `{global:true, prepend:true}`），修法与读数都在 §9.10。
