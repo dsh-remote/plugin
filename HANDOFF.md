@@ -189,12 +189,17 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    仓库里那个 secret 现在只是历史遗留，撤销与否不影响发布。
 3. **`droppedFrames` 查不到历史，因为中继压根不为丢帧写日志**（本轮把这条查清了，推翻了原来的说法）。
    原文写的是"去服务器 `journalctl | grep -c "frame dropped"`"——**那个 msg 串在代码里不存在**
-   （全仓 grep `frame dropped` 为空）。四处计数点
-   `dsh-remote-server/src/server.ts:341/360/377/387` 都只 `counters.droppedFrames += 1`，
+   （全仓 grep `frame dropped` 为空）。四处计数点是 `dsh-remote-server/src/server.ts` 里
+   `counters.droppedFrames += 1` 的那四处（写行号会随每次编辑漂走，认这个串就行），
    其中两处注释就写明"它在日志里不留痕，只能靠这个计数被发现"。
    所以：**journalctl 查不到，/healthz 只在当前进程内有值**，想要历史必须自己落计数快照。
    本轮实测：线上 `version:1.0.1`、`droppedFrames:56`（uptime 6294s），空载 30 秒不涨
    （56 → 56），也就是说丢帧集中在**活动窗口**而不是稳态。
+   **✅ 2026-10-04 凌晨：那条"自己落快照"已经做进中继**（server `d23944c`）——每
+   `DRC_COUNTERS_LOG_MS`（默认 60s）出一条 `msg:"counters"`，字段由**同一个 `health()`** 产出，
+   于是 `journalctl -u dsh-remote-control | grep '"msg":"counters"'` 取差值就能回答
+   "昨天那段时间丢了多少"。⚠️ **线上还没吃到它**：生产跑的是已发布的 `v1.0.1` 产物，
+   这一条要等下一次 Release + scp/重启才在线上有效（部署是改共享状态，等用户点头）。
 4. **✅ 已解决（2026-10-04 凌晨，见 §9.11）：宿主身份不再每次加载换一个。**
    原来 `packages/plugin/src/index.ts` 是 `hostId: config.hostId || 'h_' + randomBytes(3)`，
    而 profile 那条 config 里**没有 hostId**（默认 `''`）。实测线上 5 分钟内出现三个 hostId
