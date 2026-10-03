@@ -26,8 +26,8 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 |---|---|
 | ~~移植 `packages/plugin` 的在飞改动~~ | ✅ **已移植**（开源 control 仓 `5bd4227`：宿主注入的 `user/message` 不再冒充用户指令 + 留痕计数，3 条新测试，224 项全绿） |
 | 移植 `mp/` 与 `packages/presentation` 的在飞改动 | presentation 与开源仓只差结构（import 名），未见未提交改动；**mp/ 那份还没搬**（app.wxss / core/client.js / chat / sessions / theme，并行会话在飞） |
-| 删除伞仓 `apps/server/`、`packages/protocol/`、`packages/plugin/`、`packages/presentation/`、`mp/` | **e2e 与 scripts 不开源、留在伞仓**（用户 2026-10-03 定），所以删除前必须先把它们重接到开源仓路径。⚠️ 更正：私有 plugin 树与开源拷贝**不是**只差在飞改动——`src` 有 13 个文件、`tests` 有 6 个文件**结构不同**（开源那份把 `@dsh-rc/protocol/*` 改成了 `dsh-remote-wire`）。此前我写"逐文件相同"是用错了路径替换得出的**假结论**，已作废 |
-| 重接 `e2e/`、`scripts/` 到开源仓路径 | 需改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs,package.json}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs,check-mp-ui.mjs,mp-probe.mjs}`。包名与目录结构都变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`；协议层从扁平改成 `crypto/`、`identity/` 等分组） |
+| 删除伞仓五棵私有树 | ✅ **已删**（提交 f5a6853）；同轮把 e2e/scripts 的 22 个文件改指开源仓，残留私有路径引用 0 |
+| 重接 `e2e/`、`scripts/` 到开源仓路径 | 已改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs,package.json}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs,check-mp-ui.mjs,mp-probe.mjs}`。包名与目录结构都变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`；协议层从扁平改成 `crypto/`、`identity/` 等分组） | **但没跑绿**——这是接手第一件事，见 §0 的警告框
 | ⚠️ 协作冲突 | `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` **正被并行会话编辑**。改这批文件前先确认它停了，否则两边互相覆盖 |
 
 并行会话的在飞改动**已整份备份**到 `~/.provid/backups/dsh-umbrella-inflight-20261003.patch`（600，
@@ -184,8 +184,5 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
    **对 `webServer` 软探测，拿不到就只禁用路由与右栏，不许连累注册与转发**，并且要有测试
    锁住"缺 webServer 时配对链路照常"。`install-to-profile.sh`（伞仓私有脚本）随之只装一个
    bundle，`dsh.client` 那两个字段的注册形状要跟着改。npm 上这属于功能新增 → `1.1.0`。
-2. **伞仓瘦身**：删 `apps/server`、`packages/protocol`、`packages/plugin`、
-   `packages/presentation`、`mp`，并把 `e2e/`、`scripts/`（**不开源，留伞仓**）重接到开源仓路径。
-   顺序不能反：先重接、跑绿 `node e2e/run.mjs` 与 `node --test e2e/*.test.mjs`，再删。
-   ⚠️ `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` 正被并行会话编辑，动手前先确认它停了。
-   并行会话的在飞改动已备份：`~/.provid/backups/dsh-umbrella-inflight-20261003.patch`。
+2. ~~伞仓瘦身~~ ✅ 已做完（`f5a6853`）。**剩下的唯一尾巴是把 e2e 跑绿**，见 §0。
+
