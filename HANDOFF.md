@@ -382,9 +382,11 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 
 1. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
    而且 §3 第 1 条的 Trusted Publishing 还没配——用户 2026-10-03 已拍板"先配 TP 再发"。
-2. **本机 profile 现在跑的是未发布的 HEAD 产物**（`index.js af5ca4b4…` / `client.cjs` 见 §9.4 上面
-   那轮安装），不是 npm 上的 1.1.0。要么发版把它转正，要么用
-   `/tmp/drc-profile-backup/dsh-remote-control-1.1.0` 那份备份还原回去（还原也要重启）。
+2. **本机 profile 现在跑的是未发布的 HEAD 产物**（`index.js` 的 sha256 前缀 `af5ca4b4`，
+   与 `packages/plugin/dist/bundle/` 逐字节相同），不是 npm 上的 1.1.0。要么发版把它转正，要么还原：
+   备份在 `/tmp/drc-profile-backup/dsh-remote-control-1.1.0`（**/tmp 重启就没**，届时改用
+   `npm pack dsh-remote-control@1.1.0` 解出来的 `package/dist/bundle/*` 覆盖回去），
+   两条路都要再重启一次宿主才算数。
 3. **e2e 没覆盖那三条新路由**。`e2e/run.mjs` 走的是中继链路，不碰 webServer 路由；宿主侧的守卫与
    幂等由上面那些单测/对照测试钉住。要加的话是在 e2e 里对 `http://127.0.0.1:<port>` 发真请求，
    端口要像 §6 那样用 `lsof` 现找。
