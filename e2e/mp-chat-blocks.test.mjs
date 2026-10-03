@@ -68,6 +68,15 @@ function setByPath(obj, p, value) {
     node[m[4]] = value
     return
   }
+  // 两级路径：`pendingPermission.remainSec` 这种。审批卡的倒计时走的就是它，
+  // 而这条 setData 是**页面自己发的**（不是测试造的），所以解析器不认就是测试坏了，
+  // 不能反过来去改页面。
+  const two = p.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/)
+  if (two) {
+    assert.ok(obj[two[1]] && typeof obj[two[1]] === 'object', `setData 路径的对象不存在: ${two[1]}`)
+    obj[two[1]][two[2]] = value
+    return
+  }
   assert.match(p, /^[A-Za-z_$][\w$]*$/, `setData 路径没处理: ${p}`)
   obj[p] = value
 }
@@ -152,7 +161,9 @@ test('一轮：思考随内容出现而收尾，工具进同一个步骤组，�
 
 test('工具还在跑的时候不补思考（那会儿在跑的是工具，不是模型）', () => {
   const p = makePage()
-  // 空块流时不插思考：那一轮还没开始，状态由顶栏表达，凭空一段「思考中」反而落单
+  // 空块流时不插思考：那会儿还没有任何一组过程，用户看到的是刚发出去的那条指令，
+  // 运行态由顶栏的中断按钮与后续落下的 live 步骤组说明。凭空在正文前面插一段
+  // 「思考中」反而落单 —— 而且它会一直计时到 idle 才停
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.deepEqual(kinds(p), [], '空流不插思考段')
 
@@ -239,9 +250,13 @@ test('assistant/message 自带 done，不得据此判定这一轮结束', () => 
   })
   p._flushDelta()
   assert.equal(p.data.running, true, '一轮里可以有好几条 assistant/message，done 不代表 turn 结束')
-  // 文案是「思考中…」而不是「主机运行中」：过程块默认不渲染（SHOW_STEPS=false），
-  // 顶栏这一行是用户唯一能看见的"它还在动"。说"运行中"像是有东西可看其实没有。
-  assert.equal(p.data.barText, '思考中…')
+  // 运行态由 live 步骤组的实时标签承担，输入区上方那条独立的运行条已删。
+  // ⚠️ 这里**不能**断言"必须有 live 步骤组"：本例是空块流直接来正文，
+  // 从来没有落过步骤组，前提不成立。这一轮的可见信号是正文末尾的流式光标
+  // 与顶栏的中断按钮。
+  assert.equal('runText' in p.data, false, '不该再有 runText 字段')
+  assert.notEqual(p.data.barText, '思考中…', '运行态不许占用顶栏')
+  assert.ok(kinds(p).includes('text'), '正文在流，光标就是"还在动"')
 })
 
 test('流式 delta 合并成一块，done 落在块上', () => {
@@ -423,11 +438,11 @@ test('「回到最新」的锚点必须是两个静态 id；过程窗口必须�
   assert.match(wxss, /\.steps-scroll\s*\{[^}]*max-height/, '限高要写在 .steps-scroll 上')
 })
 
-// ── 过程默认不显示（SHOW_STEPS = false）────────────────────────────────
+// ── 过程显示（SHOW_STEPS = true），但仍是数据层与渲染层分开 ────────────
 
-test('过程块默认不渲染，但数据照样落块', () => {
+test('过程块渲染，但开关仍然独立于落块逻辑', () => {
   const p = makePage()
-  assert.equal(p.data.showSteps, false, '手机上要看的是结论，不是过程')
+  assert.equal(p.data.showSteps, true, '过程要放出来：收起时是一行摘要，展开看细节')
 
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'started' })
@@ -440,14 +455,15 @@ test('过程块默认不渲染，但数据照样落块', () => {
     resultPreview: 'ok',
   })
 
-  // 数据层：一个步骤组必须在，且收尾帧要能按 callId 找到原来那条并更新它
+  // 数据层：一个步骤组必须在，且收尾帧要能按 callId 找到原来那条并更新它。
+  // 这条与 showSteps 无关 —— 关掉渲染也不能坏，否则审批看不到主机在调什么。
   const g = p.data.blocks.find((b) => b.kind === 'steps')
-  assert.ok(g, '不显示 ≠ 不记录：审批要知道主机在调什么，回放要对得上 callId')
+  assert.ok(g, '审批要知道主机在调什么，回放要对得上 callId')
   const tool = g.items.find((it) => it.callId === 'c1')
   assert.equal(tool.phase, 'completed', '同一次调用的收尾帧要更新到原来那条，不能新开一组')
   assert.equal(tool.result, 'ok')
 
-  // 渲染层：wxml 里那一支必须由 showSteps 门住
+  // 渲染层：wxml 里那一支仍由 showSteps 门住（一个常量就能整体关掉）
   const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
   assert.match(
     wxml,
@@ -463,26 +479,57 @@ test('过程块默认不渲染，但数据照样落块', () => {
     'note 分支要写明 kind 条件，裸 else 会接住所有没匹配上的块',
   )
   assert.match(wxml, /wx:if="\{\{item\.kind === 'note'\}\}"/, 'note 要显式写条件')
-  assert.match(wxml, /wx:if="\{\{showSteps && foldable\}\}"/, '顶栏「展开过程」也要跟着关')
+  assert.match(wxml, /wx:if="\{\{showSteps && foldable\}\}"/, '顶栏「展开过程」跟着 showSteps 走')
 })
 
-test('运行中顶栏说「思考中…」—— 那一行是唯一的"它还在动"信号', () => {
+test('运行态不再单独占一行：没有 runText，也没有 runbar，信号落在 live 步骤组上', () => {
   const p = makePage()
   stubClient(p, () => Promise.resolve(null))
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8')
+
+  assert.equal('runText' in p.data, false, '输入区上方那条运行条已删，字段也不该留')
+  assert.doesNotMatch(wxml, /runbar|runText/, 'wxml 里不许再有运行条')
+  assert.doesNotMatch(wxss, /\.runbar|\.jump-up/, 'wxss 里不许再有运行条与它的让位偏移')
+
+  // 先发一条，让真的落一个步骤组出来 —— 空块流下没有组可谈，
+  // 在那种前提下断言"必须有 live 组"是判据自己写错了。
+  p.data.inputText = '跑一下测试'
+  p.onSend()
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
-  assert.equal(p.data.barText, '思考中…')
-  assert.equal(p.data.barTheme, 'primary')
+
+  assert.equal(p.data.barText, '已连接', '顶栏只回答「连上了吗」')
+  assert.equal(p.data.barTheme, 'success')
+  assert.ok(!wxml.includes('{{barText}}思考'), '顶栏不得再拿 barText 拼运行态')
+
+  const live = p.data.blocks.filter((b) => b.kind === 'steps' && b.live)
+  assert.ok(live.length > 0, '运行中要有 live 步骤组')
+  assert.equal(live[0].label, '思考中', 'live 组的标签就是"它还在动"这句话')
+  assert.match(wxml, /class="steps-label \{\{item\.live \? 'live' : ''\}\}"/, 'live 标签是运行态的可见信号')
 
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
-  assert.equal(p.data.barText, '空闲', '跑完要回到空闲，不能一直写着思考中')
+  assert.equal(p.data.barText, '已连接', '顶栏不受运行态影响')
+  assert.equal(
+    p.data.blocks.filter((b) => b.kind === 'steps' && b.live).length,
+    0,
+    '跑完就没有 live 组了，运行态不能一直挂着',
+  )
 })
 
-test('顶栏的「展开过程」在过程不渲染时不会出现', () => {
+test('顶栏断开时说「未连接」而不是「空闲」', () => {
+  const p = makePage()
+  p.client = Object.assign({}, p.client, { status: 'error', statusText: '连接失败' })
+  p._renderBar()
+  assert.equal(p.data.barText, '连接失败')
+  assert.equal(p.data.barTheme, 'danger')
+})
+
+test('顶栏的「展开过程」在有可展开的组时出现', () => {
   const p = makePage()
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'completed' })
-  assert.ok(p.data.foldable > 0, '数据层仍知道有可展开的组')
-  assert.equal(p.data.showSteps && p.data.foldable > 0, false, '但 wxml 的条件为假，按钮不出现')
+  assert.ok(p.data.foldable > 0, '有工具调用的组才算可展开（纯思考的组没什么可展开）')
+  assert.equal(p.data.showSteps && p.data.foldable > 0, true, '过程显示着，按钮就该在')
 })
 
 test('点空白收起键盘；输入区自己 catch 住不误收', () => {
@@ -694,20 +741,23 @@ test('历史头的文案不许自相矛盾（这类缺陷只有截图看得见�
   assert.match(wxml, /没读到主机上的历史/)
 })
 
-test('列表里这条会话正在跑时，顶栏要跟着变（从列表点进运行中的会话，原来一直显示"空闲"）', () => {
+test('列表里这条会话正在跑时，页面上要看得见（从列表点进运行中的会话，原来毫无动静）', () => {
   const p = makePage()
   // 必须桩住 client：真实的那个单例此刻 status 还是 'idle'，而 'idle' 在本项目里的
   // 约定文案就是「未连接」（sessions 页的 statusView 一样）。从列表点进会话，
   // 前提是已经连上了，所以这里用 online 这个真实状态。
   stubClient(p, () => Promise.resolve(null))
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'running', running: true }], reason: 'list' })
   assert.equal(p.data.running, true)
-  assert.equal(p.data.barText, '思考中…')
+  // 刚点进会话时正文是空的，还没有步骤组 —— 运行态这时唯一的落点是顶栏的中断按钮。
+  // 判据要认这一条：断言"必须有 live 步骤组"在这里是错的，前提不成立。
+  assert.match(wxml, /wx:if="\{\{running\}\}"\s*\n?\s*class="bar-stop"/, '运行中要在顶栏给出中断按钮')
+  assert.deepEqual(kinds(p), [], '空流不该凭空插一段过程')
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'idle', running: false }], reason: 'refresh' })
   assert.equal(p.data.running, false)
-  assert.equal(p.data.barText, '空闲')
   p._stopThinkTick()
 })
 
@@ -728,4 +778,164 @@ test('历史：刚发出去的那句话不会因为历史里也有就显示两�
     p.data.blocks.some((b) => b.kind === 'user' && b.text === '再跑一遍测试'),
     '只该吞掉与本地上屏重复的那一条，别的用户消息要照常回放',
   )
+})
+
+// ── 模型 ────────────────────────────────────────────────────────────
+
+test('模型：ev.model 到达后显示模型名，且这一帧不该被"不是本会话"过滤掉', () => {
+  const p = makePage()
+  send(p, { t: 'ev.model', model: 'deepseek-chat', provider: 'deepseek', canSwitch: false, reason: '主机内核只提供读取' })
+
+  assert.equal(p.data.modelName, 'deepseek-chat')
+
+  p._stopThinkTick()
+})
+
+test('模型：超长名字在这一层就截断，界面层不再自己判断', () => {
+  const p = makePage()
+  const long = 'a-very-long-model-name-that-will-not-fit-in-the-bar'
+  send(p, { t: 'ev.model', model: long, canSwitch: false })
+
+  assert.notEqual(p.data.modelName, long, '不该把整串塞进顶栏')
+  assert.ok(p.data.modelName.endsWith('…'), '截断要有省略号，否则看不出被截了')
+  assert.ok(p.data.modelName.length <= 22, `截断后仍太长: ${p.data.modelName.length}`)
+
+  p._stopThinkTick()
+})
+
+test('模型：只读，不留任何切换入口（canSwitch/options 相关的字段与处理器都不许存在）', () => {
+  const p = makePage()
+  send(p, {
+    t: 'ev.model',
+    model: 'deepseek-chat',
+    canSwitch: true,
+    options: [
+      { value: 'deepseek-chat', label: 'DeepSeek Chat' },
+      { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+    ],
+  })
+
+  // 主机内核实测 modelFace = no-list+no-set，切不了。留一个"点了会弹空列表"的
+  // 入口，比没有这个入口更像坏了；留着没人读的字段，下一个人会以为只是没接上。
+  assert.equal(p.data.modelName, 'deepseek-chat', '只显示名字')
+  assert.equal('canSwitchModel' in p.data, false, '不该留 canSwitch 字段')
+  assert.equal('modelOptions' in p.data, false, '不该留 options 字段')
+  assert.equal(typeof p.onModelTap, 'undefined', '不该有模型点击处理器')
+  assert.equal(typeof p.onModelPick, 'undefined', '不该有候选选择处理器')
+
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  assert.doesNotMatch(wxml, /bindtap="onModel/, 'wxml 里不许还绑着模型的手势')
+  assert.doesNotMatch(wxml, /modelPanelOpen/, '候选面板已经删掉')
+  assert.match(wxml, /class="bar-model[^"]*"[^>]*>\{\{modelName\}\}/, '模型名在顶栏里弱化显示')
+
+  p._stopThinkTick()
+})
+
+test('模型：ev.model 不带 sessionId，不能被会话过滤误丢', () => {
+  const p = makePage()
+  // 会话 id 对不上——如果实现里把这条帧放在「不是本会话就 return」之后，
+  // 模型名就永远不显示，而单测会以为是自己造的数据不对。
+  send(p, { t: 'ev.model', sessionId: 'another-session', model: 'deepseek-chat', canSwitch: false })
+  assert.equal(p.data.modelName, 'deepseek-chat', '模型是全局的，不该被会话 id 拦掉')
+
+  p._stopThinkTick()
+})
+
+// ── 审批卡：本地倒计时 ──────────────────────────────────────────────
+
+test('审批：expiresAt 换算成剩余秒数并逐秒往下走', () => {
+  const p = makePage()
+  const expires = new Date(Date.now() + 180_000).toISOString()
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq1',
+    action: 'Bash',
+    options: [
+      { id: 'approve', label: '允许一次' },
+      { id: 'reject', label: '拒绝' },
+    ],
+    expiresAt: expires,
+  })
+
+  const perm = p.data.pendingPermission
+  assert.ok(perm, '审批卡应出现')
+  assert.equal(perm.requestId, 'rq1')
+  assert.equal(perm.options.length, 2)
+  assert.ok(perm.deadlineAt > Date.now(), 'deadlineAt 应是将来的时刻')
+
+  // _onPermission 已经起过表；剩余应立刻可见（不能等一秒才显示）
+  assert.ok(perm.remainSec > 0 && perm.remainSec <= 180, `剩余秒数不对: ${perm.remainSec}`)
+
+  p._stopPermTick()
+  p._stopThinkTick()
+})
+
+test('审批：没有 expiresAt 就不倒计时（不能自己编一个 180 秒出来）', () => {
+  const p = makePage()
+  send(p, { t: 'ev.permission_request', sessionId: 's1', requestId: 'rq1', action: 'Bash' })
+
+  const perm = p.data.pendingPermission
+  assert.equal(perm.deadlineAt, 0, '主机没给期限就不许显示倒计时')
+  assert.equal(perm.remainSec, 0, '没有期限就没有剩余秒数')
+
+  p._stopThinkTick()
+})
+
+test('审批：点了按钮就回传逐字的 option id，并停掉那个还在走的表', () => {
+  const p = makePage()
+  const sent = []
+  p.client = { resolvePermission: (...a) => sent.push(a), interrupt() {} }
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq1',
+    action: 'Bash',
+    options: [
+      { id: 'approve', label: '允许一次' },
+      { id: 'reject', label: '拒绝' },
+    ],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })
+
+  p.onPermissionTap({ currentTarget: { dataset: { decision: 'approve' } } })
+  assert.equal(p.data.pendingPermission, null, '回了就该把卡撤掉')
+  assert.equal(sent.length, 1)
+  assert.deepEqual(sent[0], ['s1', 'rq1', 'approve'], 'requestId 与 option id 必须逐字回传')
+  assert.equal(p._permTimer, null, '表必须停，否则它会一直 setData')
+
+  p._stopThinkTick()
+})
+
+test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停', () => {
+  const p = makePage()
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq1',
+    action: 'Bash',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })
+  assert.ok(p.data.pendingPermission)
+
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  assert.equal(p.data.pendingPermission, null, '运行态一恢复，挂着的审批就作废')
+  assert.equal(p._permTimer, null, '作废的卡不该还留着一个在走的表')
+
+  p._stopThinkTick()
+})
+
+test('审批：页面隐藏时倒计时停表（定时器必须与撤销成对）', () => {
+  const p = makePage()
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq1',
+    action: 'Bash',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })
+  p.onHide()
+  assert.equal(p._permTimer, null)
+
+  p._stopThinkTick()
 })

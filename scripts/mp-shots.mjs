@@ -97,8 +97,6 @@ const SHOTS = {
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
-        keepAwakeOn: true,
-        keepAwakeText: '当前持锁中 · caffeinate',
       },
     },
     {
@@ -113,8 +111,6 @@ const SHOTS = {
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
-        keepAwakeOn: true,
-        keepAwakeText: '当前持锁中 · caffeinate',
       },
     },
     {
@@ -129,8 +125,6 @@ const SHOTS = {
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
-        keepAwakeOn: true,
-        keepAwakeText: '当前持锁中 · caffeinate',
         sessions: [
           {
             id: 's-1',
@@ -184,8 +178,6 @@ const SHOTS = {
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
-        keepAwakeOn: true,
-        keepAwakeText: '当前持锁中 · caffeinate',
         sessions: [
           {
             id: 's-1',
@@ -260,10 +252,14 @@ const SHOTS = {
         title: '重做小程序对话页信息流',
         showSteps: true, // 这张专门验过程卡的深色配色，要显式打开
         running: true,
-        barText: '思考中…',
-        barTheme: 'primary',
+        barText: '已连接',
+        barTheme: 'success',
         foldable: 1,
         turn: 1,
+        // 模型名在顶栏里，也要看一眼深色下的样子：文字走 --td-text-color-placeholder，
+        // 比状态文字还弱一档 —— 弱到看不清就失去信息量，这一档要亲眼确认。
+        // 对比度检查只能证明「达标」，看不出「挤在一起」这类布局问题。
+        modelName: 'deepseek-chat',
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '21:20' },
           { key: 'u1', kind: 'user', text: '把两个测试失败查清楚', confirmed: true },
@@ -352,22 +348,23 @@ const SHOTS = {
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
     {
-      // **默认态**：过程不显示，屏幕上只有你的指令、顶栏的「思考中…」和正文。
-      // 这才是用户实际会看到的那一屏 —— 前面那些带 showSteps 的场景是"打开开关之后"
-      // 的样子，属于回归备用，不能拿它们当默认验收。
+      // 运行中的默认态：过程**要显示**（收起时一行摘要、展开看细节），
+      // 「思考中…」在输入区上方那条，顶栏只留连接状态。
+      // 这张是用户实际会看到的那一屏 —— 后面那些带更多字段的场景是"排版对照"，
+      // 不能拿它们当默认验收。
       name: 'chat-plain',
       url: '/pages/chat/chat',
       data: {
         running: true,
-        barText: '思考中…',
-        barTheme: 'primary',
+        barText: '已连接',
+        barTheme: 'success',
         turn: 1,
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:10' },
           { key: 'u1', kind: 'user', text: '把两个测试失败查清楚', confirmed: true },
           {
-            // 故意塞一个 steps 块：默认态下它**不该被渲染**（要能在这张图上
-            // 确认"没有那一行『正在执行 N 个步骤』"）
+            // 塞一个 steps 块：默认态下它**必须被渲染**（要能在这张图上
+            // 确认"有『正在执行 3 个步骤』这一行，且过程窗口在里面"）
             key: 'x1',
             kind: 'steps',
             closed: false,
@@ -394,6 +391,61 @@ const SHOTS = {
       },
     },
     {
+      // 全收起的长会话：顶栏的「展开过程」按钮要出现，过程只占一行。
+      // 少了这一步，"过程显示出来了"就等于"过程永远撑满整屏"——
+      // 长会话里没人想翻十几屏的过程。
+      name: 'chat-folded',
+      url: '/pages/chat/chat',
+      data: {
+        showSteps: true,
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        foldable: 3,
+        turn: 3,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:02' },
+          { key: 'u1', kind: 'user', text: '先看 git status', confirmed: true },
+          {
+            key: 'x1',
+            kind: 'steps',
+            closed: true,
+            open: false,
+            live: false,
+            tools: 2,
+            label: '已完成 2 个步骤',
+            items: [],
+          },
+          { key: 'm1', kind: 'text', text: '工作区有两个改动，还没提交。', done: true },
+          { key: 'r2', kind: 'turn', label: '第 2 轮', time: '22:05' },
+          { key: 'u2', kind: 'user', text: '那就跑一遍测试', confirmed: true },
+          {
+            key: 'x2',
+            kind: 'steps',
+            closed: true,
+            open: false,
+            live: false,
+            tools: 1,
+            label: '已完成 1 个步骤',
+            items: [],
+          },
+          { key: 'm2', kind: 'text', text: '两项失败，都指向同一个 mock 数据。', done: true },
+          { key: 'r3', kind: 'turn', label: '第 3 轮', time: '22:10' },
+          { key: 'u3', kind: 'user', text: '把两个测试失败查清楚', confirmed: true },
+          {
+            key: 'x3',
+            kind: 'steps',
+            closed: false,
+            open: false,
+            live: true,
+            tools: 3,
+            label: '正在执行 3 个步骤',
+            items: [],
+          },
+        ],
+      },
+    },
+    {
       // 运行中的一轮，且步骤组**很长**（6 步工具）。
       // 这是专门用来验「过程窗口限高」的：展开后不该把下面的正文顶出屏幕 ——
       // 截图里正文必须还露在窗口下面，否则限高就没生效。
@@ -404,8 +456,8 @@ const SHOTS = {
       data: {
         showSteps: true, // 这张要看到过程块，所以显式打开
         running: true,
-        barText: '思考中…',
-        barTheme: 'primary',
+        barText: '已连接',
+        barTheme: 'success',
         foldable: 1,
         turn: 1,
         blocks: [
@@ -510,7 +562,7 @@ const SHOTS = {
       data: {
         showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
-        barText: '空闲',
+        barText: '已连接',
         barTheme: 'success',
         atBottom: false,
         historyState: 'ok',
@@ -558,7 +610,7 @@ const SHOTS = {
       data: {
         showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
-        barText: '空闲',
+        barText: '已连接',
         barTheme: 'success',
         foldable: 1,
         expanded: true,
@@ -632,7 +684,30 @@ const SHOTS = {
             { id: 'approve', label: '允许' },
             { id: 'reject', label: '拒绝' },
           ],
+          // 倒计时：主机 180 秒无操作会自动拒绝，卡片上必须看得见时间在走。
+          // 刻意给一个**小**数字（而不是 179），这样「剩余 20 秒内转警示色」那条
+          // 分支也能在这张截图里被看到 —— 否则那个样式永远只有代码没有证据。
+          remainSec: 14,
         },
+      },
+    },
+    {
+      // 模型：顶栏里「已连接」右边的一段小字。
+      // 主机内核只有 currentSelection（modelFace = no-list+no-set），换不了 ——
+      // 所以这一张要确认的是它**弱到不像能点**，而不是一个胶囊加尖括号。
+      // 刻意给一个超长的模型名，顺便看 ellipsis 有没有把右侧按钮挤走。
+      name: 'chat-model',
+      url: '/pages/chat/chat',
+      data: {
+        running: false,
+        barText: '已连接',
+        barTheme: 'success',
+        turn: 1,
+        modelName: 'deepseek-chat-long-model-name',
+        blocks: [
+          { key: 'u1', kind: 'user', text: '看下这个仓库完成度', confirmed: true },
+          { key: 'm1', kind: 'text', text: '当前仓库主体是伞仓，四个子项目各自独立成仓。', done: true },
+        ],
       },
     },
     {
@@ -644,7 +719,7 @@ const SHOTS = {
       data: {
         showSteps: true, // 这张要看到过程块，所以显式打开
         running: false,
-        barText: '空闲',
+        barText: '已连接',
         barTheme: 'success',
         foldable: 1,
         turn: 2,
@@ -707,7 +782,7 @@ const SHOTS = {
       wait: 900,
       data: {
         running: false,
-        barText: '空闲',
+        barText: '已连接',
         barTheme: 'success',
         historyState: 'error',
         blocks: [],
@@ -719,7 +794,7 @@ const SHOTS = {
       url: '/pages/chat/chat',
       data: {
         running: false,
-        barText: '空闲',
+        barText: '已连接',
         barTheme: 'success',
         historyState: 'ok',
         blocks: [],

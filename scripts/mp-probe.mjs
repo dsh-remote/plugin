@@ -194,10 +194,9 @@ const CASES = {
    * 只查①的话，一个"内容没了但视口停在旧高度"的 bug 照样全绿。
    */
   fold: async (page) => {
-    // **必须显式 showSteps: true**。过程块默认不渲染（chat.js 的 SHOW_STEPS=false），
-    // 不打开的话这里数到的卡片恒为 0、内容高度恒定 —— 判据会一直红，
-    // 而红的原因不是折叠坏了，是"根本没有过程可折"。
-    // 打开开关之后，折叠这套行为仍然要成立（那是留下来的代码），所以继续守。
+    // **显式 showSteps: true**：过程块是渲染层的一个开关（chat.js 的 SHOW_STEPS，
+    // 默认已开），写出来是为了这条判据不依赖默认值 —— 万一有人把默认关掉，
+    // 这里数到的卡片恒为 0、内容高度恒定，判据会一直红，而红的原因不是折叠坏了。
     await page.setData({
       blocks: foldFixture(8, true, 6),
       foldable: 8,
@@ -236,17 +235,23 @@ const CASES = {
     ]
   },
   /**
-   * 过程默认**不显示**（本轮的产品决定）：数据里有步骤组，渲染层却一个节点都不出。
+   * 过程块**默认渲染**：数据里有步骤组，渲染层也要出节点。
    *
-   * 这条判据读的是 `page.$$('.steps-card').length` —— **渲染层**的节点数，
-   * 不是 data 里的块数。两者混了这条断言就白写：data 里当然还有 steps 块
-   * （审批要知道主机在调什么、回放要对得上 callId），那是故意的。
+   * 读的是 `page.$$('.steps-card').length` —— **渲染层**节点数，不是 data 里的块数。
+   * 两者混了这条断言就白写：data 与渲染层本来就是两件事（关掉渲染不能坏落块，
+   * 审批要知道主机在调什么、回放要对得上 callId）。
+   *
+   * ⚠️ 这里**不许 setData({showSteps: …})**。写上去就等于自己把开关按住了：
+   * 探针会一直绿，而页面早就是"过程不显示"的了 —— 我就这么被骗过一次
+   * （把 SHOW_STEPS 改回 false，这条判据仍然 5/5 全绿）。
+   * 要验的是**默认行为**，所以只摆 blocks，让 showSteps 保持页面自己的初值，
+   * 并且把那个初值本身也断言出来。
    *
    * 顺带盯住那个空提示条：wx:elif 条件为假会落到末尾的 wx:else，
    * 于是每个步骤组变成一个空 note —— 页面上会多出一排空行。
    */
-  plain: async (page) => {
-    await page.setData({ blocks: foldFixture(4, true, 3), showSteps: false })
+  steps: async (page) => {
+    await page.setData({ blocks: foldFixture(4, true, 3) })
     await page.waitFor(1200)
 
     const data = await page.data()
@@ -256,12 +261,203 @@ const CASES = {
     const notes = (await page.$$('.note')).length
     const replies = (await page.$$('.reply')).length
 
+    // 量宽度：automator 的 Element **没有** boundingClientRect，只有 offset()+size()，
+    // 而且 size() 返回的是**字符串**（'280px'），不 parseFloat 会让比较变 NaN → 判据恒红。
+    const widthOf = async (sel) => {
+      const el = await page.$(sel)
+      if (!el) return 0
+      const box = await el.size()
+      return parseFloat(box && box.width) || 0
+    }
+    const replyW = await widthOf('.reply')
+    const stepsW = await widthOf('.steps-card')
+    // 内容区宽度 = 每个 block 的外框（.blk 与 .reply/.steps-card 同宽，都是 .pad 的子级）。
+    // 注意别写 .msg —— 页面上没有这个类，量不到就是 0，判据会假红。
+    const threadW = await widthOf('.blk')
+
     return [
-      [groups.length === 4, `data 里仍要有步骤组（${groups.length} 个）—— 不显示 ≠ 不记录`],
-      [cards === 0, `默认态不许渲染过程卡（数到 ${cards} 张）`],
-      [bars === 0, `过程那一行也不该出现（数到 ${bars} 个）`],
+      [data.showSteps === true, `默认要显示过程（页面初值 showSteps=${data.showSteps}）—— 收起一行摘要、展开看细节`],
+      [groups.length === 4, `data 里有 ${groups.length} 个步骤组`],
+      [cards === 4, `过程卡要真的渲染出来（数到 ${cards} 张）—— 判据没按 showSteps 才有意义`],
+      [bars === 4, `每一组都要有那一行（数到 ${bars} 个）`],
       [notes === 0, `不许掉进 note 分支变成空提示条（数到 ${notes} 个）`],
       [replies === 4, `正文要照常渲染（${replies} 条回复）`],
+
+      // 宽度必须量在**渲染层**：读 CSS 源码只能证明"我写了什么"，
+      // 只有量到真实像素才能证明"它真的和过程卡一样宽"。
+      // 这里量的是卡片外框宽度（.reply / .steps-card），不是内部文字的排版宽度。
+      [replyW > 0 && Math.abs(replyW - stepsW) <= 1,
+        `正文卡要和过程卡同宽（正文 ${replyW}px vs 过程 ${stepsW}px，差${Math.abs(replyW - stepsW)}px）`],
+      [replyW >= threadW - 1,
+        `正文卡要通栏，宽度贴住内容区（正文 ${replyW}px vs 内容区 ${threadW}px）`],
+    ]
+  },
+  /**
+   * 模型：**顶栏里的一段只读小字**。
+   *
+   * 这一代主机内核的 `agentDefaultModel` 上只有 `currentSelection`（取证：
+   * status.json 的 `modelFace = no-list+no-set via=currentSelection`），
+   * 既列不出候选也换不了。所以这里判的是「弱化、不可点、没有手势」——
+   * 长得像能点却换不了，用户只能反复点它来判断是不是自己手机坏了。
+   *
+   * ⚠️ 不许 `setData({modelName})` 直接塞：那会跳过 `_onModel` 的截断逻辑，
+   * 判出来的是"我塞进去的东西显示出来了"。这里走页面自己的 `_onModel`。
+   */
+  'bar-model': async (page) => {
+    await page.setData({ blocks: foldFixture(1, true, 2), atBottom: true })
+    // 没给 modelName 时顶栏不该留一段空白
+    await page.callMethod('onShow')
+    await page.waitFor(300)
+    const idleNames = (await page.$$('.bar-model')).length
+
+    await page.callMethod('_onModel', {
+      t: 'ev.model',
+      model: 'deepseek-chat',
+      provider: 'deepseek',
+      canSwitch: false,
+      reason: '主机内核只提供读取',
+    })
+    await page.waitFor(300)
+
+    const el = await page.$('.bar-model')
+    const nameText = el ? await el.text() : ''
+    // ⚠️ automator 的 `style()` **只接受单个属性名**：传数组或空参数都会抛
+    // "name must be a string"（底层的 getter 支持数组，但 style 自己先拦了）。
+    // 所以只能逐个读。
+    const style = el
+      ? {
+          size: await el.style('font-size'),
+          color: await el.style('color'),
+          bg: await el.style('background-color'),
+        }
+      : null
+    const barEl = await page.$('.bar-text')
+    const barTextStyle = barEl
+      ? { size: await barEl.style('font-size'), color: await barEl.style('color') }
+      : null
+
+    // 「弱化」必须量在渲染层：字号更小、颜色更浅。断言只查 data 字段的话，
+    // 改成一个跟状态文字一样大的胶囊也会全绿。
+    const size = parseFloat(String(style && style.size) || '0')
+    const barSize = parseFloat(String(barTextStyle && barTextStyle.size) || '0')
+    // 不可点：模型只占顶栏的一段，不带自己的手势
+    const inBar = (await page.$$('.bar .bar-model')).length
+    const modelBg = String((style && style.bg) || 'rgba(0, 0, 0, 0)')
+
+    return [
+      [idleNames === 0, `主机还没给模型时顶栏不该留白（数到 ${idleNames} 段）`],
+      [inBar === 1, `模型名要在顶栏里，与「已连接」同一行（数到 ${inBar} 段）`],
+      [nameText === 'deepseek-chat', `要显示模型名（读到「${nameText}」）`],
+      [
+        modelBg === 'rgba(0, 0, 0, 0)' || modelBg === 'transparent',
+        `模型不能有胶囊底色 —— 胶囊这套语言就是在说"这里能点"（读到 ${modelBg}）`,
+      ],
+      [size > 0 && barSize > 0 && size < barSize, `模型字号要比状态文字小（${size} vs ${barSize}）`],
+      [
+        style && style.color && style.color !== barTextStyle.color,
+        `模型颜色要比状态文字浅（${style && style.color} vs ${barTextStyle.color}）`,
+      ],
+    ]
+  },
+  /**
+   * 「思考中…」的落点：live 步骤组的实时标签，**不再单独占一行**。
+   *
+   * 判据落在渲染层：数 `.runbar` 节点必须为 0，读 live 步骤组的 `.steps-label`
+   * 文字，并确认顶栏不含运行态文案。运行条删掉之后，"它还在动"全靠这条标签 ——
+   * 所以这里要判的是"标签真的在、说的是思考中"，不是"顶栏没有那句"。
+   *
+   * ⚠️ 不许 setData({barText}) / setData({steps[0].label})：那是自己把要说的话按住了，
+   * 判据就废了一半。这里只摆 blocks 与 running，然后走页面自己的 onShow 链。
+   */
+  'run-live-label': async (page) => {
+    // ⚠️ live 标签**不能**靠 setData 摆出来：`foldFixture` 里的 `live` 是写死的
+    // false，而 setData 不经过 `decorateSteps`，那个派生字段永远算不出来。
+    // 硬塞一个 `live: true` 进去等于自己按住开关再检查它 —— 判据就废了一半。
+    // 这里走页面自己的链：填输入框 → onSend → 送一帧 ev.run_state。
+    // `sessionId` 必须一起给：onSend 第一道门就是它，缺了会静默 return，
+    // 后面两条判据会以"没有组"的形式红掉，看着像渲染问题。
+    await page.setData({ sessionId: 's1', inputText: '查一下这个仓库的完成度', atBottom: true })
+    await page.callMethod('onSend')
+    await page.waitFor(400)
+    await page.callMethod('_onEvent', {
+      kind: 'payload',
+      payload: { t: 'ev.run_state', sessionId: 's1', state: 'running' },
+    })
+    await page.waitFor(900)
+
+    const data = await page.data()
+    const bars = (await page.$$('.runbar')).length
+    const barText = await (await page.$('.bar-text')).text()
+    const labels = await page.$$('.steps-label')
+    let liveLabel = ''
+    for (const l of labels) {
+      if (((await l.attribute('class')) || '').includes('live')) liveLabel = await l.text()
+    }
+    // 顶栏的中断按钮：刚发出去、正文还空着的时候，这是运行态唯一的可见落点
+    const stops = (await page.$$('.bar-stop')).length
+
+    return [
+      [bars === 0, `运行条已经删了，不该还渲染出节点（数到 ${bars} 条）`],
+      [liveLabel === '思考中', `live 步骤组的标签要说出"它还在动"（读到「${liveLabel}」）`],
+      [stops === 1, `运行中顶栏要有中断按钮（数到 ${stops} 个）——正文空着时它是唯一的信号`],
+      [!barText.includes('思考'), `顶栏不许出现运行态文案（读到 ${JSON.stringify(barText)}）`],
+      [!/思考|运行中/.test(data.barText), `barText 由 _renderBar 算出且不含运行态（${JSON.stringify(data.barText)}）`],
+    ]
+  },
+  /** 跑完之后运行态要消失：live 标签收掉、中断按钮收掉，不能一直挂着"在跑" */
+  'run-idle': async (page) => {
+    await page.setData({ blocks: foldFixture(1, true, 2), running: false, atBottom: true })
+    await page.waitFor(700)
+    const bars = (await page.$$('.runbar')).length
+    const stops = (await page.$$('.bar-stop')).length
+    const labels = await page.$$('.steps-label')
+    let live = 0
+    for (const l of labels) {
+      if (((await l.attribute('class')) || '').includes('live')) live += 1
+    }
+    return [
+      [bars === 0, `空闲时不留运行条（数到 ${bars} 条）`],
+      [stops === 0, `空闲时不留中断按钮（数到 ${stops} 个）`],
+      [live === 0, `空闲时没有 live 步骤组（数到 ${live} 个）`],
+    ]
+  },
+  /**
+   * 发送按钮：**文字按钮，不是图标**。
+   *
+   * 原来那个圆形键配 CSS 三角，看着干净，但用户第一眼分不清"这个圆是能点的
+   * 还是装饰"—— 而它是发消息的唯一入口。现在改成「发送」两个字。
+   *
+   * 判据落在渲染层：读按钮里的文字、量它的宽高。宽度要够（88rpx 的圆形键
+   * 换成文字后必须仍能舒展地放下两个字，且点击区不小于 44px 逻辑尺寸），
+   * 高度要与输入框齐平 —— 矮一截会显得像附属品。
+   */
+  send: async (page) => {
+    await page.setData({ blocks: foldFixture(1, true, 2), inputText: '', atBottom: true })
+    await page.waitFor(300)
+
+    const btn = await page.$('.composer-send')
+    const label = btn ? await btn.$('.send-label') : null
+    const labelText = label ? await label.text() : ''
+    const size = btn ? await btn.size() : null
+    const pill = await page.$('.composer-pill')
+    const pillSize = pill ? await pill.size() : null
+    // 图标版本留下的痕迹：CSS 三角的那个空 div
+    const arrows = (await page.$$('.send-arrow')).length
+
+    const w = size ? parseFloat(size.width) : 0
+    const h = size ? parseFloat(size.height) : 0
+    const ph = pillSize ? parseFloat(pillSize.height) : 0
+    const labelSize = label ? await label.size() : null
+    const lw = labelSize ? parseFloat(labelSize.width) : 0
+
+    return [
+      [labelText.trim() === '发送', `发送按钮要有文字（读到「${labelText.trim()}」）`],
+      [arrows === 0, `不该再有 CSS 画的三角图标（数到 ${arrows} 个）`],
+      // 「放得下两个字」的正确判据是**文字没被挤**：按钮比文字宽出内边距的量。
+      // 拍一个绝对下限（如 88px）是把某台机型上的像素当规范 —— 换机型就假红。
+      [w > 0 && lw > 0 && w > lw, `按钮要比文字宽，左右留得出内边距（按钮 ${w}px / 文字 ${lw}px）`],
+      [h >= 44, `按钮高度不能小于 44px 的可点下限（读到 ${h}px）`],
+      [ph === 0 || Math.abs(h - ph) <= 2, `按钮要与输入框齐平（按钮 ${h}px / 输入框 ${ph}px）`],
     ]
   },
   /**
@@ -289,8 +485,6 @@ const CASES = {
       statusLabel: '在线',
       statusTheme: 'success',
       statusText: '已连接到主机',
-      keepAwakeOn: true,
-      keepAwakeText: '当前持锁中 · caffeinate',
       sessions: [
         {
           id: 'p-1',
@@ -388,12 +582,17 @@ async function darkInkChecks(page) {
   const targets = [
     ['.host-name', '主机名'],
     ['.host-sub', '主机副标题'],
-    ['.keep-title', '防休眠标题'],
-    ['.keep-desc', '防休眠说明'],
   ]
   if ((data.sessions || []).length) {
     targets.push(['.sess-title', '会话标题'], ['.sess-sub', '会话路径'])
   }
+
+  // 防休眠是**下线**了，但"下线"也得有判据：不然哪天有人顺手加回来，
+  // 没人会发现。判据落在渲染层 —— 数节点，不是读 data 字段。
+  out.push([
+    (await page.$$('.keep-title')).length === 0 && (await page.$$('.keep-desc')).length === 0,
+    '防休眠开关不许回到主机卡上',
+  ])
 
   const card = await page.$('.card')
   const bgRaw = card ? await card.style('background-color') : null
@@ -429,7 +628,7 @@ async function main() {
     console.error(
       `自动化端口 ${PORT} 没开。先让 IDE 以自动化模式启动：\n` +
         '  /Applications/wechatwebdevtools.app/Contents/MacOS/cli quit\n' +
-        `  /Applications/wechatwebdevtools.app/Contents/MacOS/cli auto --project "${ROOT}/mp" --trust-project --auto-port ${PORT}`,
+        `  /Applications/wechatwebdevtools.app/Contents/MacOS/cli auto --project "${ROOT}/dsh-remote-mp" --trust-project --auto-port ${PORT}`,
     )
     process.exit(1)
   }
