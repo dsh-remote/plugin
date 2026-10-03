@@ -18,7 +18,7 @@
 |---|---|---|
 | **协议层** | `dsh-remote-protocol/`（npm 包名 `dsh-remote-wire`） | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
 | **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继（`ws` + `zod`）。生产入口是**单文件产物** `dist/bundle/main.js` |
-| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**右栏自动弹码那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`，2026-10-03） |
+| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`）：右栏自动弹码（2026-10-03 折并）+ 状态栏那颗"点一下配对"的 pill（同日加的） |
 | **小程序客户端** | `dsh-remote-mp/`（代码在它的 `miniprogram/` 下） | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
 | **测试装置** | `e2e/`（伞仓） | 本地全链路 + 逐字节对拍 + 生命周期 + 真实链路取证（见「测试」） |
 | **取证脚本** | `scripts/`（伞仓） | `validate-qr.mjs`（改二维码必跑）、`check-mp-ui.mjs`、`mp-*.mjs`、`read-session-log.mjs` |
@@ -99,10 +99,12 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 
 ### 配对与使用
 
-1. DSH 里执行 `/drc pair`：**默认写出二维码图片**（`qrImage` 默认开），写到**当前会话工作区**的 `.dsh/pairing-qr.png`（工作区解析不出来时才落 `~/.dsh/pairing-qr.png`），**右栏会自动弹出当前配对码**（`dsh-remote-control/packages/plugin` 里的 `src/presentation/` + 浏览器面 `client/`；宿主没有 `webServer` 服务时这一半自己不起，配对/中继不受影响）——没弹出时先查 `status.json` 的 `sidebar` 那块（它会说 `webServer=none` / `disabled` / `register threw: …`），再按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
-2. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
-3. 首页扫码或粘贴二维码内容 → 自动连接；
-4. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
+1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：它抬头显示连接状态（`远程未连接` / `连接中` / `已连 N 台`），点一下就**当场生成一张一次性码**并把二维码弹在同一颗按钮上方，6 位数字与图同时在场、倒计时走完自动换一张。这条路走的是宿主侧三条同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 那句状态）——**三条回答里都没有 `psk`，也没有完整配对 URI**；
+2. 命令行入口 `/drc pair` 降为兜底：那颗 pill 挂不上（宿主没有 `webServer` 服务、或路由名被占）时它自动回来发码；pill 在的时候它只指路，**不顺手多挂一张**——"屏幕上永远只有一张有效码"是配对能成事的前提。`/drc pair force` 是"路由挂上了、pill 却因为宿主给不出 `react` / 没有 `slots` 服务而没出现"时那条不能堵死的退路，走的仍是幂等入口；
+3. **右栏会自动弹出当前配对码**（`dsh-remote-control/packages/plugin` 里的 `src/presentation/` + 浏览器面 `client/`；宿主没有 `webServer` 服务时这一半自己不起，配对/中继不受影响）——没弹出时先查 `status.json` 的 `sidebar` 那块（它会说 `webServer=none` / `disabled` / `register threw: …` / `actions=…`），再按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
+4. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
+5. 首页扫码或粘贴二维码内容 → 自动连接；
+6. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
 
 详见 [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)。
 
@@ -113,7 +115,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 82 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 78（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及折并进来的右栏那一半（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域** / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**） | 280 |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半：右栏（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域**）+ 状态栏那颗 pill（发码幂等 / 写路由 Origin 缺席也拒 / 回答里不许出现凭据 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**、**pill 挂了也不许把右栏拖死**） | 317 |
 | `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 16 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 112 |

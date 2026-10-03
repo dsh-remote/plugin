@@ -13,22 +13,25 @@
 ## 1. 产物形态：一个 bundle，两半
 
 `dsh-remote-control@1.1.0` 起，右栏自动弹码那一半（原来是独立包 `dsh-remote-control-presentation`）
-折进了主插件。一次构建产出两半，实测尺寸 `index.js 1235 KB / client.cjs 4 KB`
-（npm tarball 232 KB）：
+折进了主插件；`[未发布]` 又加上状态栏那颗"点一下配对"的 pill。一次构建产出两半，
+实测尺寸 `index.js 1242 KB / client.cjs 18 KB`：
 
 | 产物 | 跑在哪 | 干什么 |
 |---|---|---|
-| `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**右栏那一半：按节拍看当前配对码、渲染 PNG、挂一条同域只读路由 |
-| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 每 2s 轮询那条路由，`state:"ready"` 且 `epoch` 变了就 `ctx.sidebarRight.openResource(address)` 把图推进右栏 |
+| `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**界面上的那一半：按节拍看当前配对码、渲染 PNG、挂 4 条同域路由（右栏只读那条 + pill 的发码/图片/状态那三条） |
+| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | ① 每 2s 轮右栏那条路由，`state:"ready"` 且 `epoch` 变了就 `ctx.sidebarRight.openResource(address)` 把图推进右栏；② 向装载器拿 `react`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态，点击 `POST /pairing/new` 并把 `/pairing.png` 弹在同一颗按钮上方 |
 
 宿主注入的东西（`cordis`、`@deepseek-ai/*`）刻意**留在 externals**——打进去会造成两份实例。
 协议层 `dsh-remote-wire` 是 npm 依赖，esbuild 打包时内联，所以 profile 里不需要 `node_modules`。
+`react` **不进 externals 也不内联**：浏览器面是在运行期向装载器要它（模块名走变量，见
+`packages/plugin/client/src/pill.ts` 文件头），拿不到只是少一颗 pill，而不是整页 web boot 失败。
 
 **隔离现在由代码提供**：这一半需要 `webServer` 服务，而主插件刻意不写任何 `inject:` 闸门。
 `src/presentation/sidebar.ts` 只软探测 `webServer`，拿不到就整半不起（不挂路由、不起节拍、不写盘），
 `status.json` 的 `sidebar` 块会写明为什么。这条隔离有测试钉住：
 `packages/plugin/tests/presentation-isolation.test.ts` 把"有 webServer / 没有 / `register()` 抛错"
-三种形态各跑一遍 `apply()`，要求主链路可观察字段**逐个相等**、`/drc pair` 的返回**逐字节相等**。
+三种形态各跑一遍 `apply()`，要求主链路可观察字段**逐个相等**、`/drc unpair` 的返回**逐字节相等**
+（`/drc pair` 不在这条名单上：它的返回**有意**随那颗 pill 能不能点而变，那条单独钉在"兵分"用例里）。
 
 ## 2. 装进 profile
 
@@ -80,7 +83,7 @@ patch 里，改名等于让线上配置静默失效。
 | `pairTtlMs` | `120000` | — | 只是**向中继申请**的值；服务端 `pair-ready.ttlMs` 才是准的 |
 | `pairOnStartSec` | `0`（关） | `DRC_PAIR_ON_START_SEC` | >0 时启动即发一张码并把 QR 写进 `status.json`。**开了就把"仍然有效的配对码 + PSK"放进 0600 文件**，配置校验专门 warn；`Infinity`/负数/非有限值一律折回 0 |
 | `qrImage` / `qrOpen` / `qrAnsi` / `qrStyle` | `true` / `false` / `false` / `half` | `DRC_QR_IMAGE` / `DRC_QR_OPEN` / `DRC_QR_ANSI` / `DRC_QR_STYLE` | 图片是**主路径**：DSH 命令卡按 `line-height:1.6` 渲染等宽输出，行间留白把半块文本码横切成条，实测 zxing 在 ≥1.15 行距就解不出来。写图 ≠ 替你打开查看器（`qrOpen` 默认关）；`qrStyle` 只在关掉 `qrImage` 时当退路 |
-| `sidebarQr.enabled` / `.imageFile` / `.refreshMs` | `true` / `~/.dsh/sidebar-qr.png` / `2000` | `DRC_SIDEBAR_QR=0/1` | 右栏那一半。`imageFile` 只是**兜底**位：正常情况下图落在当前会话工作区 `<workspace>/.dsh/sidebar-qr.png`。这两键**只 warn 不 error**（error 会让主插件整个不启动，等于把可选功能变成配对链路的单点） |
+| `sidebarQr.enabled` / `.imageFile` / `.refreshMs` | `true` / `~/.dsh/sidebar-qr.png` / `2000` | `DRC_SIDEBAR_QR=0/1` | 界面上那一半（右栏自动弹码 **+ 状态栏那颗 pill**，两条都由这一开关管）。`imageFile` 只是**兜底**位：正常情况下图落在当前会话工作区 `<workspace>/.dsh/sidebar-qr.png`。这两键**只 warn 不 error**（error 会让主插件整个不启动，等于把可选功能变成配对链路的单点） |
 | `keepAwake.enabled` / `.idleReleaseSec` / `.keepDisplay` | `true` / `300` / `false` | — | 只在"会话运行中 / 有审批或提问挂起"时持锁 |
 | `unarchiveOnPrompt` | `true` | — | 对归档会话下发指令时自动恢复 |
 | `takeOverQuestions` | `false` | `DRC_TAKE_OVER_QUESTIONS=1` | 会剥夺桌面 UI 的提问能力（`ctx.userQuestions` 只允许一个活跃 provider），所以默认关 |
@@ -110,9 +113,9 @@ cat ~/.dsh/dsh-remote-control/status.json
 值得看的字段：
 
 - `carrier`：`services`=真内核 / `mock`=内存替身 / `probing`=还没探到 / `none`=没起来（`reason` 会写 `disabled` 或 `invalid-config`）。
-- `relay` + `relayProblem`：`online`/`connecting`/`offline`。**长时间停在 `connecting` 且不报错**是一种特定的病：版本不匹配（见开源手册的成对回滚那节），不是网络问题。
+- `relay` + `relayProblem`：`online`/`connecting`/`offline`，runtime 还没起来时是 `idle`（**"没启动"与"断了"是两件事**，pill 抬头那句也照这个口径说）。**长时间停在 `connecting` 且不报错**是一种特定的病：版本不匹配（见开源手册的成对回滚那节），不是网络问题。
 - `conversations` / `pendingPairs`：配对通道数与待配码数。空闲 TTL 之后会自己掉下去（实测两张码在约 120s 后归零）。
-- `sidebar`：**右栏那一半为什么没弹，只有这里能答**。`{"webServer":"via inject","route":"registered"}` 是正常态；`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `sidebar:"disabled"` / `route:"register threw: …"` 各对应一种坏法。
+- `sidebar`：**界面上那一半为什么没起，只有这里能答**。`{"webServer":"via inject","route":"registered","actions":"registered"}` 是正常态；`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `sidebar:"disabled"` / `route:"register threw: …"` 各对应一种坏法。`actions` 是 pill 那三条路由（发码/图片/状态）的注册结果——**它和 `route` 分开**：`route=registered` 而 `actions` 写了 `register threw` 时右栏照样弹、只是点不了配对，此时主插件会把 `/drc pair` 自动注册回来当兜底（判据是 `sidebar.available`，要求三条都挂上）。
 - `outbound`：按载荷类型的出站计数——分清"插件没发"还是"发了但路上丢了"。
 - `kernel.*`：`eventTypes` / `unmappedEventTypes`（内核发了但我们没认）、`listenerErrors`、`approvalFace` / `questionsFace`（人工交互那两面到底登记上没有）。
 - `probe`：`applyCount`（同一进程内 `apply` 被调了几次——bundle 被重复挂载能看出来）、`injectChildren`、`fiberStates`。
@@ -123,9 +126,11 @@ cat ~/.dsh/dsh-remote-control/status.json
 写文件是 0600 + 临时文件改名原子替换。 **[已验证 2026-10-03：本机快照 `carrier=services`、
 `relay=online`、`sidebar.route=registered`、`pairing=null`、`problems=[]`]**
 
-## 6. 右栏那条路由的真机取证（不用打开 UI）
+## 6. 路由的真机取证（不用打开 UI）
 
-路由是宿主 webServer 上的**同域只读**路径，所以 curl 就能验：
+宿主侧一共挂 4 条同域路由：`/pairing`（右栏那条，只读）、`/pairing/new`（发码，会改状态）、
+`/pairing.png`（弹窗里那张图）、`/status`（pill 抬头那句连接状态）。这一节先给 `/pairing` 的配方，
+pill 那三条在 6.1。
 
 ```sh
 # 端口每次启动都变，先找它
@@ -137,6 +142,37 @@ curl -s "http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing?session=$S"
 正面（实测）：`{"state":"ready","epoch":"575e1d4172857484","address":"dsh-resource://file/session/<S>//Users/…/.dsh/sidebar-qr.png","expiresAt":…}`。
 负面四条（也实测）：非环回 `Host` → **403**、跨站 `Origin` → **403**、缺 `session` → **400**、
 旧包路径 `/plugins/dsh-remote-control-presentation/pairing` → **404**。
+
+### 6.1 状态栏那颗 pill 用的三条
+
+同一条 webServer、同一套守卫，所以也能不打开 UI 就取证（`<P>` 是上面那个端口）：
+
+```sh
+curl -s -X POST "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new" \
+  -H "Origin: http://127.0.0.1:<P>"                       # → {"state":"ready","epoch":…,"token":"482913","expiresInMs":…}
+curl -s -X POST "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"
+# → 403：**会改状态的路由 Origin 缺席也拒**，不沿用只读那条"没带就当同源"的推断
+curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"        # → 405（只接受 POST）
+curl -si "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing.png" | head -5
+# → 200 + Content-Type: image/png + Cache-Control: no-store + ETag: "<epoch>"；没有效码时 204
+curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"              # → {"relay":"online","paired":0,"hasCode":true}
+```
+
+`ETag` 里那个 epoch 必须与 `POST /pairing/new` 回的 `epoch` 同一个（都是码文本的
+`sha256` 前 16 位，定义只有一处：`pairingEpoch`）。**三条回答里都不该出现 `psk` 或 `dshr:`**——
+一条 grep 就能复核：
+
+```sh
+for u in status pairing.png pairing/new; do
+  printf '%s ' "$u"
+  curl -s -X "$([ "$u" = pairing/new ] && echo POST || echo GET)" -H "Origin: http://127.0.0.1:<P>" \
+    "http://127.0.0.1:<P>/plugins/dsh-remote-control/$u" | grep -c 'psk\|dshr:'
+done   # 三个都必须是 0
+```
+
+⚠️ **这三条 curl 只证明路由在、守卫对、凭据没出去**，不证明那颗 pill 真的出现在屏幕上——
+后者要的是 `slots` 服务在场 + 装载器给得出 `react` + 那个 dock 槽位认领了我们注册的组件，
+这三件事只能在 UI 上看（`client.cjs` 里每一条降级都会 `console.warn` 一句，DevTools 里能查到）。
 
 **地址与图要一起验，而且要原子地验**：`epoch` 是码文本的 `sha256` 前 16 位，落盘 PNG 是那条地址指向的文件。
 解码用装了 zxing-cpp 的那个 venv：

@@ -18,7 +18,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 真宿主装的就是这个版本，`live-e2e --rounds 2` 36 项全过、那条同域路由在真机上取证成功（§9）。
 线上"已发布的产物"与"在跑的字节"是同一个（sha256 两侧实测相同）。
 
-> ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **112 pass / 0 fail**，
+> ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
 > `node e2e/run.mjs` = **16 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×3 产物 0 失败。
 > 上一轮只做了"把注释与 import 改指开源仓"，**代码里的路径还指着已删的私有树**，本轮补完：
 > `mp/` → `dsh-remote-mp/miniprogram/`、`packages/{protocol,plugin}` → 各开源仓产物、
@@ -207,6 +207,10 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
+7. **「点一下配对」那颗 pill 要在真屏幕上验一次，然后才谈发版**（细节与做法见 §9.4）。
+    顺序是有意的：先配好 §3 第 1 条的 Trusted Publishing，再发 `1.2.0`——
+    用 token 发就又是一版"没有 attestation 且永远补不上"的包。
+    ⚠️ 验 pill 要重启用户本机那个 DeepSeek Harness（它是用户正在用的应用），**动手前问一句**。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
@@ -322,5 +326,37 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 3. **审批卡 / 提问卡的真机取证**（§3 第 6 条）：原因仍是本机 `approval/policy: never` 与这一代宿主没有
    `registerProvider`，**别再问第二遍**；两条都有本地闭环测试。
 4. **`dsh-remote-mp` 不打 Release**（用户 2026-10-03 定："只是象征性的开源"），原来的"要不要打 v1.0.0"这条待办作废。
+
+### 9.4 「点一下配对」落地（2026-10-03，control 仓 `[未发布]`）
+
+用户两条拍板：`/drc pair` **去掉**，改成点状态栏那颗 pill；二维码**放在弹出窗里**；
+但"仅 pill 不可用时才把 `pair` 注册回来"这个兵分要保留。做成了：
+
+| 事 | 证据 |
+|---|---|
+| 宿主侧多三条路由 | control `packages/plugin/src/presentation/pair-actions.ts`：`POST /pairing/new`（幂等、Origin 缺席也拒）、`GET /pairing.png`（现渲染、`no-store` + `ETag`）、`GET /status`（`relay`/`paired`/`hasCode`）。测试 **317 pass / 0 fail**：`presentation-pair-actions.test.ts` 20 条（含"回答里不许出现 `psk`/完整 URI"这条红线、注销一条抛错仍摘掉其余）、`presentation-isolation.test.ts` 的"兵分/接线/只挂上右栏那条"三条、`presentation-client-bundle.test.ts` 那 13 条 pill 用例 |
+| `/drc pair` 降成兜底 | 判据是 `sidebar.available`（右栏那条 + pill 三条**全挂上**才算）。挂不上时 hint 自动把 `pair` 加回来；挂上了 `pair` 只指路、**不顺手发第二张**（那会绕开幂等）。`/drc pair force` 是"路由在、pill 因为宿主给不出 `react`/没有 `slots` 而没出现"时不能堵死的退路，走的仍是幂等入口 |
+| 新功能不许砸老功能 | pill 那三条单独一个 `try`（`sidebar.ts`）；浏览器面拿 `react` 走**运行期**（`client/src/pill.ts` 文件头第 2 条），`inject` 仍只声明 `sidebarRight` |
+
+变异验证做过七刀，每一刀都被对应的测试或 build 断言拦下：放松 Origin 判据 / `available` 忽略
+actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `inside()` 全判"在外面" /
+倒计时到点不再发码 / 源码里改用静态 `require("react")`。
+⚠️ 最后一刀之前还踩了一记空刀：用 `if (false)` 让分支失效会被 tsc 先拦下，于是**产物没变而测试
+"照绿"**——变异必须改成能编译的形状，否则测的是上一个产物（同类坑见 §4）。
+
+**还没取证的（别再当成做完了）：**
+
+1. **那颗 pill 在真宿主屏幕上出没出现**。三条 curl 只证明路由在、守卫对、凭据没出去；pill 还要
+   `slots` 服务在场 + 装载器给得出 `react` + 那个 dock 槽位认领了我们注册的组件——这三件事
+   只能在 UI 上看。做法：`sh dsh-remote-control/scripts/install-to-profile.sh` → 重启本机
+   DeepSeek Harness → 看输入框那一排；没出现就开 DevTools 查 `[dsh-remote-control pill]` 那几条
+   `console.warn`（它会指名是没拿到 react 还是没探到 slots）。**这一步要重启用户的宿主，等他点头。**
+2. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
+   而且 §3 第 1 条的 Trusted Publishing 还没配——用 token 发就又是一版"没有 attestation 且永远补不上"。
+   先配 TP 再发，比先发再补强。
+3. **e2e 没覆盖那三条新路由**。`e2e/run.mjs` 走的是中继链路，不碰 webServer 路由；宿主侧的守卫与
+   幂等由上面那些单测/对照测试钉住。要加的话是在 e2e 里对 `http://127.0.0.1:<port>` 发真请求，
+   端口要像 §6 那样用 `lsof` 现找。
+
 
 
