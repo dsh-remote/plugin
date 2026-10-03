@@ -42,8 +42,9 @@ attestation 已用 curl 复核），`~/.dsh/profiles/desktop` 里装的字节与
 **§9.9 这一版跑在 1.2.0 之后的未发布改动上**，工作树里的版本号还没动。同一轮还把四仓的死代码清了一遍（§9.6），
 并撤回了一次中继发包（§9.7）。
 
-> ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
-> `node e2e/run.mjs` = **17 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
+> ✅ **e2e 已跑绿**（2026-10-04 凌晨复跑，干净工作树）：`node --test e2e/*.test.mjs` =
+> **125 pass / 0 fail**，`node e2e/run.mjs` = **17 步 0 失败**，
+> `node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
 > 上一轮只做了"把注释与 import 改指开源仓"，**代码里的路径还指着已删的私有树**，本轮补完：
 > `mp/` → `dsh-remote-mp/miniprogram/`、`packages/{protocol,plugin}` → 各开源仓产物、
 > 协议层分组（`frames`→`wire/`、`keys`→`crypto/`、`ids`→`identity/`）。
@@ -684,10 +685,13 @@ if (doc.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return   // ← �
 2. `~/.dsh/profiles/desktop/cordis.patch.yml.bak-*` 有 10 个备份，其中 **6 个含 `hostToken`**（权限 0600）。
    清不清、清哪些等用户点头。
 
-**还欠着的（用户 2026-10-03 选择"先别重启 / 先等等"）**：
+**还欠着的（2026-10-04 凌晨结算，见 §9.10）**：
 
-1. **重启宿主、真屏幕复验**——重装那半已做完，只差"重启 + 看一眼"；
-2. **伞仓全量 e2e**（`node e2e/run.mjs` + `node --test e2e/*.test.mjs`）在干净工作树上补跑。
+1. **重启宿主、真屏幕复验**——✅ 已重启多次，新 bundle 在屏幕上；那颗 pill 实测可见
+   （绿色 `已配对`），`GET …/status` 回四个字段。**只剩面板正文那三行**要用户点一下（§9.10 末）；
+2. **伞仓全量 e2e** 在干净工作树上补跑——✅ **全绿**：
+   `node --test e2e/*.test.mjs` = **125 通过 / 0 失败**（上一版记的 113 是并行会话补测之前的数），
+   `node e2e/run.mjs` = **17 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
 
 #### 9.9.3 面板正文补成中继 / 状态 / 版本三行（2026-10-03 深夜，用户当天第二次点单）
 
