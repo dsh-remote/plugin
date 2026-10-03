@@ -28,6 +28,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   MOCK_SESSION_ID,
+  assertSessionShape,
   bootHost,
   controlFrames,
   installPhoneRig,
@@ -123,7 +124,9 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
         where: (p) => Array.isArray(p.sessions) && p.sessions.length > 0,
         timeoutMs: 15_000,
       })
-      assertSessionShapeIsFine(changed)
+      // 用 run.mjs 里那份**真**断言，而不是以前这个丢检查的副本：续用之后推回来的列表
+      // 与首连时是同一份契约（state 枚举、updatedAt 不许是数字串、标题渲染得出来）。
+      assertSessionShape(changed.sessions, { label: '重启续用后的 ev.session_changed.sessions' })
       assert.equal(controlFrames('phone', 'received', ['paired']).length, 1, '恢复路径绝不能重新走一次配对')
       const decryptErrors = scene.phone.events.filter((e) => e.kind === 'error' && String(e.message).includes('无法解密'))
       assert.deepEqual(decryptErrors.map((e) => e.message), [], '续用期间一帧都不许解不开')
@@ -275,13 +278,5 @@ function safeJson(text) {
     return JSON.parse(text)
   } catch {
     return null
-  }
-}
-
-function assertSessionShapeIsFine(changed) {
-  assert.ok(Array.isArray(changed.sessions) && changed.sessions.length > 0, '续用后的列表必须还是非空')
-  for (const session of changed.sessions) {
-    assert.equal(typeof session.id, 'string')
-    if (session.updatedAt !== undefined) assert.equal(typeof session.updatedAt, 'string', 'F7：updatedAt 只能是 ISO 字符串')
   }
 }

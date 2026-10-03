@@ -8,7 +8,7 @@
  * 长期可用，不用再碰开发者工具。
  *
  * ── 用法 ──────────────────────────────────────────────────────────────
- *   node scripts/mp-upload.mjs                       # 版本号取自 mp/package.json
+ *   node scripts/mp-upload.mjs                       # 版本号取自 dsh-remote-mp/package.json
  *   node scripts/mp-upload.mjs --version 0.3.0 --desc "修 xxx"
  *   node scripts/mp-upload.mjs --dry                 # 只跑真编译，不真上传
  *
@@ -43,7 +43,7 @@ if (has('help') || argv.includes('-h')) {
   console.log(
     `用法：node scripts/mp-upload.mjs [--version x.y.z] [--desc "…"] [--dry]
 
-  不带参数       版本号取自 mp/package.json，描述取自 mp/ 最近一条提交
+  不带参数       版本号取自 dsh-remote-mp/package.json，描述取自该仓最近一条提交
   --version      指定版本号。同号重复上传是覆盖，不新增记录
   --desc         指定版本描述
   --dry          只跑真编译，不真的上传
@@ -138,7 +138,7 @@ if (!CLI) {
 
 const VERSION_ARG = flag('version', '')
 const VERSION = VERSION_ARG || defaultVersion()
-const VERSION_FROM = VERSION_ARG ? '' : '（取自 mp/package.json）'
+const VERSION_FROM = VERSION_ARG ? '' : '（取自 dsh-remote-mp/package.json）'
 const DESC = flag('desc', defaultDesc())
 
 if (DRY) {

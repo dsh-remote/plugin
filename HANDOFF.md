@@ -95,7 +95,7 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 | 路径 | 为什么留着 |
 |---|---|
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
-| `scripts/` | `validate-qr.mjs`（改二维码必跑）、`read-session-log.mjs`、`mp-*.mjs` 等 |
+| `scripts/` | `validate-qr.mjs`（改二维码必跑）、`mp-*.mjs` 等 |
 | `docs/DESIGN.md`、`docs/DESIGN-REVIEW.md` | 契约表 B1-B9 / F1-F13 / T1-T8、偏离 D1-D9、复核结论。开源仓的 `docs/` 是它们的**换算过名字的历史副本** |
 | `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（含 `sidebarQr`）、`status.json` 字段与本机实测值、右栏路由的 curl 取证配方、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
 | `docs/legacy-spec/` | 重写前从旧实现提取的事实档案 |
@@ -303,6 +303,17 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     现在两侧假 ctx 都能演晚到：`presentation-isolation.test.ts` 的 `lateWeb`/`flushInject`，
     `presentation-client-bundle.test.ts` 的 `lateSlots`/`flushInject` + `ctx.slots` 那个 getter。
 
+17. **删"防御性代码"之前，先问另一侧实现怎么处理同一个输入**（2026-10-03 晚删错一次）。
+    协议仓 `normalizePairingToken(raw: string)` 开头的 `String(raw ?? '')` 看着像"替违反类型的
+    调用方兜底"——类型是 `string`，`?? ''` 永远走不到。删掉之后伞仓 `e2e/protocol.test.mjs` 的
+    "fixtures：配对码归一化两侧相同"**立刻红**：那条 fixture 故意把 `null` 映射成 `undefined` 喂进来，
+    要的就是两侧同返回 `''`；而小程序侧 `codec.js` 写的是 `String(text || '')`，函数文档也明写着
+    "任何不合法输入返回 null"。**它不是防御，它是对拍契约的一条腿。**
+    判据：单仓内部"类型上不可能"的兜底可以删；**只要这个名字同时出现在另一份实现（小程序 JS、
+    线上产物、对拍 fixture）里，就先当成契约**，要动就两侧一起动。同类需要先看证据再删的三处：
+    中继 `bucketAt()` 越界抛、`noteBackpressure` 的 `bufferedAmount ?? 0`、`run.mjs` 的
+    `importBuildArtifact` 重试（防的是本机并行会话清 `dist/`）。
+
 
 ## 5. 命令速查
 
@@ -440,7 +451,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 **e2e 补上了此前那条空白**（§9.4 说过"e2e 没覆盖那三条新路由"）：`e2e/run.mjs` 现在给假
 `webServer`，在**真中继在线**时点那三条——发码、幂等复点同一张、PNG 的 `ETag` 与主机维护的
 那张码的 URI 哈希同一个口径。此前单测里的发码分支永远是"中继不可达"，那条路从没走过。
-闸门：control **263 项全绿**、e2e **17 步 0 失败**、`node --test e2e/*.test.mjs` 113 全绿、
+闸门：control **261 项全绿**、e2e **17 步 0 失败**、`node --test e2e/*.test.mjs` 113 全绿、
 `validate-qr` 28 组 ×2 产物 0 失败、**真屏幕复验通过**（上面那段）。
 
 **还欠着的：**
@@ -453,9 +464,33 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
    `packages/plugin/dist/bundle/`）。要么发版把它转正，要么还原成 1.1.0：
    `/tmp/drc-profile-backup/dsh-remote-control-1.1.0`（**/tmp 重启就没**，届时改用
    `npm pack dsh-remote-control@1.1.0` 解出来的产物覆盖回去），两条路都要再重启一次宿主才算数。
-3. **删完要在真屏幕上再看一眼**（§9.4 那套配方）：pill 仍该出现、点一下仍该出码，
-   而 `/drc pair` 该落到状态快照上。这一步要重启用户本机的 Harness。
 
+### 9.6 全仓删死代码（2026-10-03 晚，四仓 + 伞仓）
 
+用户拍板："把没用的、防御性的、怕删了后面会用到的全部删除，只留有用的；mp 不用动"。
+判据先立一条：**注释里带日期与真机取证的守卫不是"防御性"，那是修过的 bug**，不删。
+三个 Explore 派工各审一仓（协议 / 中继 / 伞仓 harness），**报告我逐条自己复核过才动手**——
+结果有两条是错的：协议仓 `pairFail`/`pairReady`/`peerLeft`/`makeError` 被报成"只导入不调用"，
+实际是 `import { makeError as makeErrorFrame }` 这种别名调用，grep 裸名会漏；中继那条
+`peerJoinedNotice` 才是真的只有一行导入。
 
+| 仓 | 删掉的 | 提交 |
+|---|---|---|
+| control | `apiProxy` 那条明确不接的载体（两块探测 + `apiProxyOf()`）、`writePrivateFile`、`StatusFile.refreshing`/`.path`（注释说"测试读它"其实零调用方）、`HISTORY_LIMIT_DEFAULT` 等 7 个零消费者导出、`redactSecret`/`redact` 双名、**退役配置键的 warn 表**（用户拍板删）、`tsc --noUnusedLocals` 报出的全部未用导入与局部 | `0f8098a` |
+| protocol | 9 个零调用导出（含 `frames.ts` 里那份与 `outbound.makeError` 重复的 `makeErrorFrame`）、`pair-begin` 的可选 `hostLabel`、`pairFail` 联合里线上枚举根本不认的 `rate_limited`、`isoOrUndefined` 的死三元 | `05523e3` |
+| server | `Budget.peek`、`Violations.exhausted`、日志的内存 `tail`/`drain`/`collectLines`、`isLiveClient`、`ClientEntry.meta`（写一份只有测试读的内存状态）、`WS_OPEN`/`Sock` 转发出口、没接线的 `SHUTDOWN_FORCE_MS`、hello 末尾那条在防自家 schema 的 `sendError(bad_role)`、版本探针的第二个路径、`start:bundle`/`start:tsc` | `66febd0` |
+| 伞仓 | `scripts/read-session-log.mjs`（整文件，没人跑）、`run.mjs` 的 `readStatus`/`statusFile`/`service`/`MP_DIR` 转出口、`bootHost` 两个从不传的入参、`shutdown` 的 `signal`、`mp-sim` 多 require 的三个模块、`live-e2e` 的 `DRC_LIVE_DEBUG` 整块与两条打点；**并把 `restart-resume` 里那份丢了三项检查的 `assertSessionShapeIsFine` 副本换成 `run.mjs` 的真断言**（那是静默降档，不是简化） | 本轮 |
 
+**删错了一处，被闸门当场抓住**：我把协议仓 `normalizePairingToken`/`parsePairingUri` 开头的
+`String(x ?? '')` 判成"替违反类型的调用方兜底"删了，伞仓 113 项里那条字节对拍立刻红
+（fixture 故意喂 `undefined`，要的是两侧同返回 `''`；小程序侧写的正是 `String(text || '')`）。
+已原样恢复并单独提交 `beff2e6`，教训写进 §4 第 17 条。
+
+**三处判过之后决定不删**，理由要留档：中继 `bucketAt()` 索引越界就抛（注释写明"退回临时 Set
+等于悄悄丢桶"）；`noteBackpressure` 的 `bufferedAmount ?? 0`（假 socket 没这个字段，缺了它把
+`undefined` 喂进限速判断）；`run.mjs` 的 `importBuildArtifact` 4×2s 重试（它防的是**本机真实存在**
+的并行会话清 `dist/`，不是想象出来的竞态）。另外用户拍板**保留** `validate-qr` 的"裸矩阵"那条腿
+——它是插件 `qrMatrix` 的唯一外部消费者，删了编码器几何回归就只能靠 PNG 间接发现。
+
+闸门（清理后全绿）：protocol **80**、server **78（1 skip）**、control **261**、伞仓 e2e **17 步 0 失败**、
+`node --test e2e/*.test.mjs` **113**、`validate-qr` 28 ×2、四仓 `format:check` 与 `noUnusedLocals`/`noUnusedParameters` 干净。

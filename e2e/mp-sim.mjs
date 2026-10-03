@@ -117,11 +117,8 @@ export function installWxShim({ recorder } = {}) {
 export function loadMpModules() {
   const require = createRequire(import.meta.url)
   const codec = require(path.join(MP_DIR, 'core', 'codec.js'))
-  const store = require(path.join(MP_DIR, 'core', 'session-store.js'))
   const client = require(path.join(MP_DIR, 'core', 'client.js'))
-  const env = require(path.join(MP_DIR, 'core', 'env.js'))
-  const socket = require(path.join(MP_DIR, 'core', 'socket.js'))
-  return { codec, store, client, env, socket }
+  return { codec, client }
 }
 
 /** 等到某个谓词成立；失败时把最近的事件轨迹打出来（"红了但不知道为什么红"最贵）。 */

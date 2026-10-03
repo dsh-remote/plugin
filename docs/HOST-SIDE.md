@@ -121,7 +121,7 @@ cat ~/.dsh/dsh-remote-control/status.json
 - `conversations` / `pendingPairs`：配对通道数与待配码数。空闲 TTL 之后会自己掉下去（实测两张码在约 120s 后归零）。
 - `pill`：**配对入口为什么没起来，只有这里能答**。`{"webServer":"via inject","routes":"registered"}` 是正常态；`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `pill:"disabled"` / `routes:"register threw: …"` 各对应一种坏法。**只要它不是 `routes:"registered"`，`problems` 里就一定有 `warn:pill`；挂上了就一定没有**——这条是每次写快照时现判的，不是启动那一次的结论：`webServer` 由 `ctx.inject` 的回调晚到时，一次性判断会留下"路由已挂上却仍报 warn:pill"的假警报（2026-10-03 真机重启实测到）。命令行兜底已经删了，"配不了对"必须留得下原因。
 - `problems`：`level:field` 形态的诊断清单。除配置问题外还包括 `warn:pill`（没有配对入口）与 `warn:pairOnStartSec`（status.json 里带着有效码）。配置那条的原因全文在宿主日志里（`apply` 时逐条 log），**`warn:pill` 的原因只在同一个快照的 `pill` 探针里**——所以那一条要看上面那个字段，别在日志里找。
-- 已经删掉的键（`qrImage`/`qrOpen`/`qrAnsi`/`qrStyle`/`sidebarQr`）留在 profile 里**不会静默失效**：每个都会在 `problems` 里各报一条 warn，`sidebarQr` 那条会指明现在叫 `pill`。
+- 已经删掉的键（`qrImage`/`qrOpen`/`qrAnsi`/`qrStyle`/`sidebarQr`）留在 profile 里**什么效果都没有**，也不会有一条 warn——2026-10-03 曾经为这五把键留过告警表，当天按"删了就不会回来，用到再重写"撤了。看到 `problems` 里没有它们**不是漏报**。
 - `outbound`：按载荷类型的出站计数——分清"插件没发"还是"发了但路上丢了"。
 - `kernel.*`：`eventTypes` / `unmappedEventTypes`（内核发了但我们没认）、`listenerErrors`、`approvalFace` / `questionsFace`（人工交互那两面到底登记上没有）。
 - `probe`：`applyCount`（同一进程内 `apply` 被调了几次——bundle 被重复挂载能看出来）、`injectChildren`、`fiberStates`。

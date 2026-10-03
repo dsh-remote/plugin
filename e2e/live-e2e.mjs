@@ -85,7 +85,8 @@ async function acquirePairing() {
     } else if (status.carrier !== 'services') {
       lastReason = `carrier=${status.carrier}，不是真内核（本测试不接受 mock 主机）`
     } else if (!status.pairing?.qr) {
-      lastReason = 'status.json 里没有 pairing.qr：请把 pairOnStartSec 打开，或手动 /drc pair 后用 --pair/--qr'
+      lastReason =
+        'status.json 里没有 pairing.qr：配对唯一入口是状态栏那颗 pill——点它发码，或临时把 pairOnStartSec 打开，再用 --pair/--qr 喂进来'
     } else if (usedTokens.has(String(status.pairing.token))) {
       lastReason = `码 ${status.pairing.token} 本轮已用过`
     } else if ((status.pairing.ageSec ?? 999) > 25) {
@@ -148,12 +149,6 @@ async function runRound(round) {
   let turnOpen = false
   client.on((event) => {
     const payload = event?.payload
-    if (payload && process.env.DRC_LIVE_DEBUG) {
-      console.log(`     · payload ${payload.t}${payload.t === 'ev.message_delta' ? ` role=${payload.role} len=${String(payload.delta).length} done=${payload.done === true}` : ''}`)
-    }
-    if (event?.kind && event.kind !== 'payload' && process.env.DRC_LIVE_DEBUG) {
-      console.log(`     · event ${event.kind} ${String(event.message ?? event.statusText ?? '').slice(0, 80)}`)
-    }
     if (!payload) return
     if (payload.t === 'ev.session_changed') seen.sessionChanged += 1
     if (payload.t === 'ev.message_delta') {
@@ -242,26 +237,6 @@ async function runRound(round) {
     }
   }
 
-  // 零知识断言的对象是**交给中继的那一帧**，不是客户端事件流（解密方当然看得到明文）。
-  if (process.env.DRC_LIVE_DEBUG) {
-    // 用 B5 的 h2c 密钥**在测试侧自己解一遍所有下行密文帧**：
-    // 客户端事件流少了几条时，必须能分清"主机没发 / 中继没转 / 手机没解"，
-    // 否则这种对账只能靠猜（这一步就是为了那一次猜不出来的排查）。
-    const pairedFrame = recorder.frames.map((frame) => { try { return JSON.parse(frame.raw) } catch { return null } }).find((frame) => frame?.t === 'paired')
-    const conv = pairedFrame?.sessionId
-    const h2c = conv ? codec.derivePskKey(parsed.psk, 'h2c', conv) : null
-    const kinds = []
-    for (const frame of recorder.frames) {
-      if (frame.direction !== 'out') continue
-      let obj
-      try { obj = JSON.parse(frame.raw) } catch { continue }
-      if (obj.t === 'enc' && h2c) {
-        const opened = codec.open(h2c, obj)
-        kinds.push(opened ? opened.t : '解不开')
-      }
-    }
-    console.log(`     · 下行密文自解 ${kinds.length} 帧（conv=${conv ?? '无'}）：${kinds.join(' | ')}`)
-  }
   // 数下行帧之前必须先等到"这一轮的下行帧到齐"。手机配对后会立刻发两条命令
   // （`cmd.list_sessions` 由 `_onPaired` 触发、`cmd.keep_awake` 由本脚本触发），
   // 主机对每条回一张 `ev.result`，而**回执是最后到的帧**（主机先推列表、再回执）。

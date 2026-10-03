@@ -24,7 +24,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -32,7 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createRequire } from 'node:module'
 import WebSocket from 'ws'
-import { createRecorder, installWxShim, loadMpModules, until, traceOf, MP_DIR } from './mp-sim.mjs'
+import { createRecorder, installWxShim, loadMpModules, until, traceOf } from './mp-sim.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT = path.join(here, '..')
@@ -48,8 +48,6 @@ export const MOCK_KERNEL_ENTRY = path.join(
   'platform',
   'mock-kernel.js',
 )
-export { MP_DIR }
-
 /** 指令正文：含中文词，用于"这个词绝不出现在任何一帧里"的审计。 */
 export const PROMPT_TEXT = '请把本周的运维情况整理成一份周报，只给三行结论'
 export const PROMPT_KEYWORDS = ['周报', '运维情况']
@@ -357,8 +355,6 @@ export async function bootHost({
   hostId,
   statusDir,
   pairTtlMs = 60_000,
-  keepAwakeEnabled = false,
-  pairOnStartSec = 0,
   approvalTimeoutSec = 30,
 } = {}) {
   installFrameTap()
@@ -407,9 +403,12 @@ export async function bootHost({
     hostLabel: 'e2e-mock-host',
     mockBridge: true,
     statusFile,
-    pairOnStartSec,
+    // 下面两条是这套装置的前提，不是可调项：自动发码一开，「屏幕上永远有一张码」就不再是
+    // 「点一下配对」那条路径，冒烟步骤会互相干扰；防休眠在 CI 上更不许真去 caffeinate。
+    // 以前它们是 bootHost 的入参，而没有任何调用点传过。
+    pairOnStartSec: 0,
     pairTtlMs,
-    keepAwake: { enabled: keepAwakeEnabled, idleReleaseSec: 300, keepDisplay: false },
+    keepAwake: { enabled: false, idleReleaseSec: 300, keepDisplay: false },
     listingRefreshSec: 15,
     carrierGraceMs: 1000,
     takeOverQuestions: false,
@@ -432,9 +431,7 @@ export async function bootHost({
 
   return {
     hostId: id,
-    statusFile,
     state,
-    service,
     commands,
     /** 主机发布一张新配对码（真 relay-client → 中继 pair-begin）。 */
     createPairing() {
@@ -443,13 +440,6 @@ export async function bootHost({
       assert.match(pairing.qr, /^dshr:\/p\?/, '配对 URI 必须以 dshr:/p? 开头（红线 21）')
       assert.match(pairing.token, /^\d{6}$/, '配对码必须是 6 位数字')
       return pairing
-    },
-    readStatus() {
-      try {
-        return JSON.parse(readFileSync(statusFile, 'utf8'))
-      } catch {
-        return null
-      }
     },
     kernelIndex: kernelCountBefore,
     kernel() {
@@ -634,12 +624,12 @@ export async function pairPhone(host, phone, { pairing, expectedRelayUrl } = {})
  * （本次回报的源码 bug 之一，取证 dsh-remote-control/packages/plugin/src/core/sleep-policy.ts:136-141、156-162）。
  * 装置按"先结清、再停机"避开它，而不是把挂起态留到最后一步。
  */
-export async function shutdown({ phone, host, relay, signal = 'SIGTERM' } = {}) {
+export async function shutdown({ phone, host, relay } = {}) {
   const settled = phone ? phone.settlePermissions() : 0
   if (settled > 0) await delay(400)
   if (phone) phone.close()
   if (host) host.stop()
-  const relayExit = relay ? await relay.stop(signal) : { code: null, signal: null }
+  const relayExit = relay ? await relay.stop() : { code: null, signal: null }
   return { settledPermissions: settled, relayExit }
 }
 

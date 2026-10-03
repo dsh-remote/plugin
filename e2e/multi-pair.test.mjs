@@ -2,7 +2,8 @@
  * multi-pair.test — 多张配对码并存时，必须按**手机实际用的那张码**取 PSK。
  *
  * 它守护的是旧实现的一起线上事故（取证 docs/legacy-spec/relay-and-wireformat.md §2.3 第 2 条、
- * docs/legacy-spec/testing-and-tooling.md §3）：主机同时挂着"自动发布的那张"与"手动 /drc pair 的那张"
+ * docs/legacy-spec/testing-and-tooling.md §3）：主机同时挂着两张码（这里由两次 createPairing() 造出来，
+ * 真机上就是「窗口里那张还没用完」与「又点了一下配对」）
  * 时，旧实现把待配对 PSK 存成**单槽**，于是主机用"最新那张"的密钥派生会话钥匙，
  * 而手机用的是"它扫的那张"——握手全绿、`paired` 也到了，但**每一帧都解不开**，
  * 手机表现为"会话列表永远空白 + 一句莫名的无法解密"。
