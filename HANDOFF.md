@@ -29,7 +29,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 | 待办 | 现状 |
 |---|---|
 | ~~移植 `packages/plugin` 的在飞改动~~ | ✅ **已移植**（开源 control 仓 `5bd4227`：宿主注入的 `user/message` 不再冒充用户指令 + 留痕计数，3 条新测试，224 项全绿） |
-| 移植 mp 的在飞改动 | ✅ 已移植（mp `aac0f60`，verify/theme:check/contrast 三道闸全过）；presentation 的功能按用户拍板要折进主插件，见 §9.1 |
+| 移植 mp 的在飞改动 | ✅ 已移植（mp `aac0f60`，verify/theme:check/contrast 三道闸全过）；presentation 已折进主插件（control `a3025a3`，见 §9.1） |
 | 开源仓不含设计文档 | ✅ 已执行（control `a6aebc5` 删掉整个 docs/，连带修好 README 与 feature_request.yml 里会 404 的两处引用）。**保留**：server 仓 `docs/SELF-HOSTING.md`、mp 仓 `docs/ARCHITECTURE.md`、四仓根目录的 README/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG |
 | 删除伞仓五棵私有树 | ✅ **已删**（提交 f5a6853）；同轮把 e2e/scripts 的 22 个文件改指开源仓，残留私有路径引用 0 |
 | 重接 `e2e/`、`scripts/` 到开源仓路径 | ✅ **已跑绿**：路径改完（`run.mjs` 的 `PLUGIN_ENTRY`/`MOCK_KERNEL_ENTRY`、6 个 e2e 文件、`validate-qr/check-mp-ui/mp-shots/mp-upload/mp-lazyload-report`），判据见 §0 的绿框。**顺带删掉伞仓 7 个与开源仓重复的脚本**（`bundle-{plugin,presentation,relay}`、`install-to-profile.sh`、`relay-start.sh`、`check-mp-contrast.mjs`、`gen-mp-theme.mjs`）——唯一事实源在各仓自己的 `scripts/` 里，伞仓那 7 份是改名前的旧副本 |
@@ -60,9 +60,15 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 1. **仓名 ≠ 包名**。协议发到 npm 的名字是 `dsh-remote-wire`——`dsh-remote-protocol` 这个名
    在 npm 上已被第三方占用（发布者 `weijf14-gmail`）。指仓库写 `dsh-remote-protocol`，
    指包写 `dsh-remote-wire`。
-2. **`dsh-remote-control-presentation` 刻意不发 npm**（用户 2026-10-03 拍板）。
-   `packages/presentation` 是 `private: true`，随 `dsh-remote-control/scripts/install-to-profile.sh` 以 bundle 装进
-   profile。`pnpm -r publish --dry-run` 只会列出插件包一个——这是可复核的判据。
+2. **control 仓现在只有一个包**（用户 2026-10-03 拍板并已执行，见 §9.1）。
+   `packages/presentation`（包名 `dsh-remote-control-presentation`，原来 `private: true`、不发 npm）
+   已折进 `packages/plugin`，右栏那一半的产物现在是同一个 bundle 的两半
+   （`dist/bundle/index.js` + `dist/bundle/client.cjs`），一起由
+   `dsh-remote-control/scripts/install-to-profile.sh` 装进 profile。
+   `pnpm -r publish --dry-run` 只会列出 `dsh-remote-control` 一个——这是可复核的判据。
+   **历史**：拆两包的理由是"宿主缺 `webServer` 时只有那一行不激活"；折并后这个隔离由
+   `src/presentation/sidebar.ts` 的软探测提供，并由 `tests/presentation-isolation.test.ts`
+   用逐字段对照钉住。**别再把它拆回去**，也别往 npm 加第二个包。
 3. **协议是 npm 依赖（`^1.0.0`），不是 git 依赖**。别退回 git 依赖：pnpm 11.7 下 git 包的
    `prepare` 只认含 commit 的精确 `allowBuilds` 键，四种宽松写法全被拒，每次升版都要手改两个消费仓。
 
@@ -191,17 +197,19 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 | 中继版本尾巴收掉：发 `v1.0.1`，并把**已发布的产物**部署上线 | Release v1.0.1 带 `dsh-remote-relay.mjs` + `SHA256SUMS`；`shasum -c` OK 后才 scp；线上 `/healthz` 报 `version:"1.0.1"`、`hosts:1`（重启后主机自动重连成功） |
 | 插件的"假事实"bug 移植进开源仓 | control `5bd4227`，224 项全绿，CI success |
 | mp 的在飞改动移植进开源仓 | mp `aac0f60`：`npm run check` 三道闸全过（verify / theme:check / contrast 242 组达标），私有标识符扫描为空 |
+| **e2e 跑绿**（§0 那条警告已消） | 伞仓 `cb5297f`：`pnpm -r test` = 112 pass / 0 fail + 全链路 16 步 0 失败；`validate-qr` 28 组 ×3 产物 0 失败。顺带抓到并修掉"帧抓取只装了一份 `ws`"那条装置级缺陷（§4 第 10 条） |
+| **presentation 折进主插件，control 仓只剩 `packages/plugin`** | control `a3025a3`（`feat!`，版本 `1.1.0`）：`pnpm typecheck && pnpm -r test` = **280 pass / 0 fail**，`format:check` 过；隔离由 `src/presentation/sidebar.ts` 软探测 + `tests/presentation-isolation.test.ts` 逐字段对照提供（没有 webServer / 正常 / `register()` 抛错三种形态都覆盖）；`install-to-profile.sh` 改成一个 bundle 并退役旧条目；CI 产物校验点名 `client.cjs` |
 
-**已拍板但还没做的两件事：**
+**剩下要做的（本轮的终点是"发出去 + 真机取证"）：**
 
-1. **presentation 折进主插件，开源 control 仓只留 `packages/plugin` 一个包**（用户拍板）。
-   要把 `packages/presentation` 的三块搬进插件：二维码落盘（presenter）、同域只读路由
-   （`/plugins/<id>/pairing`，防环回 + 防跨作用域那两条判据要一起搬）、浏览器面 `client.cjs`
-   （轮询 + `sidebarRight.openResource`）。**搬之前必须知道拆开的原因**：主插件刻意不写
-   inject 闸门，而这条功能需要 `webServer` 服务——原来拆成两包是为了"宿主缺 webServer 时
-   只有这一行不激活，配对/中继一行都不受影响"。折成一个包之后这个隔离必须由代码自己提供：
-   **对 `webServer` 软探测，拿不到就只禁用路由与右栏，不许连累注册与转发**，并且要有测试
-   锁住"缺 webServer 时配对链路照常"。`install-to-profile.sh`（伞仓私有脚本）随之只装一个
-   bundle，`dsh.client` 那两个字段的注册形状要跟着改。npm 上这属于功能新增 → `1.1.0`。
-2. ~~伞仓瘦身~~ ✅ 已做完（`f5a6853`）。**剩下的唯一尾巴是把 e2e 跑绿**，见 §0。
+1. **推 GitHub + 发 npm `1.1.0`**：control 仓那次提交还在本地。发之前先把 Trusted Publishing
+   配上（§3 第 1 条），否则 `provenance` 还是挂不上、文档里就照旧不许宣称带 provenance。
+2. **真宿主 live-e2e 取证**：折并后的单 bundle 装进 profile、重启 Harness、跑
+   `node e2e/live-e2e.mjs`。**这条是折并唯一还没被真实宿主证明过的部分**——右栏弹码、
+   `client.cjs` 外壳、路由改名 `/plugins/dsh-remote-control/pairing` 三件事在单测里全绿，
+   但"右栏真的弹出那张图"只有真机能证。
+3. 生产中继重部（本轮 control 改动不涉及中继产物；线上仍是 `dsh-remote-server` 的 v1.0.1，
+   重部的动作是把**已发布产物**再核一遍哈希并确认 `/healthz` 与 `hosts`）。
+4. Dependabot 三个 PR 审（§3 第 4 条）。**大版本没审过，别顺手合。**
+
 

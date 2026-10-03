@@ -11,31 +11,38 @@
 
 ## 组成
 
-| 组成 | 目录 | 作用 |
+**伞仓不再持有源码副本**（2026-10-03）：产品代码的唯一事实源是 GitHub 上四个独立仓
+（账号 `providcc`，MIT），在这台机器上是四个平行的顶层目录；本仓只剩**不开源的取证与运维资产**。
+
+| 组成 | 位置 | 作用 |
 |---|---|---|
-| **协议层** | `packages/protocol` | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
-| **中继服务** | `apps/server` | 零知识 WebSocket 中继（`ws` + `zod`）。生产入口是**单文件产物** `dist/bundle/main.js` |
-| **Host 插件** | `packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件 |
-| **右栏呈现** | `packages/presentation` | 配对码落成 PNG + 一条同域只读路由；浏览器面（`client`）轮询它并把二维码**自动推进右栏**——不用用户自己点开侧边栏，也不切工作区 |
-| **小程序客户端** | `mp/` | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
-| **测试装置** | `e2e/` | 本地全链路 + 真实链路取证（见「测试」） |
-| **部署配置** | `deploy/` | nginx + systemd + 上线步骤（生产实例已运行） |
+| **协议层** | `dsh-remote-protocol/`（npm 包名 `dsh-remote-wire`） | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
+| **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继（`ws` + `zod`）。生产入口是**单文件产物** `dist/bundle/main.js` |
+| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**右栏自动弹码那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`，2026-10-03） |
+| **小程序客户端** | `dsh-remote-mp/`（代码在它的 `miniprogram/` 下） | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
+| **测试装置** | `e2e/`（伞仓） | 本地全链路 + 逐字节对拍 + 生命周期 + 真实链路取证（见「测试」） |
+| **取证脚本** | `scripts/`（伞仓） | `validate-qr.mjs`（改二维码必跑）、`check-mp-ui.mjs`、`mp-*.mjs`、`read-session-log.mjs` |
+| **设计与档案** | `docs/`、`HANDOFF.md`（伞仓） | 契约表 B1-B9 / F1-F13 / T1-T8、偏离 D1-D9、复核结论、旧实现事实档案 |
+| **部署配置** | `deploy/`（伞仓） | nginx + systemd + 上线步骤（生产实例已运行） |
 
 ## 架构
 
 ```
 ┌──────────────────┐  wss + host token   ┌───────────────┐  wss + 配对码   ┌──────────────────┐
 │  DSH 桌面应用      │ ─────────────────▶ │  relay server │ ◀────────────── │ 微信小程序        │
-│  cordis bundle   │  只见密文与 6 位码   │  apps/server  │                 │  mp/             │
+│  cordis bundle   │  只见密文与 6 位码   │               │                 │                  │
 └──────────────────┘                     └───────────────┘                 └──────────────────┘
         │ caffeinate(macOS) / systemd-inhibit(Linux)；Windows 明确不实现
         ▼
-   数据面载荷（@dsh-rc/protocol）
+   数据面载荷（dsh-remote-wire）
    cmd.list_sessions / cmd.send_prompt / cmd.interrupt / cmd.resolve_permission /
    cmd.answer / cmd.keep_awake   ⇄
    ev.session_changed / ev.message_delta / ev.tool_event / ev.permission_request /
    ev.question_request / ev.run_state / ev.keep_awake_state / ev.result
 ```
+
+四棵仓的落位（这台机器上）：`dsh-remote-protocol/`、`dsh-remote-server/`、
+`dsh-remote-control/`（内含 `packages/plugin`）、`dsh-remote-mp/`（内含 `miniprogram/`）。
 
 **信任模型**
 
@@ -50,18 +57,31 @@
 ## 生产实例（已上线）
 
 - 入口：`wss://drc.provid.cc`（阿里云 cn-shanghai / ECS `47.100.82.15`）
-- 跑的是重写后的单文件产物（`version` 可在 `/healthz` 里核对）
+- 跑的是 `dsh-remote-server` 仓 **Release 已发布的产物**（v1.0.1）：先 `shasum -c SHA256SUMS`
+  校验再从 Release 下载， scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回 1
+  （线上宿主插件自动重连）——"能换"是这么证的。私有那套 2.x 编号作废，以后只有开源的号。
 - 配置与复现步骤：[`deploy/README.md`](deploy/README.md)
 - 健康检查：`curl https://drc.provid.cc/healthz`
 
 ## 快速开始（开发）
 
+四棵源码仓各自是**独立的 pnpm workspace**，没有顶层 workspace 把它们串起来（协议层是 npm 依赖
+`dsh-remote-wire`，不是 git 依赖）。伞仓的 workspace 里只有 `e2e`。
+
 ```sh
-env -u NODE_OPTIONS pnpm install            # 必须 env -u NODE_OPTIONS，见 HANDOFF §4
-env -u NODE_OPTIONS pnpm -r typecheck       # 类型（build 绿不等于类型对）
-env -u NODE_OPTIONS pnpm -r test            # 协议 82 / 中继 73 / 插件 218 / e2e 86
-env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
+# 逐仓装依赖 + 跑各自的闸门（都在仓根）
+cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 82
+cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 78（1 skip）
+cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 280
+cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
+
+# 伞仓：取证与运维
+env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（112）+ 本地全链路 16 步
+env -u NODE_OPTIONS node e2e/run.mjs    # 只跑本地全链路
 ```
+
+`env -u NODE_OPTIONS` 是**必须**的：Qoder CLI 会往子 shell 注入一个 `--require` 的 CJS 代理，
+Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂（详见 `HANDOFF.md` §4）。
 
 ### 起本地中继 / 装插件
 
@@ -79,8 +99,8 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 
 ### 配对与使用
 
-1. DSH 里执行 `/drc pair`：**默认写出二维码图片**（`qrImage` 默认开），写到**当前会话工作区**的 `.dsh/pairing-qr.png`（工作区解析不出来时才落 `~/.dsh/pairing-qr.png`），**右栏会自动弹出当前配对码**（`packages/presentation`，装了那一行才成立）——没弹出时按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
-2. 微信开发者工具打开 `mp/`（TDesign 产物已预置在 `mp/miniprogram_npm/`，**不需要**「构建 npm」）；
+1. DSH 里执行 `/drc pair`：**默认写出二维码图片**（`qrImage` 默认开），写到**当前会话工作区**的 `.dsh/pairing-qr.png`（工作区解析不出来时才落 `~/.dsh/pairing-qr.png`），**右栏会自动弹出当前配对码**（`dsh-remote-control/packages/plugin` 里的 `src/presentation/` + 浏览器面 `client/`；宿主没有 `webServer` 服务时这一半自己不起，配对/中继不受影响）——没弹出时先查 `status.json` 的 `sidebar` 那块（它会说 `webServer=none` / `disabled` / `register threw: …`），再按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
+2. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
 3. 首页扫码或粘贴二维码内容 → 自动连接；
 4. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
 
@@ -90,15 +110,15 @@ env -u NODE_OPTIONS node e2e/run.mjs        # 本地全链路 14 步
 
 | 命令 | 覆盖 | 项数 |
 |---|---|---|
-| `pnpm --filter @dsh-rc/protocol test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 82 |
-| `node --test e2e/protocol.test.mjs` | 与小程序 `mp/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
-| `pnpm --filter @dsh-rc/server test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 73 |
-| `pnpm -C packages/plugin test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话** | 218 |
-| `pnpm -C packages/presentation test` | 二维码落盘判据（**没落盘 / 已过期一律不 `ready`**）、`expiresAt` 的 ISO 与毫秒两种形状、会话作用域地址、路由**防环回与防跨作用域**、浏览器面产物形状 | 44 |
-| `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 14 步 |
-| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题（客户端重连、中继重启、主机重启） | 86 |
+| `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 82 |
+| `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
+| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 78（1 skip） |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及折并进来的右栏那一半（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域** / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**） | 280 |
+| `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
+| `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 16 步 |
+| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 112 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
-| `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（终端矩阵 + PNG） | 28 组 |
+| `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（网页图片 / 文本字形还原 / 裸矩阵三条路径） | 28 组 ×3 |
 
 ```sh
 node e2e/live-e2e.mjs                       # 默认打生产入口
@@ -110,9 +130,11 @@ node e2e/live-e2e.mjs --session <id>        # 指定会话（可验归档自动�
 > `pairOnStartSec` 默认是 `0`（不自发出码），所以裸跑会报"没有 pairing.qr"——先在 DSH 里
 > 执行一次 `/drc pair`，再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
 
-CI：`.github/workflows/ci.yml`——主作业 Node 22（`pnpm -r typecheck` + `pnpm -r test` + 三层 e2e），
+CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22（typecheck + test + 产物校验），
 另一个作业在 Node 20 上从**空目录**起单文件产物，验 `/healthz` 的 version、优雅停机 exit 0、
-以及"缺 token 必须拒绝启动"。
+以及"缺 token 必须拒绝启动"。装/查/打包固定走 Node 22（pnpm 11.7 要 node ≥22.13），
+只有 `node --test` 跑在矩阵版本上——细节见 `HANDOFF.md` §4 第 2 条。
+**伞仓没有 CI**：它没有 remote，而且 `e2e/` 需要四棵平行仓在场，GitHub 上拿不到。
 
 ## 防休眠
 
