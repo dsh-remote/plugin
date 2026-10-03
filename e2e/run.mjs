@@ -364,11 +364,15 @@ export async function bootHost({
   assert.equal(typeof apply, 'function', '插件必须导出 apply(ctx, injected)')
 
   const provided = {}
-  const commands = {}
+  /**
+   * 注册出去的**命令**个数。`/drc` 整条已删（2026-10-03），所以这里必须恒为 0——
+   * 留着它不是"还能注册"，而是钉住"命令注册这条路上不该再有东西"。
+   */
+  let commandCount = 0
   const disposers = []
   /**
-   * 假 `webServer`：状态栏那颗 pill 的三条路由要挂在它上面（宿主没这个服务时那一半整个不起）。
-   * 这里给一个真的注册表，是为了让本链路能**带着真中继在线**去点那三条——
+   * 假 `webServer`：状态栏那颗 pill 的四条路由要挂在它上面（宿主没这个服务时那一半整个不起）。
+   * 这里给一个真的注册表，是为了让本链路能**带着真中继在线**去点那四条——
    * 单测里的发码分支永远是"中继不可达"，那条路在 e2e 之前从没被走过。
    */
   const routes = new Map()
@@ -386,7 +390,11 @@ export async function bootHost({
     provide: (name, value) => {
       provided[name] = value
     },
-    commands: { register: (definition) => { commands[definition.name] = definition } },
+    commands: {
+      register: () => {
+        commandCount += 1
+      },
+    },
     on: () => () => undefined,
     off: () => undefined,
     onDispose: (fn) => disposers.push(fn),
@@ -432,7 +440,8 @@ export async function bootHost({
   return {
     hostId: id,
     state,
-    commands,
+    /** 注册出去的命令个数：恒为 0（`/drc` 已删）。 */
+    commandCount: () => commandCount,
     /** 主机发布一张新配对码（真 relay-client → 中继 pair-begin）。 */
     createPairing() {
       const pairing = service.createPairing()
@@ -445,7 +454,7 @@ export async function bootHost({
     kernel() {
       return kernelAt(kernelCountBefore)
     },
-    /** pill 挂上去的那三条路由（路径 → {kind, path, handler}）。 */
+    /** pill 挂上去的那四条路由（路径 → {kind, path, handler}）。 */
     pillRoutes: routes,
     /**
      * 打一条 pill 路由：真 handler、真 req/res 对，返回 {status, headers, body}。
@@ -815,29 +824,6 @@ export function assertListPushed({ resultPayload, sessionChangedPayload, cmdId, 
   }
 }
 
-/**
- * 宿主命令返回契约（`@deepseek-ai/dsh-commands` 的 `normalizeResult`）的最小复刻。
- *
- * 权威复刻件在 `dsh-remote-control/packages/plugin/tests/command-result.test.ts`（含"带牙"反证与源码差分）；
- * 这里只保证"交给宿主的那一瞬形状合法"。线上事故 `command "drc" returned unknown result kind "text"`
- * 就发生在注册/调用边界上——所以在线分支也要在这里真的过一遍。
- */
-export function assertCommandResult(command, value, label = `/drc ${command}`) {
-  assert.ok(
-    value && typeof value === 'object' && 'kind' in value,
-    `${label} 必须返回 CommandResult 对象，收到 ${JSON.stringify(value)?.slice(0, 120)}`,
-  )
-  if (value.kind === 'success') {
-    assert.ok(value.text === undefined || typeof value.text === 'string', `${label} success.text 给了就必须是 string，收到 ${typeof value.text}`)
-    return value
-  }
-  if (value.kind === 'error') {
-    assert.ok(typeof value.text === 'string' && value.text.trim().length > 0, `${label} error.text 必须是非空 string`)
-    return value
-  }
-  assert.fail(`${label} 返回了宿主不认的 kind=${JSON.stringify(String(value.kind))}：宿主会抛 unknown result kind，整条命令失败`)
-}
-
 // ── 主脚本 ───────────────────────────────────────────────────────────
 
 export async function main() {
@@ -877,45 +863,39 @@ export async function main() {
       note('内核面 = platform/mock-kernel：会话 id 一律 ses_mock*，本步不证明真内核（真内核见 e2e/live-e2e.mjs）')
     })
 
-    await run('/drc 命令的返回值过宿主契约（线上事故：unknown result kind "text"）', async () => {
-      const definition = host.commands?.drc
-      assert.ok(definition && typeof definition.handler === 'function', 'apply() 必须把 drc 命令注册进 ctx.commands')
-
-      // 在线分支：`status` 那条要真去读快照。
-      const statusResult = assertCommandResult('status', await definition.handler({ commandId: 'e2e-cmd-status', rawInput: 'status' }))
-      assert.equal(statusResult.kind, 'success')
-      const snapshot = JSON.parse(statusResult.text)
-      assert.equal(snapshot.relay, 'online', 'drc status 快照必须反映中继已连通（这是排错入口）')
-
-      // **`/drc pair` 已经不是子命令**（2026-10-03：配对唯一入口是状态栏那颗 pill）。
-      // 它落到默认分支 = 状态快照；这一条断的是"命令行不再发出第二张码"——
-      // 那正是当初多码事故的形状，而在线时 `createPairing()` 是会真发一张的。
-      const pairResult = assertCommandResult('pair', await definition.handler({ commandId: 'e2e-cmd-pair', rawInput: 'pair' }))
-      assert.equal(pairResult.kind, 'success', `drc pair 的 kind 必须是 success，收到 ${JSON.stringify(pairResult)?.slice(0, 120)}`)
-      assert.doesNotMatch(String(pairResult.text), /dshr:\/p\?|psk/, '命令行不许再把配对凭据印出来')
-      assert.ok(JSON.parse(pairResult.text).relay === 'online', 'pair 落到默认分支 = 状态快照')
-      assert.ok(
-        !/\bpair\b/.test(String(definition.input?.hint ?? '')),
-        `命令提示里不该再有 pair：${String(definition.input?.hint)}`,
+    await run('命令这条路上没有东西：/drc 整条已删，一个命令都不该注册进 ctx.commands', async () => {
+      // 2026-10-03 拍板：配对唯一入口是状态栏那颗 pill（那四条路由），命令行兜底整条拔掉。
+      // 这条不是"没报错就行"——它钉的是"命令注册这条路不该再被碰"，而当初的线上事故
+      // （`command "drc" returned unknown result kind "text"`）正是从这条边界上来的。
+      assert.equal(
+        host.commandCount(),
+        0,
+        'apply() 一个命令都不该注册（/drc 已删）；注册了就说明旧那条没拔干净',
       )
-      note(`drc status → relay=${snapshot.relay}；drc pair → 状态快照（不再发码）；hint=${definition.input?.hint}`)
+      note('ctx.commands 上 0 条注册；配对入口只有 pill 那四条路由')
     })
 
-    await run('点一下配对：pill 那三条路由在真中继在线时发码、出图、说实话', async () => {
+    await run('点一下配对：pill 那四条路由在真中继在线时发码、出图、说实话、能解配', async () => {
       const marker = { host: '127.0.0.1:19387', 'x-drc-pair': '1' }
       const NEW = '/plugins/dsh-remote-control/pairing/new'
       const PNG = '/plugins/dsh-remote-control/pairing.png'
       const STATUS = '/plugins/dsh-remote-control/status'
+      const UNPAIR = '/plugins/dsh-remote-control/unpair'
       assert.deepEqual(
         [...host.pillRoutes.keys()].sort(),
-        [NEW, PNG, STATUS].sort(),
-        '三条路由都要挂上（假 webServer 在场）',
+        [NEW, PNG, STATUS, UNPAIR].sort(),
+        '四条路由都要挂上（假 webServer 在场）',
       )
 
-      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。
+      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。字段集合就那三个（本机名 2026-10-03 撤了）。
       const before = await host.callPill(STATUS)
       assert.equal(before.status, 200)
       assert.equal(before.body.relay, 'online', `pill 要说实话：${JSON.stringify(before.body)}`)
+      assert.deepEqual(
+        Object.keys(before.body).sort(),
+        ['paired', 'relay', 'serverUrl'],
+        '状态路由多一个字段就要重新审一遍（三个全是非凭据）',
+      )
 
       // 2) 点一下：真向中继申请一张码。回答带 token/epoch，**不带 psk、不带完整 URI**。
       const minted = await host.callPill(NEW, { method: 'POST', headers: marker })
@@ -960,7 +940,16 @@ export async function main() {
       assert.equal(active.token, minted.body.token, 'pill 发的码与窗口维护的必须是同一张')
       assert.equal(sha256_16(active.qr), minted.body.epoch, 'epoch 就是这张码 URI 的哈希，同一个口径')
       assert.ok(String(active.qr).includes(`t=${minted.body.token}`), 'URI 里那位 6 位码要和回答一致')
-      note(`pill：status=online → 发码 token=${minted.body.token}（幂等复点同码、与主机维护的那张同 URI）→ PNG ${image.raw.length}B，三条守卫各回 403/403/405`)
+
+      // 7) 退出配对：此刻还没配上手机，unpaired=0 也是成功（不是错误）。
+      //    守卫与发码那条同一档：GET → 405、少了自定义头 → 403。
+      const unpaired = await host.callPill(UNPAIR, { method: 'POST', headers: marker })
+      assert.equal(unpaired.status, 200, JSON.stringify(unpaired.body))
+      assert.deepEqual(unpaired.body, { state: 'ok', unpaired: 0 }, '这台没配上时 unpaired=0，是幂等成功')
+      assert.equal((await host.callPill(UNPAIR, { method: 'GET', headers: marker })).status, 405)
+      assert.equal((await host.callPill(UNPAIR, { method: 'POST', headers: { host: marker.host } })).status, 403)
+
+      note(`pill：status=online → 发码 token=${minted.body.token}（幂等复点同码、与主机维护的那张同 URI）→ PNG ${image.raw.length}B → 守卫各回 403/403/405 → unpair ${JSON.stringify(unpaired.body)}`)
     })
 
     await run('主机发布配对码 → pair-ready 带正整数 ttlMs → 手机用真实 dsh-remote-mp/miniprogram/core 代码配对', async () => {

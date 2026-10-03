@@ -22,12 +22,18 @@
 scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回到 1——"能换"是这么证的。
 私有那套 2.x 编号作废，以后只有开源的号。
 
-**配对入口已经收敛成一条**（2026-10-03 下午到深夜）：状态栏那颗 pill。右栏自动弹码、终端文本码、
-`/drc pair` 三条旧路全部删除，配置键换成 `pill.enabled`；抬头那句现在是
-`未配对`（灰）/ `已配对`（绿），**点进去是连接信息**，发码要再按一次面板里那颗按钮（§9.8）。
-**已在真屏幕上复验三次**（最后一次连"点开不发码"一起证了：`epoch`/`ETag`/`sha256` 三者原子对上，`problems` 为空）。
-这一轮**已经发版**：control `1.2.0` 带 provenance 发到 npm（发布运行 14 步全绿，attestation 已用 curl 复核），
-`~/.dsh/profiles/desktop` 里装的字节与 npm 上那版一致（§0.2）。同一轮还把四仓的死代码清了一遍（§9.6），
+**配对入口只剩状态栏那颗 pill**（2026-10-03）：右栏自动弹码、终端文本码、`/drc pair` 三条旧路先删，
+配置键换成 `pill.enabled`；这一轮（§9.9）又把 **`/drc` 命令整条删掉**、**只允许配对一台**
+（新设备进来当场踢掉旧的）、并把弹出面板**重做成精简版**——抬头是状态
+（`未配对`灰 / `已配对`绿 / `已断开连接`**红**），右上角**只有一颗按钮**且跟着视图走
+（未配对=`生成配对码`、已配对=`退出配对`、出图=`刷新`），下面一行**中继地址**，
+**没有**本机名 / 状态 / 已配对那几行、没有「再配一台」、也没有「换一张」（码过期不再自动换）；
+配上之后面板从二维码翻回状态视图。宿主侧那四条路由多了一条 `POST …/unpair`。
+上一版面板已在真屏幕上复验三次（§9.8，`epoch`/`ETag`/`sha256` 三者原子对上、`problems` 为空）；
+**这一版面板改动尚待重装宿主复验**——而且第一次复验已经撞上一个"新 JS + 旧 CSS"的错位（§9.9）。
+这一轮**已经发版的是 1.2.0**（§9.8）：control `1.2.0` 带 provenance 发到 npm（发布运行 14 步全绿，
+attestation 已用 curl 复核），`~/.dsh/profiles/desktop` 里装的字节与 npm 上那版一致（§0.2）；
+**§9.9 这一版跑在 1.2.0 之后的未发布改动上**，工作树里的版本号还没动。同一轮还把四仓的死代码清了一遍（§9.6），
 并撤回了一次中继发包（§9.7）。
 
 > ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
@@ -115,7 +121,7 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
 | `scripts/` | `validate-qr.mjs`（改二维码必跑）、`mp-*.mjs` 等 |
 | `docs/DESIGN.md`、`docs/DESIGN-REVIEW.md` | 契约表 B1-B9 / F1-F13 / T1-T8、偏离 D1-D9、复核结论。开源仓的 `docs/` 是它们的**换算过名字的历史副本** |
-| `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（现在只有 `pill.enabled` 这一族）、`status.json` 字段与本机实测值、pill 那三条路由的 curl 取证配方（含 `epoch`↔`ETag`↔`sha256` 的原子核对与"AX 树不给内容时按像素找那颗 6px 灯"的兜底）、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
+| `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（现在只有 `pill.enabled` 这一族）、`status.json` 字段与本机实测值、pill 那四条路由的 curl 取证配方（含 `epoch`↔`ETag`↔`sha256` 的原子核对与"AX 树不给内容时按像素找那颗 6px 灯"的兜底）、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
 | `docs/legacy-spec/` | 重写前从旧实现提取的事实档案 |
 | `HANDOFF.md`（本文） | 伞仓**没有 remote**，这些提交只在本地 |
 
@@ -582,3 +588,66 @@ bundles 列表照样打出来。改成「」。**推论**：写进未加引号 h
 与仓内 `dist/bundle/` 逐字节相同）——**屏幕上的哈希 `b362fec0…`/`9328b1e5…` 是当时那次构建的产物，
 换一次构建就变**（esbuild 内嵌 cwd 相关的模块路径标签，§4 第 20 条）：别拿字节哈希判"代码变了没"，
 判据是版本号 + 解出来（非 ASCII 会转成 `\uXXXX`）的文案。
+
+### 9.9 单台配对 + 退出配对 + 面板重做 + `/drc` 整条删（2026-10-03 深夜，本轮）
+
+用户一句话定边界："配对策略变一下，只允许配对一台，pill 弹出框支持退出配对，`/drc` 命令直接去掉，
+必须要显示的状态加入到 pill 弹出框，本机、状态、已配对 去掉，再配一台去掉，生成配对码/退出配对，
+都放在右上角；换一张二维码按钮和能力也去掉，重新设计这个弹出页面，精炼一些。"
+
+按这句话执行的六件事：
+
+| 面 | 改动 | 判据 |
+|---|---|---|
+| **只允许一台** | `onPeerJoined` 里，新设备进来时把**除它以外**的所有会话 `voidConversation`（中继先 `conversations.open` 新通道再回调主机，所以这里要作废的是"其它"）。旧手机下一帧撞上 `unknown_session` → 需重新配对 | `index.ts` 那条注释；`ConversationBook.ids()` 返回新数组，遍历中作废是安全的 |
+| **退出配对路由** | 新增 `POST /plugins/dsh-remote-control/unpair`，与发码那条**同一档守卫**（`x-drc-pair` 头；它也改状态）；返回 `{state:'ok', unpaired:n}`，`n=0` 是幂等成功不是错误 | `pill-routes.test.ts` 新增一节（成功 / `unpaired:0` / GET→405 / 缺头→403 / 跨站与 `null` Origin→403 / 非环回 Host→403 / `dsh-app://app`→200 / 抛错→500） |
+| **`/drc` 整条删** | 命令注册那一路**全部拔掉**（`LooseContext.commands`、`CommandResult`、`commandDefinition` 与三次注册尝试），`command-result.test.ts` 删文件 | isolation 测试与 `e2e/run.mjs` 各钉一条"**一个命令都不许注册**" |
+| **主机名/状态/已配对 三行删** | `/status` 字段从 `{relay,paired,hostLabel,serverUrl}` 收成 `{relay,paired,serverUrl}`；`PillStatus` 里 `hostLabel` 撤掉（配置键 `hostLabel` 保留，它只管手机显示名） | 三处测试的字段集合断言 + status 路由"多一个字段就要重审"那条 |
+| **面板重做** | 抬头一行（状态 + 右上角那颗按钮：未配对=`生成配对码`、已配对=`退出配对`）+ 一行**中继地址**；QR 视图 = 图 + 6 位码 + 过期提示。**删掉** `RELAY_TEXT`/`infoRows`/"换一张"那颗按钮 | `client-bundle.test.ts`：`drc-head-label`/`drc-info`(键='中继') 在、本机/状态/已配对/再配一台/换一张**一个字都不许出现**、按钮文案随 `paired` 换、按下打 `POST /unpair` |
+| **换一张能力也去** | 倒计时到点**不再自动补码**：`expiresInMs<=0` 时清掉 interval、只重绘一句"配对码已过期…"，要再发得重新按那颗按钮 | `client-bundle.test.ts`："码过期后不再自动补一张"（请求计数停在 1） |
+
+**面板还剩什么、为什么**：用户点名删的是"本机、状态、已配对"三行与"再配一台"。
+**中继地址**不在删除名单里，且是排错第一眼要看的东西（手机连不上时先看主机连的是哪个中继），
+所以留成一行——如果这一步也想删，删的是 `relayBlock()` 那一行与 `/status` 的 `serverUrl` 字段。
+
+**闸门（本轮，源码改动后）**：control `pnpm -r test` **265 pass / 0 fail**、`pnpm -r typecheck` 过、
+`format:check`（源码，CI 在 build 前跑那次）过、`node --check e2e/run.mjs` 过。
+伞仓 `e2e/*.test.mjs` 与 `node e2e/run.mjs` **本轮未跑**——同工作树有并行会话在飞（它改
+`packages/plugin` 的载体面与 `e2e/run.mjs`），跑全量 e2e 会互相打断；要跑得等它停手、工作树干净。
+
+**还欠着的**：① 重装 `~/.dsh/profiles/desktop` 并重启宿主，在真屏幕上复验新面板（抬头 / 右上角那颗
+按钮随配对态换字 / 退出配对真的掉线 / 码过期不再自动换）；② 全量 e2e 与 `e2e/run.mjs` 在干净工作树上补跑。
+
+#### 9.9.1 第一次真机复验：撞上"新 JS + 旧 CSS"，并补四条用户点单（2026-10-03 深夜）
+
+用户拿真屏幕截图回来，一句话点出四件事：**① 界面错乱；② 二维码页那颗按钮该是「刷新」不是「生成配对码」；
+③ 配对状态要配色、断链要用红的「已断开连接」；④ 已配对之后该显示状态，不是还挂着二维码。**
+
+**① 的根因不在布局代码，在样式表版本**（这条最值钱）：截图里的形状（按钮掉到第二行居中、中继那两段竖排、
+段落间距偏大）**只有旧 CSS 能摆出来** —— 上一版 `.drc-actions` 写着 `justify-content: center; margin-top: 8px`、
+旧 `.drc-info` 是列方向、`drc-hint` 在旧表里根本没有（吃 `p` 的默认外边距）。而 JS 明明是新的
+（新文案 `点右上角…`、新 `qrNote` 都在）。对上的结论是 `ensureStyle` 的老毛病：
+
+```ts
+if (doc.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return   // ← 只看"插过没有"
+```
+
+宿主换这一半时**文档未必重载**（HMR 换模块、`<head>` 里那份 `<style>` 原样留着），于是新 DOM 配旧样式。
+修法是**按内容对齐**：内容不一致就当场 `textContent = CSS`。判据 `client-bundle.test.ts` 新增
+"样式表按内容对齐"（预置一份旧 `<style>`，要求它被换掉、且**不许插第二份**）。
+⚠️ 顺带又踩了一次同一条老坑：给 CSS 注释加了一句带**反引号**的 `space-between`，模板字符串当场断行、
+`tsc` 报 `TS1005`（与 §9.6 那条"CSS 写在模板字符串里不能出现反引号"是同一件事）。
+
+**②③④ 的改法**（都在 `client/src/pill.ts`）：
+
+| 点单 | 改法 | 判据 |
+|---|---|---|
+| 二维码页那颗按钮 | 右上角那颗**跟着当前视图走**：`qr`/`loading` → `刷新`（同一条幂等发码路由，码还在就还是它），其余按配对态给 `生成配对码` / `退出配对` | `client-bundle.test.ts` 两条：出图时按钮文案 `刷新`；过期后仍是 `刷新` |
+| 状态配色 + 断链红 | `pillLabel` 的 tone 从三档加到四档，`offline` → `{text:'已断开连接', tone:'error'}`；`.drc-dot[data-tone="error"]` 与 `.drc-head-label[data-tone="error"]` 都是红 | 原"远程未连接/off"那条改判成"已断开连接/error" |
+| 已配对后回状态视图 | `pollStatus` 里：`lastStatus` 更新后若 `view.kind==='qr'` 且 `paired>0`，就地 `view={kind:'info'}` + 清倒计时 + 重画 | 新增一条：切 `paired` 后翻面、`drc-qr` 消失、按钮变 `退出配对`、**发码请求数仍是 1**（翻面只重画） |
+
+另外把面板里那句 `点右上角「生成配对码」，用手机扫码完成配对` 整段删了（`.drc-hint` 连 CSS 一起）——
+抬头那颗按钮自己就说明了，多一行只是让这个 240px 的弹窗更挤；中继那一行改成 `space-between`（键左值右）。
+
+**闸门（本轮）**：control `pnpm -C packages/plugin test` **267 pass / 0 fail**、`typecheck` 过、
+`format:check` 只剩并行会话那份 `src/platform/carrier-services.ts`（不是我的改动）。

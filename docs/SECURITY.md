@@ -393,8 +393,11 @@ pong 就 `terminate()`）。改判应用层心跳会周期性踢掉空闲客户�
   历史上这里曾是 `/drc pair` 写一张 `<会话工作区>/.dsh/pairing-qr.png`（0600）+ 一条
   终端文本码退路；两者都删了（文本码在 DSH 命令卡 `line-height:1.6` 下被行间留白横切成条，
   实测 zxing ≥1.15 行距就解不出来，也就是它在这个唯一宿主上从来没扫通过）。
-- `/drc unpair` 会把手里所有通道作废（对每条走 `voidConversation`，
-  `packages/plugin/src/index.ts:720`）🟩（`relay-client.test.ts:352`），这是主机侧的主动解配。
+- **退出配对**走状态栏那颗 pill 面板右上角那颗按钮 → 同域 `POST /plugins/dsh-remote-control/unpair`；
+  它把手里所有通道作废（对每条走 `voidConversation`，
+  `packages/plugin/src/index.ts` 的 `unpairAll()`）🟩（`relay-client.test.ts`、
+  `pill-routes.test.ts` 的 `/unpair` 一节）。这条路由与发码那条同一档守卫（它也改状态）：
+  环回 `Host` + `x-drc-pair` 头。（`/drc unpair` 这条命令行在 2026-10-03 随 `/drc` **整条删除**。）
 
 **小程序侧**：PSK、convId、nonce 计数器存在 `wx.setStorageSync` 的
 `drc.pairing.v1` 里（`mp/core/session-store.js:11-13,74-76`；写入点 `mp/core/client.js:273-283`，
@@ -585,8 +588,8 @@ key 是 `c2h`/`h2c` 派生后的**会话密钥**在内存里，PSK 留在存储�
     （`shell/status.ts`），但 `pairOnStartSec > 0` 时里面可能躺着一张仍然有效的 PSK
     （`describeActivePairing`）。用完请关掉 `pairOnStartSec`（默认就是 0）。
     配对二维码本身**不落磁盘**（见上面那条），所以这里少了一个曾经存在的敏感文件；
-    同一条改动也让"pill 的三条路由"成为攻击面上唯一新增的浏览器可达部分——
-    它由环回 `Host` 守卫 + 只读/写两档判据（写那条要 `x-drc-pair` 头）看着。
+    同一条改动也让"pill 的四条路由"成为攻击面上唯一新增的浏览器可达部分——
+    它由环回 `Host` 守卫 + 只读/写两档判据（会改状态的那两条——发码与解配——都要 `x-drc-pair` 头）看着。
 12. **元数据没有保护**：中继（以及路上任何能看到 TLS 之外信息的人）知道谁在什么时候连了多久、
     帧的条数与字节数、host label、clientId、convId、6 位配对码。要更强的话需要
     padding 与覆盖控制面字段端到端的封装——都不在冻结面之外做不了，因为小程序一行不改。

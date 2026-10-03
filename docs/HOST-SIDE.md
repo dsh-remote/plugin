@@ -20,7 +20,7 @@
 | 产物 | 跑在哪 | 干什么 |
 |---|---|---|
 | `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**挂 3 条同域路由给那颗 pill（发码 / 图片 / 状态） |
-| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 向装载器拿 `react`、软探测 `slots`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态（2s 轮 `/status`），**点开先给连接信息**，要发码得再按面板里那颗按钮（`POST /pairing/new`）并把 `/pairing.png` 弹在同一颗按钮上方 |
+| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 向装载器拿 `react`、软探测 `slots`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态（2s 轮 `/status`），**点开是精简面板**——一行状态 + 一行中继地址 + 右上角一颗按钮（未配对=`生成配对码`、已配对=`退出配对`），发码要按那颗按钮（`POST /pairing/new`），退出配对按同一颗（`POST /unpair`） |
 
 宿主注入的东西（`cordis`、`@deepseek-ai/*`）刻意**留在 externals**——打进去会造成两份实例。
 协议层 `dsh-remote-wire` 是 npm 依赖，esbuild 打包时内联，所以 profile 里不需要 `node_modules`。
@@ -32,11 +32,12 @@
 `status.json` 的 `pill` 块会写明为什么。这条隔离有测试钉住：
 `packages/plugin/tests/pill-isolation.test.ts` 把"有 webServer / 没有 / `register()` 抛错 /
 `pill.enabled:false`"四种形态各跑一遍 `apply()`，要求主链路可观察字段**逐个相等**、
-`/drc unpair` 的返回**逐字节相等**，差别只许出现在 `pill` 探针与那一条 `warn:pill` 上。
+**字段集合逐个相同**，差别只许出现在 `pill` 探针与那一条 `warn:pill` 上；
+并且两边都**一个命令都不许注册**（`/drc` 已整条删，见下）。
 
-⚠️ **命令行没有配对入口了**：`/drc` 只剩 `status` 与 `unpair`（`/drc pair` 与 `/drc pair force`
-都在 2026-10-03 删掉）。所以"路由没挂上"= 这台主机配不了对，而它必须查得到——
-见 §5 的 `warn:pill`。
+⚠️ **命令行这条路上没有东西了**：`/drc` 命令在 2026-10-03 **整条删掉**（更早删的是 `/drc pair`
+与 `/drc pair force`）。配对唯一入口是状态栏那颗 pill 的四条路由。所以"路由没挂上"= 这台主机
+配不了对，而它必须查得到——见 §5 的 `warn:pill`。
 
 ## 2. 装进 profile
 
@@ -155,8 +156,13 @@ curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"        # �
 curl -si "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing.png" | head -5
 # → 200 + Content-Type: image/png + Cache-Control: no-store + ETag: "<epoch>"；没有效码时 204
 curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"
-# → {"relay":"online","paired":0,"hostLabel":"linbin-desk","serverUrl":"wss://drc.provid.cc:443/relay"}
-#   四个字段全是非凭据：抬头那句状态与面板顶部那几行连接信息由同一份回答驱动
+# → {"relay":"online","paired":0,"serverUrl":"wss://drc.provid.cc:443/relay"}
+#   三个字段全是非凭据：抬头那句状态与面板里那行中继地址由同一份回答驱动
+#   （本机名 2026-10-03 从这条回答里撤了，面板也不再展示它）
+curl -s -X POST -H "x-drc-pair: 1" \
+  "http://127.0.0.1:<P>/plugins/dsh-remote-control/unpair"       # → {"state":"ok","unpaired":0}
+#   `unpaired` 是这次作废掉的配对通道数；0 表示本来就没配上，是幂等成功、不是错误。
+#   退出配对与发码同一档守卫（它也改状态）：GET → 405、缺头 → 403、跨站 Origin → 403。
 ```
 
 ⚠️ **这条写路由的跨站判据是那个头，不是 `Origin`**。第一版判据写成"Origin 必须存在且环回"，
@@ -167,15 +173,16 @@ curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"
 自定义 scheme（`dsh-app://app`）与环回 http(s) 都算"自己"**，缺席不再算拒。
 
 `ETag` 里那个 epoch 必须与 `POST /pairing/new` 回的 `epoch` 同一个（都是码文本的
-`sha256` 前 16 位，定义只有一处：`pairingEpoch`）。**三条回答里都不该出现 `psk` 或 `dshr:`**——
+`sha256` 前 16 位，定义只有一处：`pairingEpoch`）。**四条回答里都不该出现 `psk` 或 `dshr:`**——
 一条 grep 就能复核：
 
 ```sh
-for u in status pairing.png pairing/new; do
+for u in status pairing.png pairing/new unpair; do
+  m=GET; case "$u" in pairing/new|unpair) m=POST;; esac
   printf '%s ' "$u"
-  curl -s -X "$([ "$u" = pairing/new ] && echo POST || echo GET)" -H "x-drc-pair: 1" \
+  curl -s -X "$m" -H "x-drc-pair: 1" \
     "http://127.0.0.1:<P>/plugins/dsh-remote-control/$u" | grep -c 'psk\|dshr:'
-done   # 三个都必须是 0
+done   # 四个都必须是 0
 ```
 
 **那颗 pill 到底出没出现在屏幕上，curl 答不了**——它要的是 `slots` 服务在场 + 装载器给得出
@@ -208,15 +215,21 @@ AX 树正常时应该看到这一排（**按元素点**，坐标点容易打歪�
 
 ```text
 212 pop up button Description: 未配对, Help: dsh-remote-control：未配对     ← 那颗 pill
-213 dialog dsh-remote-control 连接信息
-214   text 本机 … / 中继 … / 状态 已连接 / 已配对 0 台        ← 顶部那几行连接信息
-215   button 生成配对码                                       ← 发码要这一次显式的按下
+213 dialog dsh-remote-control 配对
+214   text 未配对 / 中继 127.0.0.1:8787        ← 抬头那句状态 + 那一行中继地址
+215   button 生成配对码                        ← 右上角那颗；已配对时它改叫「退出配对」
 216   image Description: 配对二维码, URL: dsh-app://app/plugins/dsh-remote-control/pairing.png?e=<epoch>
 217   text 扫码配对 · 1 分 59 秒后过期
-218   button 换一张
 ```
 
-按下去之后 214~218 那一段才会出现（先只有 213/214/215）。
+按下去 **215** 那颗之后 216/217 才出现（没按之前面板里只有 213/214/215）。
+面板刻意精简：**没有**本机名 / 状态 / 已配对那几行，**没有**「再配一台」，**没有**「换一张」。
+那颗按钮**跟着当前视图走**：未配对=`生成配对码`、已配对=`退出配对`（按下去就是 `POST …/unpair`）、
+正在出图=`刷新`。码过期**不再自动补**，就地写一句"已过期"、重发靠再按那颗 `刷新`；
+手机上刚扫完码，面板**当场从二维码翻回状态视图**（那一张码已经没用了）。
+
+抬头那句的颜色由 `data-tone` 决定，四种状态四种颜色：灰（`远程未启动` / `未配对`）、
+黄（`连接中`）、绿（`已配对`）、**红（`已断开连接`）**——断链是故障，不能跟"还没轮到配"共用灰。
 
 **[已验证 2026-10-03 下午，本机 `~/.dsh/profiles/desktop` + 生产中继 `wss://drc.provid.cc`]**
 pill 出现在输入框那一排（排在 provider-usage 那颗用量 pill 右边）、抬头随 `/status` 变、
@@ -245,13 +258,30 @@ pill 出现在输入框那一排（排在 provider-usage 那颗用量 pill 右�
 （`hasCode` 删了：抬头不再区分"有码/没码"，而"看一眼"也不该去消耗 pending 表）。
 
 ⚠️ **这一轮真正踩到的坑在浏览器那一半，而它不在 `status.json` 里**：`status.json` 的 `pill`
-只答"宿主侧那三条路由挂没挂"，屏幕上有没有那颗按钮是另一半的事。把 client 模块的 `inject`
+只答"宿主侧那四条路由挂没挂"，屏幕上有没有那颗按钮是另一半的事。把 client 模块的 `inject`
 从 `['sidebarRight']` 改成 `[]`（想让 `slots` 走软探测）之后，`apply()` 跑到了槽位服务之前，
 **pill 整颗不出现，而 262 项单测全绿**——假上下文只给同步的 `ctx.get`，演不出"服务还没到"。
 按宿主自带模板 `templates/decoration/client.js` 写成 `inject: ['slots']` + `ctx.slots.inject(...)`
 才回到屏幕上；软探测与 `ctx.inject(['slots'], …)` 的晚到回调留作退路。
 **推论**：这一半坏了只能看 DevTools 里 `[dsh-remote-control pill]` 开头那几行；
 而任何"改激活时机"的改动，都必须以**看一眼屏幕**收尾，不能只信测试数。
+
+**[待复验 2026-10-03 深夜 v2，单台配对 + 退出配对 + 面板重做 + 配色那一版]**
+这一轮把面板又收了一层：抬头是状态、**右上角只有一颗按钮**（未配对=`生成配对码`、已配对=`退出配对`、
+出图=`刷新`），下面一行**中继地址**；`本机/状态/已配对` 三行、`再配一台`、`换一张` 全删，
+码过期**不再自动换**；断链那句是**红**的 `已断开连接`；配上之后面板从二维码翻回状态视图。
+复验配方（重装宿主后照上面那套走）：点开是 `dialog dsh-remote-control 配对` + 一行状态/中继地址 +
+一颗按钮；未配对时按它出 QR + 6 位码 + `扫码配对 · …`，**等过 2 分钟再看**——码还在原地、只多一句"已过期"
+（右上角那颗此时叫 `刷新`）；配上手机后抬头变 `已配对`、那颗按钮改叫 `退出配对`、**二维码那一块消失**，
+按它 → 手机掉到 `needs-pair`。
+`GET /status` 这版起回 `{relay, paired, serverUrl}` 三个字段（`hostLabel` 也撤了）。
+
+⚠️ **这一版第一次真机复验就撞上一个"新 JS + 旧 CSS"的错位**（用户截图：右上角那颗按钮掉到第二行居中、
+中继那一行竖排）。根因不在布局本身——`ensureStyle` 原来只要 `<head>` 里有一份
+`style[data-plugin-css]` 就直接返回，而宿主换新版这一半时**文档未必重载**，于是新代码按新结构建 DOM、
+上一版的样式表还在生效（旧的 `.drc-actions{justify-content:center}`、旧的行方向都在管事）。
+修法是**按内容对齐**：内容不一致就当场换掉。**推论**：这类"注入型"代码，判据不能是"插过没有"，
+必须是"插进去的是不是这一版"；而真机上"布局怪"要先怀疑样式表版本，再怀疑布局代码。
 
 **epoch 与图要一起验，而且要原子地验**。落盘文件已经没有了（右栏方案删了），所以图直接从路由取、
 在同一个脚本里解码并比对——解码用装了 zxing-cpp 的那个 venv：
@@ -291,11 +321,11 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 8; open -a "De
 env -u NODE_OPTIONS node e2e/live-e2e.mjs --rounds 2
 # 还原：删掉那行，再重启一次；确认 status.json 的 pairing 回到 null、problems 里没有 warn:pairOnStartSec
 
-# (b) 点状态栏那颗 pill 拿码（命令行 /drc pair 已在 2026-10-03 删除），再把码喂进去
+# (b) 点状态栏那颗 pill 拿码（命令行 /drc 已在 2026-10-03 整条删除），再把码喂进去
 env -u NODE_OPTIONS node e2e/live-e2e.mjs --pair <6位码> --qr 'dshr:/p?…'
 ```
 
-⚠️ 方案 (b) 里完整 URI **只能从 pill 之外的地方拿**：那三条路由的回答里刻意不含 `psk`，
+⚠️ 方案 (b) 里完整 URI **只能从 pill 之外的地方拿**：那四条路由的回答里刻意不含 `psk`，
 所以要么开 (a) 从 `status.json` 读，要么在本机 `curl` 发码后从主机内部对——
 `status.json` 的 `pairing.qr` 在 `pairOnStartSec>0` 时才有这一项。
 

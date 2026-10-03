@@ -99,12 +99,13 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 
 ### 配对与使用
 
-1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：抬头那句是连接状态（`远程未启动` / `远程未连接` / `连接中` / `未配对` / `已配对`，灯分别是灰 / 灰 / 黄 / 灰 / 绿）。点一下弹面板，顶部那几行是**连接信息**（本机名、中继 `host:port`、状态、配了几台）；要配对再按面板里那颗 **生成配对码**（已经配上了就叫 **再配一台**），二维码与 6 位数字同时出现在同一颗按钮上方，倒计时走完自动换一张。这条路走的是宿主侧三条同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 那句状态 + 那几行信息）——**三条回答里都没有 `psk`，也没有完整配对 URI**；点开时**不会**顺手发码，发码必须是那一次显式的按下；
-2. **命令行没有配对入口**：`/drc` 只剩 `status` 与 `unpair`。`/drc pair`、终端文本码、右栏自动弹码三条旧路都在 2026-10-03 删掉了——命令行那条走的是"每次发一张新码"，会在 pill 那张之外再多挂一个仍然有效的 PSK，而手机扫的是屏幕上那张；
-3. **那颗 pill 没出现时怎么查**：先看 `status.json` 的 `pill` 探针（`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `routes:"register threw: …"` / `pill:"disabled"`）——它不是 `routes:"registered"` 时就一定同时有一条 `warn:pill`。浏览器面那一半（向装载器拿 `react`、拿 `slots`）失败只在 DevTools 里留一行 `[dsh-remote-control pill]` 开头的 warn，宿主侧看不见。图片是唯一出口：DSH 命令卡的行高会把半块文本码切成条、扫不出来；
-4. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
-5. 首页扫码或粘贴二维码内容 → 自动连接；
-6. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
+1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：抬头那句是连接状态（`远程未启动` / `已断开连接` / `连接中` / `未配对` / `已配对`，灯分别是灰 / **红** / 黄 / 灰 / 绿——断链是故障，不跟"还没配上"共用灰）。点一下弹面板——面板刻意精简：**右上角只有一颗按钮**，它跟着当前视图走（**未配对时叫「生成配对码」、已配对时叫「退出配对」、正在出二维码时叫「刷新」**），下面一行是**中继地址**；面板里**没有**本机名 / 状态 / 已配对那几行，也**没有**「再配一台」。按下「生成配对码」后，二维码与 6 位数字出现在同一块面板里（码过期**不再自动换**，要按右上角那颗「刷新」）；按下「退出配对」当场作废主机手上的配对会话；手机上刚扫完码、面板**当场从二维码翻回状态视图**（那一张码已经没用了）。这条路走的是宿主侧**四条**同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 抬头状态、`POST …/unpair` 退出配对）——**四条回答里都没有 `psk`，也没有完整配对 URI**；点开时**不会**顺手发码，发码必须是那一次显式的按下；
+2. **同一时刻只允许配对一台**：一台新设备配对成功时，主机当场作废它手里**其它**配对会话——旧手机下一帧就撞上「需重新配对」；
+3. **命令行没有配对入口**：`/drc` 命令在 2026-10-03 **整条删掉**（连更早删掉的 `/drc pair`、终端文本码、右栏自动弹码三条旧路）——命令行那条走的是"每次发一张新码"，会在 pill 那张之外再多挂一个仍然有效的 PSK，而手机扫的是屏幕上那张；
+4. **那颗 pill 没出现时怎么查**：先看 `status.json` 的 `pill` 探针（`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `routes:"register threw: …"` / `pill:"disabled"`）——它不是 `routes:"registered"` 时就一定同时有一条 `warn:pill`。浏览器面那一半（向装载器拿 `react`、拿 `slots`）失败只在 DevTools 里留一行 `[dsh-remote-control pill]` 开头的 warn，宿主侧看不见。图片是唯一出口：DSH 命令卡的行高会把半块文本码切成条、扫不出来；
+5. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
+6. 首页扫码或粘贴二维码内容 → 自动连接；
+7. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。
 
 详见 [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)。
 
@@ -115,7 +116,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 80 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行） | 79（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的三条路由：发码幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行**） | 262 |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图**） | 267 |
 | `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 17 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 113 |
@@ -168,7 +169,7 @@ cat ~/.dsh/dsh-remote-control/status.json
 - [`docs/DESIGN-REVIEW.md`](docs/DESIGN-REVIEW.md) — 对设计的独立复核（哪几处判据不足以守住什么）
 - [`docs/legacy-spec/`](docs/legacy-spec/) — 旧实现的**需求与事实档案**（不是参考代码）
 - [`docs/SECURITY.md`](docs/SECURITY.md) / [`docs/MINI-PROGRAM.md`](docs/MINI-PROGRAM.md)
-- [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) — **本机宿主侧**：profile 安装、配置键表、`status.json` 排错、pill 三条路由与真机取证配方
+- [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) — **本机宿主侧**：profile 安装、配置键表、`status.json` 排错、pill 四条路由与真机取证配方
 - 中继侧部署手册在开源仓：[`dsh-remote-server/docs/SELF-HOSTING.md`](dsh-remote-server/docs/SELF-HOSTING.md)（伞仓那份旧命名副本 2026-10-03 已删）
 - [`deploy/README.md`](deploy/README.md) — 生产部署
 
