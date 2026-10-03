@@ -258,6 +258,13 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     （`<<NODEJS`；`$PROFILE` 这类变量仍会在传进去之前展开）。
     这条的教训形状比修法更值钱：**"脚本跑完 + exit 0"不等于"它要做的事发生了"**，
     判据必须落在被改的对象上——本轮的变异验证是把退役条目与目录**回插**再跑，看它是否真删。
+12. **`git push` 报 `ERROR: Your account is suspended` 十有八九不是账号被停，而是 ssh 递错了钥匙**。
+    这台机器上 `ssh-agent` 里那把默认钥匙属于**个人号 `linbin66`**（它确实被 GitHub 停了），
+    而四个仓属 `providcc`；`ssh -T -p 443 git@ssh.github.com` 回 `Hi linbin66!` 就是这个形状，
+    而 `gh api user` 仍正常返回 `providcc`（两套凭据互不相干）。
+    推四仓必须**显式按仓指定那把 deploy key 并关掉 agent**：
+    `GIT_SSH_COMMAND="ssh -p 443 -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_providcc_<仓>" git push origin main`
+    （伞仓没有 remote，永远不需要）。看到 "suspended" 别去动账号，先换这条。
 
 ## 5. 命令速查
 
