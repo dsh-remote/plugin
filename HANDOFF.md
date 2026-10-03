@@ -54,9 +54,9 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 
 | 仓 | 内容 | npm 包 | HEAD（本次） | Release | CI |
 |---|---|---|---|---|---|
-| `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.0`** | `c02f590` | `v1.0.0` | 绿 |
-| `dsh-remote-server/` | 零知识中继（单文件产物） | 不发 | `28f76db` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
-| `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.1.0`** | `c6bdc98` | **`v1.1.0`** | 绿 |
+| `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.0`**（用户 2026-10-03 定：**不下**，两边都引用它） | `beff2e6` | `v1.0.0`（`v1.0.1` 待发，卡在 TP） | 绿 |
+| `dsh-remote-server/` | 零知识中继（单文件产物 + **`drc-relay` 命令**） | 将发 **`dsh-remote-server@1.1.0`**（`bin: drc-relay`，产物同一个文件；TP 待配） | `78622e2` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
+| `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.1.0`**（`1.2.0` 待发） | `a0be454` | **`v1.1.0`** | 绿 |
 | `dsh-remote-mp/` | 微信小程序客户端 | 不发 | `aac0f60` | 无（用户 2026-10-03 定：mp 只是象征性开源，不打 Release） | 绿 |
 
 三条必须知道的规则：
@@ -82,10 +82,12 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 **fork 要改的东西**：`dsh-remote-mp/project.config.json` 里的 `appid` 是本项目自用的（仓内 README
 第 60-61 行已写明），别人跑自己的必须换成自己的 appid，真机还要在微信后台配 socket 合法域名。
 
-**怎么发一个新版**（`dsh-remote-wire` / `dsh-remote-control`）：改 `package.json` 版本 → 提交 →
-推 main → 打 `v<版本>` 并推标签 → Release 工作流自己跑校验、发 npm、建 GitHub Release。
-标签与包版本不一致工作流会主动失败。中继仓打标签只会产出 Release + 产物附件，不发 npm。
-**两个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
+**怎么发一个新版**（`dsh-remote-wire` / `dsh-remote-control` / `dsh-remote-server`）：改
+`package.json` 版本 → 提交 → 推 main → 打 `v<版本>` 并推标签 → Release 工作流自己跑校验、
+发 npm、建 GitHub Release。标签与包版本不一致工作流会主动失败。**中继仓现在两条分发路一起出**：
+GitHub Release 挂单文件 + `SHA256SUMS`，同时发 npm 包（`drc-relay` 就是那个文件，`bin` 与
+`main` 同指 `dist/bundle/main.js`），两条都走 OIDC provenance。
+**三个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
 Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 attestation"）——见 §3 第 1 条。
 
 ## 2. 伞仓里剩下的东西（都不开源，也都不再持有源码副本）
@@ -137,10 +139,11 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
    可行的两条修法：**(a)** `npx -y npm@12.2.0 login`（会写一把 npm 12 认的会话凭据，
    跑之前先备份 `~/.npmrc`，它会被覆盖）之后再 `npx -y npm@12.2.0 trust github …`；
    **(b)** 直接给 trust 带 `--otp=<6位>`（口令码 30s 一换，得现拿现用）。npm 需 ≥ 11.15.0，
-   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。两包各一条：
+   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。三包各一条（中继 2026-10-03 起也发 npm）：
    ```sh
    npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
    npm trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol  --file release.yml --allow-publish
+   npm trust github dsh-remote-server --repo providcc/dsh-remote-server   --file release.yml --allow-publish
    ```
    ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
    不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
