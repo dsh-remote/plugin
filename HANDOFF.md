@@ -19,9 +19,10 @@
 
 | 待办 | 现状 |
 |---|---|
-| 移植 `packages/plugin`、`packages/presentation`、`mp/` 的**未提交在飞改动**进开源仓 | 8 个文件 +240/−9 行（carrier-services 与其两组测试）+ mp 页面/主题。改动来自**并行会话**，尚未跑绿过任何一棵树 |
-| 删除伞仓 `apps/server/`、`packages/protocol/`、`packages/plugin/`、`packages/presentation/`、`mp/` | 前四者的开源对应物已验证为超集或等价；**但伞仓 e2e/scripts 有 12 个文件还在引用这些路径**，不先重接就删等于把取证能力砸了 |
-| 重接 `e2e/`、`scripts/` 到开源仓路径 | 需改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs}`。注意包名也变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`）且协议层目录已从扁平改成 `crypto/`、`identity/` 分组 |
+| ~~移植 `packages/plugin` 的在飞改动~~ | ✅ **已移植**（开源 control 仓 `5bd4227`：宿主注入的 `user/message` 不再冒充用户指令 + 留痕计数，3 条新测试，224 项全绿） |
+| 移植 `mp/` 与 `packages/presentation` 的在飞改动 | presentation 与开源仓只差结构（import 名），未见未提交改动；**mp/ 那份还没搬**（app.wxss / core/client.js / chat / sessions / theme，并行会话在飞） |
+| 删除伞仓 `apps/server/`、`packages/protocol/`、`packages/plugin/`、`packages/presentation/`、`mp/` | **e2e 与 scripts 不开源、留在伞仓**（用户 2026-10-03 定），所以删除前必须先把它们重接到开源仓路径。⚠️ 更正：私有 plugin 树与开源拷贝**不是**只差在飞改动——`src` 有 13 个文件、`tests` 有 6 个文件**结构不同**（开源那份把 `@dsh-rc/protocol/*` 改成了 `dsh-remote-wire`）。此前我写"逐文件相同"是用错了路径替换得出的**假结论**，已作废 |
+| 重接 `e2e/`、`scripts/` 到开源仓路径 | 需改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs,package.json}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs,check-mp-ui.mjs,mp-probe.mjs}`。包名与目录结构都变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`；协议层从扁平改成 `crypto/`、`identity/` 等分组） |
 | ⚠️ 协作冲突 | `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` **正被并行会话编辑**。改这批文件前先确认它停了，否则两边互相覆盖 |
 
 并行会话的在飞改动**已整份备份**到 `~/.provid/backups/dsh-umbrella-inflight-20261003.patch`（600，
@@ -32,7 +33,7 @@
 | | 版本 | 从哪来 | 现状 |
 |---|---|---|---|
 | 生产中继 | **`1.0.0`** | `dsh-remote-server/`（开源仓） | ✅ 已合并成一条线 |
-| 宿主插件 / 协议 | 开源 `1.0.0` | 伞仓 `packages/*` 与开源仓**同源但会漂**：私有树最后提交都是 2026-10-02，开源拷贝是 2026-10-03 从已提交快照做的，所以**只差那份未提交的在飞改动** | 待移植 + 删除（见 §0.1） |
+| 宿主插件 / 协议 | 开源 `1.0.0` | 开源拷贝**不是**私有树的快照：它同时做了重构（包名 `@dsh-rc/protocol/*` → `dsh-remote-wire`、协议层目录分组）。私有树最后提交都在 2026-10-02，其上的未提交改动已把插件那个假事实 bug 移植进开源仓（`5bd4227`）；**mp/ 那份在飞改动仍未移植** | 见 §0.1 |
 
 ## 1. 四个开源仓（这是要长期留存的东西）
 
