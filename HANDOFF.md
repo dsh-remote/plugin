@@ -95,9 +95,13 @@
 3. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
-4. **生产中继 `droppedFrames` 现在是 456**（`/healthz` 实测，同窗口 `slowConsumers:0`、
-   `rejectedPairs:7`、`hosts:1`、`clients:0`）。这个字段就是"中继收下却没送出去"的可见面，
-   456 不是零——**下一次接手先查这个数怎么涨的**（原因未取证，别照抄任何解释）。
+4. **生产中继曾经报 `droppedFrames: 456`**（同窗口 `slowConsumers:0`、`rejectedPairs:7`、`hosts:1`）。
+   这个字段是"中继收下却没送出去"的可见面，456 不是零。
+   **但我这次重新部署把它清零了**——它是"自本次启动以来"的累计值，进程一换就归零，
+   所以**别再指望 /healthz 还能告诉你这个数**。要查历史得去服务器：
+   `journalctl -u dsh-remote-control --since "2026-10-02" | grep -c "frame dropped"`
+   （确切 msg 串以 `src/server.ts` 为准）。**原因本来就没取证，现在现场也没了**——
+   记着这条已经不可复原，别写成"待查 /healthz"。
 5. **C4 掉线类日志按秒聚合**（`Log.throttledCount`）。量级已测出：稳态日志 0 B/s，但
    10k 建连风暴在 0.7 s 内写了 **10 000 行 / 1.3 MB**——所以它治的是**重启风暴**。
    **C6**（`/healthz` 加 `peers`/`rssBytes`/`sweepMaxMs`/`pingBacklog`）价值在可观测性，不是容量。
