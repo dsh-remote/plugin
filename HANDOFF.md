@@ -113,10 +113,25 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
    为什么本轮没顺手修：Trusted Publishing 只能在 **npm 网页 UI** 上配（npm CLI 10.9.9 没有对应命令，
    也没有可信的公开 API 路径），而那需要用户在浏览器里登录 npmjs.com——本轮用户拍板
    「先用现有 NPM_TOKEN 发 1.1.0，TP 留给下一版」。
-   **下一次要做的事**（两包各自）：登录 npm → 包页 Access → 配 GitHub Actions Trusted Publisher
-   （owner `providcc`、repo 对应仓、workflow `release.yml`、tag pattern 建议留空=任意 `v*`）→
-   把该仓 Release 工作流的 `NODE_AUTH_TOKEN` 那行删掉（OIDC 与 token 同时在场时 pnpm 会走 token）→
-   再打标签，然后**用 attestations 接口验证**而不是看工作流绿。
+   **下一次要做的事**（权威口径来自 npm 12 自带的 `npm-trust` 文档，不是网页猜的）：
+   CLI 就能配，不必用网页——但要**一次交互式登录**（实测：拿 `~/.npmrc` 里那把 token 直接
+   `npm trust list` 会被要求打开 `https://www.npmjs.com/auth/cli/…`，因为 trust 端点
+   **不接受带 bypass-2FA 的 Granular/Automation token**；本机 `npm profile get` 显示账号
+   `tfa.mode = auth-and-writes`，2FA 这条前置已经满足）。npm 需 ≥ 11.15.0，本机是 10.9.9，
+   所以用 `npx -y npm@12.2.0 trust …`。两包各一条：
+   ```sh
+   npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
+   npm trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol  --file release.yml --allow-publish
+   ```
+   ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
+   不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
+   GitHub 的 claim 只有 `repository` + `workflow file`（+ 可选 `environment`），
+   **没有 tag/分支 pattern 这种东西**（原文里"tag pattern 建议留空"是我说错了）。
+   然后：Release 工作流的 Publish 步骤**删掉 `NODE_AUTH_TOKEN`**（留着就会像本轮这样
+   "OIDC 失败 → 静默回落 token"，版本发出去但没 attestation），打完标签后用
+   `curl -s https://registry.npmjs.org/-/npm/v1/attestations/<pkg>@<version>` 验，别看工作流绿。
+   ⚠️ **每个包同时只能有一条 trust 配置**，要改先 `npm trust list <pkg>` 拿 id、
+   `npm trust revoke --id <id> <pkg>`，再建新的。
    ⚠️ 已发布出去的版本（`wire@1.0.0`、`control@1.0.0/1.1.0`）**永远补不上 attestation**，
    这是 npm 侧的既定行为，别指望"回头再签一次"。
 2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
