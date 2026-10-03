@@ -995,3 +995,108 @@ test('审批：页面隐藏时倒计时停表（定时器必须与撤销成对�
 
   p._stopThinkTick()
 })
+
+// ── Markdown 渲染（流式）────────────────────────────────────────────────
+//
+// 落在这一层而不是只测 core/markdown.js：那一层证明"转换是对的"，
+// 这一层证明"**页面真的把它渲染出来了**" —— data 层对了而 wxml 没接上，
+// 界面上还是纯文本（这正是上一轮"账本对了界面还错"的同类）。
+//
+// ⚠️ 判据读的是 **setData 之后的 data**，不是页面内部变量：那是渲染层能拿到的。
+
+/** 页面当前 text 块上的 markdown 字段 */
+function mdOf(p) {
+  const b = p.data.blocks.find((x) => x.kind === 'text')
+  assert.ok(b, '没有 text 块')
+  return b
+}
+
+/** 从 nodes 里取出所有文字（表格在 parts 里是 {__table:i} 占位，要顺着 tables 找） */
+function mdText(p) {
+  const b = mdOf(p)
+  const txt = (x) => {
+    if (x == null) return ''
+    if (Array.isArray(x)) return x.map(txt).join('')
+    if (x.type === 'text') return x.text
+    return txt(x.children || [])
+  }
+  let out = ''
+  for (const part of b.mdParts || []) {
+    if (part && part.__table !== undefined) out += txt(b.mdTables[part.__table])
+    else out += txt(part)
+  }
+  return out + (b.mdPending || '')
+}
+
+test('正文在流的时候就按 Markdown 排版（不是等 done 才切）', () => {
+  // 反证：把 `_withMd` 改成 `if (!b.done) return b`（流式期不渲染）→ 这条红。
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '这是**重点**结论' })
+  p._flushDelta()
+  const b = mdOf(p)
+  assert.equal(b.done, false, '本例还没 done')
+  assert.ok((b.mdParts || []).length > 0, '还没 done 就该有 mdParts —— 否则流式期是纯文本')
+  assert.equal(mdText(p), '这是重点结论', 'md 渲染出来的文字不对：' + JSON.stringify(mdText(p)))
+})
+
+test('未闭合的标记被暂扣住，闭合那帧才补上样式（跳变的根因）', () => {
+  // 反证：让 `_withMd` 走非流式分支（渲染全文不暂扣）→ 这条红
+  //（第 2 帧显示的文字会从"a 粗体"退成"a *粗体"，内容字相同、标记少一个）。
+  const p = makePage()
+  const feed = (delta) => {
+    send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta })
+    p._flushDelta()
+  }
+  feed('这是**重点')
+  assert.ok(
+    (mdOf(p).mdPending || '').includes('**'),
+    '未闭合的 ** 该被暂扣（pending=' + JSON.stringify(mdOf(p).mdPending) + '）'
+  )
+  // 关键：内容字已经出现在屏幕上了（暂扣区只是标记符号）
+  assert.ok(mdText(p).includes('重点'), '内容字应该已经显示：' + JSON.stringify(mdText(p)))
+
+  feed('**结论')
+  const b = mdOf(p)
+  assert.equal(b.mdPending || '', '', '闭合后不该还有暂扣（pending=' + JSON.stringify(b.mdPending) + '）')
+  assert.equal(mdText(p), '这是重点结论')
+})
+
+test('done 之后暂扣区必须为空、且与一次性渲染一致', () => {
+  // 反证：让 done 分支也走 renderStream 并把 pending 原样透出 → 这条红。
+  const p = makePage()
+  send(p, {
+    t: 'ev.message_delta',
+    sessionId: 's1',
+    messageId: 'm1',
+    delta: '段落\n\n```js\nconst a=1\n```\n',
+    done: true,
+    role: 'assistant',
+  })
+  p._flushDelta()
+  const b = mdOf(p)
+  assert.equal(b.done, true)
+  assert.equal(b.mdPending || '', '', 'done 后还有暂扣内容：' + JSON.stringify(b.mdPending))
+  // 围栏代码块的内容要真的在
+  assert.ok(mdText(p).includes('const a=1'), '代码块内容没渲染出来：' + JSON.stringify(mdText(p)))
+  // 且不能把标记符号漏进屏幕
+  assert.ok(!mdText(p).includes('```'), '围栏标记漏进输出了：' + JSON.stringify(mdText(p)))
+})
+
+test('表格被摘进 mdTables（wxml 要拿它包 scroll-view 横滚）', () => {
+  // 反证：让 `_withMd` 不调 splitTables → 这条红。
+  const p = makePage()
+  send(p, {
+    t: 'ev.message_delta',
+    sessionId: 's1',
+    messageId: 'm1',
+    delta: '| 列A | 列B |\n| --- | --- |\n| 一 | 二 |\n',
+    done: true,
+    role: 'assistant',
+  })
+  p._flushDelta()
+  const b = mdOf(p)
+  assert.equal((b.mdTables || []).length, 1, '表格该被摘进 mdTables（parts=' + JSON.stringify(b.mdParts) + '）')
+  const at = (b.mdParts || []).findIndex((x) => x && x.__table !== undefined)
+  assert.ok(at >= 0, 'parts 里该有 {__table:i} 占位，wxml 靠它换成 scroll-view')
+  assert.equal(b.mdParts[at].__table, 0)
+})
