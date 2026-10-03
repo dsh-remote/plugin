@@ -26,7 +26,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 `/drc pair` 三条旧路全部删除，配置键换成 `pill.enabled`；抬头那句现在是
 `未配对`（灰）/ `已配对`（绿），**点进去是连接信息**，发码要再按一次面板里那颗按钮（§9.8）。
 **已在真屏幕上复验三次**（最后一次连"点开不发码"一起证了：`epoch`/`ETag`/`sha256` 三者原子对上，`problems` 为空）。
-这一轮**已经发版**：control `1.2.0` 带 provenance 发到 npm（发布运行 10/10 步全绿，attestation 已用 curl 复核），
+这一轮**已经发版**：control `1.2.0` 带 provenance 发到 npm（发布运行 14 步全绿，attestation 已用 curl 复核），
 `~/.dsh/profiles/desktop` 里装的字节与 npm 上那版一致（§0.2）。同一轮还把四仓的死代码清了一遍（§9.6），
 并撤回了一次中继发包（§9.7）。
 
@@ -138,7 +138,7 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
 1. **✅ 已解决（2026-10-03 深夜）：两个包都配好了 Trusted Publishing、都带 provenance 发出去了。**
    现口径：`dsh-remote-wire@1.0.1`、`dsh-remote-control@1.2.0` 两版都能从
    `https://registry.npmjs.org/-/npm/v1/attestations/<pkg>@<ver>` 取到 sigstore bundle（curl 实测）；
-   control `1.2.0` 的发布运行 10/10 步全绿（含末尾 `Verify provenance landed`）。
+   control `1.2.0` 的发布运行 14 步全绿（含末尾 `Verify provenance landed`）。
    ⚠️ `wire@1.0.0`、`control@1.0.0/1.1.0` 是拿 token 发的，**已发布出去的版本永远补不上 attestation**
    （npm 既定行为），只能往前发新版——**别在文档里宣称那三个老版本带 provenance。**
    Trusted Publishing 配置命令（两包各一条，中继不在内：它不发 npm，见 §9.7）：
@@ -201,7 +201,7 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
 7. **✅ `dsh-remote-control@1.2.0` 已发布**（2026-10-03 深夜，pill 收敛 + §9.6 那轮清理 + §9.8 文案都在里面）。
-    发布运行 10/10 步全绿、带 provenance（注册表 curl 复核过），GitHub Release `v1.2.0` 已建。
+    发布运行 14 步全绿、带 provenance（注册表 curl 复核过），GitHub Release `v1.2.0` 已建。
     pill 的真屏幕复验做了三次（§9.5/§9.6/§9.8）。
     **剩下要人做的**：重启本机那个 Harness（DeepSeek Harness.app），profile 里装的 `1.2.0` 字节
     才会在屏幕上生效——**动手前问一句**（那是用户正在用的应用）。
@@ -469,7 +469,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 **还欠着的（当时）：**
 
 1. ~~没发版~~ **✅ 2026-10-03 深夜已发 `1.2.0`**（Trusted Publishing 先配好，再抬版本打标签；
-   发布带 provenance、10/10 步全绿）。当时"先配 TP 再发"这条拍板已执行。
+   发布带 provenance、14 步全绿）。当时"先配 TP 再发"这条拍板已执行。
 2. ~~本机 profile 跑的是未发布的 HEAD 产物~~ **✅ 已转正**：重装后 profile 里就是 npm 上那版
    `1.2.0`（§0.2）。⚠️ 别再引用这里说的旧哈希或 `/tmp` 备份——**字节哈希随构建方式变（§4 第 20 条）**，
    判据是版本号；`/tmp/drc-profile-backup/…1.1.0` **/tmp 重启就没了**，要回滚改用
@@ -577,7 +577,7 @@ bundles 列表照样打出来。改成「」。**推论**：写进未加引号 h
 再按才出 QR + `570461` + `扫码配对 · 1 分 58 秒后过期`，`?e=` / `ETag` / `sha256(qr)` 前 16 位三者相同
 （`34f0592ef489f470`）。闸门：control `pnpm -r test` **265 pass / 0 fail**、`typecheck` 过、
 `format:check` 过、伞仓 `node e2e/run.mjs` **17 步 0 失败**。
-**收尾**：这一版随 control `1.2.0` 发到 npm（带 provenance，发布运行 10/10 步全绿），
+**收尾**：这一版随 control `1.2.0` 发到 npm（带 provenance，发布运行 14 步全绿），
 `~/.dsh/profiles/desktop` 重装到 `1.2.0`（装出来是 `index.js` `058289e3…` / `client.cjs` `0dfb8fb4…`，
 与仓内 `dist/bundle/` 逐字节相同）——**屏幕上的哈希 `b362fec0…`/`9328b1e5…` 是当时那次构建的产物，
 换一次构建就变**（esbuild 内嵌 cwd 相关的模块路径标签，§4 第 20 条）：别拿字节哈希判"代码变了没"，
