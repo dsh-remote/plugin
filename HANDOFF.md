@@ -220,6 +220,15 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    第一次查报"3 个不可合"，隔几秒再查同一批全是 `MERGEABLE`——**别拿一次 `UNKNOWN` 当冲突证据**。
    要让这些 PR 变绿，动作是"把 PR 分支更新到最新 base"（`gh pr update-branch`），
    那是改别人看得见的状态，**等用户点头再做**。
+   **✅ 那条"唯一真实的不兼容"已经修掉了（协议仓 `7625747`，2026-10-04 凌晨）**：
+   `tsconfig.json` 加 `"types": ["node"]`。数字是实测的——本仓 main 在
+   `npx -y -p typescript@7.0.2 tsc --project tsconfig.json --noEmit` 下报 **40 个错**
+   （`Cannot find name 'node:crypto'` / `'TextEncoder'` / `'Buffer'` / `'URLSearchParams'`，
+   另有几条 `possibly 'null'` 是这些类型缺失的下游），加完这一行 **0 个错**，
+   而仓里自己的 TypeScript 5.9 行为不变（`pnpm typecheck` + 82 项测试照旧绿、`format:check` 绿）。
+   ⚠️ 复现这条要用 `npx -y **-p** typescript@7.0.2 tsc …`：写成 `npx typescript@7.0.2 tsc …`
+   会把那个 `tsc` 当成**源文件**传给默认 bin，于是得到一句毫不相干的
+   `TS5042: Option 'project' cannot be mixed with source files`——我第一遍就被它骗过。
 6. **✅ 审批卡已真机闭环（2026-10-04 凌晨，见 §9.10）**；**还欠一条：提问卡**。
     审批那条以前"没弹"不是策略问题也不是手机问题，是我们登记 `approval/request` 的方式
     （要 `{global:true, prepend:true}`），修法与读数都在 §9.10。
@@ -853,7 +862,8 @@ curl -sS -o /tmp/pair.png http://127.0.0.1:<port>/plugins/dsh-remote-control/pai
 `node e2e/live-e2e.mjs` **18 项全过**。提交：control `f0e9308`（`feat(host-id)`），
 伞仓随本次提交走这一节与 §3.4 的结算。
 
-**没做的一条（有意跳过，不是漏）**：§3.5 里"给协议仓 tsconfig 加 `"types": ["node"]` 解 TS7"
-这一轮**没动**——`dsh-remote-protocol` 是并行会话当晚在写的树（HEAD 已经是它的
-`182b462 feat(wire): 加 ev.model… 升 1.1.0`），一行 tsconfig 撞上去就是互相覆盖。
-留给下一个没有并行会话的时段做，或者由用户指名让谁做。
+**当时跳过、后来又做掉的一条**：§3.5 里"给协议仓 tsconfig 加 `"types": ["node"]` 解 TS7"
+——这一节写的时候 `dsh-remote-protocol` 还是并行会话当晚在写的树（HEAD 是它的
+`182b462 feat(wire): 加 ev.model… 升 1.1.0`），一行 tsconfig 撞上去就是互相覆盖，所以先没动。
+后来确认四仓工作树都干净、并行会话停手了才做掉：**协议仓 `7625747`，TS7 从 40 个错到 0**，
+细节与复现命令的坑记在 §3.5 第 5 条。
