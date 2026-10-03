@@ -195,16 +195,17 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    所以：**journalctl 查不到，/healthz 只在当前进程内有值**，想要历史必须自己落计数快照。
    本轮实测：线上 `version:1.0.1`、`droppedFrames:56`（uptime 6294s），空载 30 秒不涨
    （56 → 56），也就是说丢帧集中在**活动窗口**而不是稳态。
-4. **新发现（值得拍板）：生产宿主没配 `hostId`，每加载一次就换一个身份。**
-   `packages/plugin/src/index.ts:244` 是 `hostId: config.hostId || 'h_' + randomBytes(3)`，
-   而 profile 的 `dsh-remote-control` 那条 config 里**没有 hostId**（默认 `''`）。
-   实测线上 5 分钟内出现三个 hostId：`h_c2073b`(10:05:04) → `h_051405`(10:05:29) →
-   `h_0919dc`(10:09:40)，中继日志里每一次都是 `host online … replaced:0`
-   （**换了身份所以顶不了号**，旧 socket 只能等宽限/清扫）。
-   这与 3 里那些丢帧是同一个形状：手机连的会话对应的宿主身份已经换人了，
-   中继往"没有钥匙的对端"推 → 计数 +1。
-   **一条修复就是给 profile 的 patch 写死 `hostId: drc-bins-macbook`**（配置改动，不是代码改动；
-   要不要改由用户拍板，改了以后宿主重启/重载都能顶号而不是新建身份）。
+4. **✅ 已解决（2026-10-04 凌晨，见 §9.11）：宿主身份不再每次加载换一个。**
+   原来 `packages/plugin/src/index.ts` 是 `hostId: config.hostId || 'h_' + randomBytes(3)`，
+   而 profile 那条 config 里**没有 hostId**（默认 `''`）。实测线上 5 分钟内出现三个 hostId
+   （`h_c2073b` → `h_051405` → `h_0919dc`），中继日志每一次都是 `host online … replaced:0`
+   （**换了身份所以顶不了号**，旧 socket 只能等宽限/清扫）——这与 3 里那些丢帧是同一个形状。
+   修法是代码侧的（不是改 profile）：**配置 > 磁盘旧值 > 现造并落盘**，落点
+   `~/.dsh/dsh-remote-control/host-id`（0600，已存在绝不改写，老的 `h_xxxx` 读到了继续用）。
+   真机复验：两次重启都是 `drc-748e9a9ce167`，`live-e2e` 第 ④ 条现在念得出
+   "已配对到 drc-748e9a9ce167"。`status.json` 也新增了 `hostId` 字段。
+   ⚠️ 这一条**不解决 3**：`droppedFrames` 的历史仍然只有当前进程内有值（中继不为丢帧写日志），
+   要历史得自己落计数快照——那是中继侧的活，还没做。
 5. **Dependabot 已逐个审过，判定写在 §9.2**（四仓共 19 个开放 PR）。
    一句话结论：红色的多数是**分支基线陈旧**（旧 `ci.yml` 里 pnpm 还写 `version:`、node20 直绑工具链），
    不是依赖不兼容；唯一真实的不兼容是 **typescript 7**：协议仓的 `tsc` 不再自动纳入 `@types/node`
@@ -808,3 +809,41 @@ status.json 里，这是它默认关着的原因。
 （AX 树只交出菜单栏，截图策略是 `AX_ONLY` 所以坐标点击一律被拒），只能靠用户点一下那颗 pill；
 ③ 提问卡仍未取证（`questionsFace=not-taken-over`，且这一代宿主的 `ctx.userQuestions`
 没有 `registerProvider`）。
+
+### 9.11 主机身份持久化 + 一条不改配置的取码路子（2026-10-04 凌晨，接 §9.10）
+
+§3.4 那条"每加载一次换一个身份"的账结掉了，走的是**代码**而不是 profile：
+`config.hostId` 为空时按 **磁盘旧值 > 现造并落盘** 定身份，落点是 status.json 旁边的
+`host-id`（0600、已存在的值绝不改写、升级前那种 `h_xxxx` 读到了继续用、IO 失败退回一次性值
+且绝不抛）。为什么不选"给 profile 写死一个 hostId"：那只是把这一台机器的症状压下去，
+下一个用户/下一台机器照样漂，而且配置里多一个必填项。
+
+真机复验（连着重启两次）：`status.json` 的 `hostId` 两次都是 `drc-748e9a9ce167`，
+`~/.dsh/dsh-remote-control/host-id` 实测 `-rw-------`；`node e2e/live-e2e.mjs` 18 项全绿，
+第 ④ 条现在念得出 **"已配对到 drc-748e9a9ce167"**——以前这一行每次是一个新的 `h_xxxxxx`。
+九条新测试里三条是"把'读回旧身份'那行删掉就红"（已按变异验证跑过：`not ok 3/4/8`）。
+
+**最值钱的一条是取配对码的第三种办法**（以前只有两条：改 `pairOnStartSec` 再重启，或者让人扫码）：
+
+```sh
+curl -sS -X POST -H "x-drc-pair: 1" http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing/new
+curl -sS -o /tmp/pair.png http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing.png
+# 用装了 zxing-cpp + pillow 的那个 venv 把图解回 URI
+.../envs/default/bin/python -c "import zxingcpp,sys;from PIL import Image;sys.stdout.write(zxingcpp.read_barcodes(Image.open('/tmp/pair.png'))[0].text)"
+```
+
+`pairing.png` 里就是那张完整 URI（含 PSK），所以**这条路不用改 profile、不用重启、
+也不会在 status.json 里留下带凭据的 `pairing` 块**。三条纪律：`umask 077` 落临时文件、
+用完 `rm`、绝不把 URI 打进日志或文档。⚠️ 解出来是 `dshr:/p?…`（**两个**斜杠），
+按三段斜杠写正则会假报"形状不对"——我第一遍就这么差点误判。
+
+**闸门（这一节）**：control `pnpm -C packages/plugin test` **282 pass / 0 fail**（§9.10 那轮 273）、
+`typecheck` 过、`format:check` 全绿；伞仓 `node --test e2e/*.test.mjs` **125 / 0 失败**、
+`node e2e/run.mjs` **17 步 0 失败**、`node scripts/validate-qr.mjs` 28 组 ×2 产物 0 失败、
+`node e2e/live-e2e.mjs` **18 项全过**。提交：control `f0e9308`（`feat(host-id)`），
+伞仓随本次提交走这一节与 §3.4 的结算。
+
+**没做的一条（有意跳过，不是漏）**：§3.5 里"给协议仓 tsconfig 加 `"types": ["node"]` 解 TS7"
+这一轮**没动**——`dsh-remote-protocol` 是并行会话当晚在写的树（HEAD 已经是它的
+`182b462 feat(wire): 加 ev.model… 升 1.1.0`），一行 tsconfig 撞上去就是互相覆盖。
+留给下一个没有并行会话的时段做，或者由用户指名让谁做。
