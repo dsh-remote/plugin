@@ -173,3 +173,30 @@ env -u NODE_OPTIONS node e2e/run.mjs                      # 本地全链路
 env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑
 gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 ```
+
+## 9. 本轮已定与剩余（2026-10-03 深夜收口）
+
+**已做完并有证据的：**
+
+| 事 | 证据 |
+|---|---|
+| 中继版本尾巴收掉：发 `v1.0.1`，并把**已发布的产物**部署上线 | Release v1.0.1 带 `dsh-remote-relay.mjs` + `SHA256SUMS`；`shasum -c` OK 后才 scp；线上 `/healthz` 报 `version:"1.0.1"`、`hosts:1`（重启后主机自动重连成功） |
+| 插件的"假事实"bug 移植进开源仓 | control `5bd4227`，224 项全绿，CI success |
+| mp 的在飞改动移植进开源仓 | mp `aac0f60`：`npm run check` 三道闸全过（verify / theme:check / contrast 242 组达标），私有标识符扫描为空 |
+
+**已拍板但还没做的两件事：**
+
+1. **presentation 折进主插件，开源 control 仓只留 `packages/plugin` 一个包**（用户拍板）。
+   要把 `packages/presentation` 的三块搬进插件：二维码落盘（presenter）、同域只读路由
+   （`/plugins/<id>/pairing`，防环回 + 防跨作用域那两条判据要一起搬）、浏览器面 `client.cjs`
+   （轮询 + `sidebarRight.openResource`）。**搬之前必须知道拆开的原因**：主插件刻意不写
+   inject 闸门，而这条功能需要 `webServer` 服务——原来拆成两包是为了"宿主缺 webServer 时
+   只有这一行不激活，配对/中继一行都不受影响"。折成一个包之后这个隔离必须由代码自己提供：
+   **对 `webServer` 软探测，拿不到就只禁用路由与右栏，不许连累注册与转发**，并且要有测试
+   锁住"缺 webServer 时配对链路照常"。`install-to-profile.sh`（伞仓私有脚本）随之只装一个
+   bundle，`dsh.client` 那两个字段的注册形状要跟着改。npm 上这属于功能新增 → `1.1.0`。
+2. **伞仓瘦身**：删 `apps/server`、`packages/protocol`、`packages/plugin`、
+   `packages/presentation`、`mp`，并把 `e2e/`、`scripts/`（**不开源，留伞仓**）重接到开源仓路径。
+   顺序不能反：先重接、跑绿 `node e2e/run.mjs` 与 `node --test e2e/*.test.mjs`，再删。
+   ⚠️ `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` 正被并行会话编辑，动手前先确认它停了。
+   并行会话的在飞改动已备份：`~/.provid/backups/dsh-umbrella-inflight-20261003.patch`。
