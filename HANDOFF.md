@@ -265,6 +265,17 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     按仓钉好 `-i ~/.ssh/id_ed25519_providcc_<仓> -o IdentitiesOnly=yes -p 443`，**直接 `git push` 就行**；
     真要手工指定也只写 `GIT_SSH_COMMAND` 的完整版（带 `-i` 与 `IdentitiesOnly`）。
     伞仓没有 remote，永远不需要推。
+13. **桌面宿主的转发层会把 `origin` 头删掉**（2026-10-03 真机量出来的：pill 发码那条请求进来时
+    `origin` 是空的，而文档 origin 明明是 `dsh-app://app`）。后果分两种，都得记住：
+    ① **只读路由**能活，是因为它的判据本来就允许 Origin 缺席；② **会改状态的路由**如果照抄
+    "Origin 必须存在"，在真机上永远 403，而表现是"按钮渲染得好好的、点下去没反应"。
+    跨站判据因此换成"只有同源脚本发得出的自定义头"（`x-drc-pair`，见 `pair-actions.ts` 文件头）：
+    跨站要带它必然触发 CORS 预检，而这条服务不响应 OPTIONS、也不发 `Access-Control-*`。
+    **推论**：给宿主加任何写路由，都别拿 `Origin` 当唯一凭据；并且**403 回答里要写清是哪一道拒的**，
+    否则这类问题在浏览器面里根本查不到（宿主 stdout 不落盘，`~/Library/Logs/DeepSeek Harness/` 只有 crash 日志）。
+14. **`perl -pi -e "s/A/B/"` 的模式里带未转义的 `|` 会把整个文件毁掉**——它匹配到空串，于是给
+    **每一行**都前缀上替换文本。本轮真毁过一次 `README.md`，靠"改动已提交"用 `git checkout --` 拉回。
+    改文档一律用编辑工具，非要批量就跑一次 `wc -l` + `head -3` 看有没有被前缀。
 
 ## 5. 命令速查
 
@@ -341,29 +352,43 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 
 | 事 | 证据 |
 |---|---|
-| 宿主侧多三条路由 | control `packages/plugin/src/presentation/pair-actions.ts`：`POST /pairing/new`（幂等、Origin 缺席也拒）、`GET /pairing.png`（现渲染、`no-store` + `ETag`）、`GET /status`（`relay`/`paired`/`hasCode`）。测试 **317 pass / 0 fail**：`presentation-pair-actions.test.ts` 20 条（含"回答里不许出现 `psk`/完整 URI"这条红线、注销一条抛错仍摘掉其余）、`presentation-isolation.test.ts` 的"兵分/接线/只挂上右栏那条"三条、`presentation-client-bundle.test.ts` 那 13 条 pill 用例 |
+| 宿主侧多三条路由 | control `packages/plugin/src/presentation/pair-actions.ts`：`POST /pairing/new`（幂等；跨站判据是同源才发得出的 `x-drc-pair` 头，**不是** `Origin`）、`GET /pairing.png`（现渲染、`no-store` + `ETag`）、`GET /status`（`relay`/`paired`/`hasCode`）。测试 **319 pass / 0 fail**：`presentation-pair-actions.test.ts` 22 条（含"回答里不许出现 `psk`/完整 URI"这条红线、注销一条抛错仍摘掉其余）、`presentation-isolation.test.ts` 的"兵分/接线/只挂上右栏那条"三条、`presentation-client-bundle.test.ts` 那 13 条 pill 用例 |
 | `/drc pair` 降成兜底 | 判据是 `sidebar.available`（右栏那条 + pill 三条**全挂上**才算）。挂不上时 hint 自动把 `pair` 加回来；挂上了 `pair` 只指路、**不顺手发第二张**（那会绕开幂等）。`/drc pair force` 是"路由在、pill 因为宿主给不出 `react`/没有 `slots` 而没出现"时不能堵死的退路，走的仍是幂等入口 |
 | 新功能不许砸老功能 | pill 那三条单独一个 `try`（`sidebar.ts`）；浏览器面拿 `react` 走**运行期**（`client/src/pill.ts` 文件头第 2 条），`inject` 仍只声明 `sidebarRight` |
 
-变异验证做过七刀，每一刀都被对应的测试或 build 断言拦下：放松 Origin 判据 / `available` 忽略
+变异验证一共做过九刀，每一刀都被对应的测试或 build 断言拦下：放松 Origin 判据 / `available` 忽略
 actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `inside()` 全判"在外面" /
-倒计时到点不再发码 / 源码里改用静态 `require("react")`。
-⚠️ 最后一刀之前还踩了一记空刀：用 `if (false)` 让分支失效会被 tsc 先拦下，于是**产物没变而测试
+倒计时到点不再发码 / 源码里改用静态 `require("react")` / **删掉 `x-drc-pair` 那道判据** /
+**把"Origin 必须存在"加回来**（后两刀各被 2 条与 5 条测试接住，第二刀那 5 条里就包括真机形状那条）。
+⚠️ 之前还踩了一记空刀：用 `if (false)` 让分支失效会被 tsc 先拦下，于是**产物没变而测试
 "照绿"**——变异必须改成能编译的形状，否则测的是上一个产物（同类坑见 §4）。
 
-**还没取证的（别再当成做完了）：**
+**pill 已在真屏幕上验过（2026-10-03 下午，本机 profile + 生产中继）：**
 
-1. **那颗 pill 在真宿主屏幕上出没出现**。三条 curl 只证明路由在、守卫对、凭据没出去；pill 还要
-   `slots` 服务在场 + 装载器给得出 `react` + 那个 dock 槽位认领了我们注册的组件——这三件事
-   只能在 UI 上看。做法：`sh dsh-remote-control/scripts/install-to-profile.sh` → 重启本机
-   DeepSeek Harness → 看输入框那一排；没出现就开 DevTools 查 `[dsh-remote-control pill]` 那几条
-   `console.warn`（它会指名是没拿到 react 还是没探到 slots）。**这一步要重启用户的宿主，等他点头。**
-2. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
-   而且 §3 第 1 条的 Trusted Publishing 还没配——用 token 发就又是一版"没有 attestation 且永远补不上"。
-   先配 TP 再发，比先发再补强。
+`install-to-profile.sh` → 重启宿主 → 无障碍树里那颗 pill 就在输入框那一排（排在 provider-usage
+右边），抬头随 `/status` 变；点开是 `dialog dsh-remote-control 配对` + `image …/pairing.png?e=<epoch>`
++ 6 位码 + "1 分 59 秒后过期" + "换一张"，Escape 收得掉。**原子核对**：dialog 图片 URL 的 `?e=`、
+`pairing.png` 回的 `ETag`、解码落盘 PNG 得到的文本的 `sha256` 前 16 位三者相同（实测
+`eaa212225608605a`，QR 里的 `t=` 与屏幕上那 6 位一致）。同一次点击之后右栏也照常开出了
+`sidebar-qr.png`。守卫侧也实测：无 `x-drc-pair` → 403 `pair-marker-missing`、跨站 Origin → 403
+`origin-not-trusted`、GET 打写路由 → 405、非环回 Host → 403、连点两次 epoch/token 不变。
+
+⚠️ **这一轮真机验出来一个纯本地测试抓不到的缺陷**：第一版把写路由的跨站判据写成"Origin 必须
+存在且环回"，而桌面宿主的转发层会**删掉 `origin` 头**——于是 pill 渲染得好好的、点下去永远 403。
+把"是哪一道守卫拒的"印进 403 回答（再让 pill 把它显示出来）才查得出来；这条判据现在的形状与
+它为什么不能是 `Origin`，都写在 `pair-actions.ts` 文件头与 `docs/HOST-SIDE.md` §6.1。
+
+**还欠着的：**
+
+1. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
+   而且 §3 第 1 条的 Trusted Publishing 还没配——用户 2026-10-03 已拍板"先配 TP 再发"。
+2. **本机 profile 现在跑的是未发布的 HEAD 产物**（`index.js af5ca4b4…` / `client.cjs` 见 §9.4 上面
+   那轮安装），不是 npm 上的 1.1.0。要么发版把它转正，要么用
+   `/tmp/drc-profile-backup/dsh-remote-control-1.1.0` 那份备份还原回去（还原也要重启）。
 3. **e2e 没覆盖那三条新路由**。`e2e/run.mjs` 走的是中继链路，不碰 webServer 路由；宿主侧的守卫与
    幂等由上面那些单测/对照测试钉住。要加的话是在 e2e 里对 `http://127.0.0.1:<port>` 发真请求，
    端口要像 §6 那样用 `lsof` 现找。
+
 
 
 

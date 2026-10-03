@@ -115,7 +115,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 82 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
 | `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** | 78（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半：右栏（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域**）+ 状态栏那颗 pill（发码幂等 / 写路由 Origin 缺席也拒 / 回答里不许出现凭据 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**、**pill 挂了也不许把右栏拖死**） | 317 |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半：右栏（二维码落盘判据 / `expiresAt` 两种形状 / 会话作用域地址 / 路由**防环回与防跨作用域**）+ 状态栏那颗 pill（发码幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照**、**pill 挂了也不许把右栏拖死**） | 319 |
 | `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 16 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 112 |

@@ -145,18 +145,27 @@ curl -s "http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing?session=$S"
 
 ### 6.1 状态栏那颗 pill 用的三条
 
-同一条 webServer、同一套守卫，所以也能不打开 UI 就取证（`<P>` 是上面那个端口）：
+同一条 webServer，所以也能不打开 UI 就取证（`<P>` 是上面那个端口）。**发码那条要带一个自定义头**：
 
 ```sh
 curl -s -X POST "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new" \
-  -H "Origin: http://127.0.0.1:<P>"                       # → {"state":"ready","epoch":…,"token":"482913","expiresInMs":…}
+  -H "x-drc-pair: 1"                                      # → {"state":"ready","epoch":…,"token":"412002","expiresInMs":…}
 curl -s -X POST "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"
-# → 403：**会改状态的路由 Origin 缺席也拒**，不沿用只读那条"没带就当同源"的推断
+# → 403 {"error":"request-not-trusted","guard":"pair-marker-missing"}
+curl -s -X POST -H "x-drc-pair: 1" -H "Origin: https://evil.example.com" \
+  "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"   # → 403 guard:"origin-not-trusted"
 curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"        # → 405（只接受 POST）
 curl -si "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing.png" | head -5
 # → 200 + Content-Type: image/png + Cache-Control: no-store + ETag: "<epoch>"；没有效码时 204
 curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"              # → {"relay":"online","paired":0,"hasCode":true}
 ```
+
+⚠️ **这条写路由的跨站判据是那个头，不是 `Origin`**。第一版判据写成"Origin 必须存在且环回"，
+在真宿主上直接失效：桌面宿主的转发层会在更外层把 `origin` 头删掉，于是 pill 渲染得好好的、
+点下去永远 403（2026-10-03 屏幕上印的就是 `request-not-trusted（origin-missing）`——把守卫名
+印进 403 回答里才查得出来）。自定义头则只有同源脚本发得出：跨站要带它必然触发 CORS 预检，
+而这条服务既不响应 OPTIONS 也不发 `Access-Control-*`。`Origin` 存在时仍判，但**宿主自己的
+自定义 scheme（`dsh-app://app`）与环回 http(s) 都算"自己"**，缺席不再算拒。
 
 `ETag` 里那个 epoch 必须与 `POST /pairing/new` 回的 `epoch` 同一个（都是码文本的
 `sha256` 前 16 位，定义只有一处：`pairingEpoch`）。**三条回答里都不该出现 `psk` 或 `dshr:`**——
@@ -165,14 +174,29 @@ curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"              # 
 ```sh
 for u in status pairing.png pairing/new; do
   printf '%s ' "$u"
-  curl -s -X "$([ "$u" = pairing/new ] && echo POST || echo GET)" -H "Origin: http://127.0.0.1:<P>" \
+  curl -s -X "$([ "$u" = pairing/new ] && echo POST || echo GET)" -H "x-drc-pair: 1" \
     "http://127.0.0.1:<P>/plugins/dsh-remote-control/$u" | grep -c 'psk\|dshr:'
 done   # 三个都必须是 0
 ```
 
-⚠️ **这三条 curl 只证明路由在、守卫对、凭据没出去**，不证明那颗 pill 真的出现在屏幕上——
-后者要的是 `slots` 服务在场 + 装载器给得出 `react` + 那个 dock 槽位认领了我们注册的组件，
-这三件事只能在 UI 上看（`client.cjs` 里每一条降级都会 `console.warn` 一句，DevTools 里能查到）。
+**那颗 pill 到底出没出现在屏幕上，curl 答不了**——它要的是 `slots` 服务在场 + 装载器给得出
+`react` + 那个 dock 槽位认领了我们注册的组件。可行的配方是 `install-to-profile.sh` → 重启宿主 →
+用 Computer Use 读无障碍树（Electron 的 AX 树只露出这一排，坐标点容易打歪，**按元素点**）：
+
+```text
+212 pop up button Description: 配对中, Help: dsh-remote-control：配对中     ← 那颗 pill
+213 dialog dsh-remote-control 配对
+214   image Description: 配对二维码, URL: dsh-app://app/plugins/dsh-remote-control/pairing.png?e=<epoch>
+216   text 小程序里扫码，或手输这 6 位数字 · 1 分 59 秒后过期
+217   button 换一张
+```
+
+**[已验证 2026-10-03 下午，本机 `~/.dsh/profiles/desktop` + 生产中继 `wss://drc.provid.cc`]**
+pill 出现在输入框那一排（排在 provider-usage 那颗用量 pill 右边）、抬头随 `/status` 变、
+点开弹出 QR + 6 位码 + 倒计时、Escape 收得掉；而且**原子核对过了**：dialog 里那个图片 URL 的
+`?e=`、`pairing.png` 回的 `ETag`、以及解码落盘 PNG 得到的文本的 `sha256` 前 16 位三者相同
+（实测 `eaa212225608605a`，解出的 `t=` 与屏幕上印的 6 位码一致）。右栏那半同时也在正常工作
+（同一次点击之后 `sidebar-qr.png` 也开出来了）。
 
 **地址与图要一起验，而且要原子地验**：`epoch` 是码文本的 `sha256` 前 16 位，落盘 PNG 是那条地址指向的文件。
 解码用装了 zxing-cpp 的那个 venv：
