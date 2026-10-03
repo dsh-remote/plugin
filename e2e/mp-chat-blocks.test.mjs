@@ -367,13 +367,14 @@ test('折叠：实时新组默认展开（否则看不见工具列表），历�
   p.onToggleTool({ currentTarget: { dataset: { b: 0, i: 0 } } })
   assert.equal(p.data.blocks[0].items[0].open, true, '再点展开这一步的参数与完整结果')
 
-  p.onToggleAll() // expanded: false -> true
-  assert.equal(p.data.expanded, true)
-  assert.equal(p.data.blocks[0].open, true)
+  p.onToggleSteps({ currentTarget: { dataset: { idx: 0 } } })
+  assert.equal(p.data.blocks[0].open, true, '再点一次展开回来 —— 折叠只有这一个层级')
 
-  p.onToggleAll() // -> false
-  assert.equal(p.data.expanded, false)
-  assert.equal(p.data.blocks[0].open, false)
+  // 顶栏那个全局「展开过程」按钮已经删掉：折叠只有组标题一行这一个入口。
+  // 留着它等于同一个动作有两个地方管，而且一键全收会把正在跑的那组也收起来。
+  assert.equal(p.onToggleAll, undefined, '全局折叠处理器不该还在')
+  assert.equal('expanded' in p.data, false, '全局折叠状态字段不该还留着')
+  assert.equal('foldable' in p.data, false, '顶栏按钮的可见性计数不该还留着')
 })
 
 test('展开策略只对实时生效：历史回放的步骤组默认收起', () => {
@@ -383,6 +384,50 @@ test('展开策略只对实时生效：历史回放的步骤组默认收起', ()
   ])
   assert.equal(blocks[0].kind, 'steps')
   assert.equal(blocks[0].open, false, '历史里的组默认收起 —— 一屏全是过程就没法读正文了')
+})
+
+test('只有 think 的组（plain）只是一行状态：不给箭头、不给卡片、耗时并进标题', () => {
+  const p = makePage()
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+
+  // ⚠️ 必须先把块流填上：空流下 `_ensureThinkOpen` 故意不补组
+  // （那一轮还没开始，凭空冒一条「思考中」只会落单）。
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '我看一下。', role: 'assistant', done: true })
+  p._flushDelta()
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  const g = stepGroups(p).at(-1)
+  assert.equal(g.tools, 0, '这个组一个工具都没调')
+  assert.equal(g.plain, 1, '没有工具 = 没什么可展开的，标成 plain')
+  assert.match(g.label, /^思考中 \d/, `耗时并进标题，不再另起一行（读到「${g.label}」）`)
+
+  // 渲染层：plain 那一支不绑手势、卡片带 !plain 条件
+  assert.match(wxml, /wx:if="\{\{item\.plain\}\}"\s+class="steps-bar steps-bar-plain"/, 'plain 组要走没有手势的那一支')
+  assert.match(wxml, /wx:else\s+class="steps-bar"\s+hover-class="pressed"[\s\S]*?bindtap="onToggleSteps"/, '可点那支只留给真有工具的组')
+  assert.match(wxml, /wx:if="\{\{item\.open && !item\.plain\}\}" class="steps-card"/, 'plain 组不许渲染卡片')
+
+  // plain 组里那条 think 依然在数据层（审批要知道主机在干什么），只是不单独渲染
+  assert.ok(g.items.length > 0 && g.items[0].type === 'think', '数据层照旧落 think 条目')
+
+  // 一旦这个组调了工具，plain 立刻归零 —— 箭头与卡片回来
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'completed', resultPreview: 'ok' })
+  const g2 = stepGroups(p).at(-1)
+  assert.equal(g2.plain, 0, '有工具了就不再是纯状态行，折叠能力要回来')
+  assert.equal(g2.label, '正在执行 1 个步骤', '标题切回工具计数')
+})
+
+test('plain 组在渲染层真的没有箭头也没有卡片（数据层判断不算数）', () => {
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '我看一下。', role: 'assistant', done: true })
+  p._flushDelta()
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  const bi = p.data.blocks.length - 1
+  // ⚠️ 故意把 open 设成 true：卡片那一支已经带 !item.plain，
+  // 光看 open=false 证明不了任何事 —— 那正是"按住开关再检查它"。
+  p.setData({ ['blocks[' + bi + '].open']: true })
+  const again = stepGroups(p).at(-1)
+  assert.equal(again.open, true, '前提：open 确实是 true')
+  assert.equal(again.plain, 1, '前提：这仍是 plain 组')
+  assert.match(fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8'), /item\.open && !item\.plain/)
 })
 
 test('过程窗口：组内自动滚到组尾，但只有还在跑的组才给 -- 跑完的组不许拽人', () => {
@@ -479,7 +524,13 @@ test('过程块渲染，但开关仍然独立于落块逻辑', () => {
     'note 分支要写明 kind 条件，裸 else 会接住所有没匹配上的块',
   )
   assert.match(wxml, /wx:if="\{\{item\.kind === 'note'\}\}"/, 'note 要显式写条件')
-  assert.match(wxml, /wx:if="\{\{showSteps && foldable\}\}"/, '顶栏「展开过程」跟着 showSteps 走')
+  // 顶栏只有「连接状态 + 模型 + 中断」；全局折叠按钮已删，折叠由每个组标题自己管。
+  assert.doesNotMatch(wxml, /onToggleAll|foldable|expanded/, 'wxml 里不许再有全局折叠的入口')
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8'),
+    /\.bar-btn/,
+    '删掉按钮就要删掉它的样式，留着会让下一个人以为还有别的胶囊按钮',
+  )
 })
 
 test('运行态不再单独占一行：没有 runText，也没有 runbar，信号落在 live 步骤组上', () => {
@@ -504,7 +555,7 @@ test('运行态不再单独占一行：没有 runText，也没有 runbar，信�
 
   const live = p.data.blocks.filter((b) => b.kind === 'steps' && b.live)
   assert.ok(live.length > 0, '运行中要有 live 步骤组')
-  assert.equal(live[0].label, '思考中', 'live 组的标签就是"它还在动"这句话')
+  assert.match(live[0].label, /^思考中 \d/, `live 组的标签就是"它还在动"这句话，且带上耗时（读到「${live[0].label}」）`)
   assert.match(wxml, /class="steps-label \{\{item\.live \? 'live' : ''\}\}"/, 'live 标签是运行态的可见信号')
 
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
@@ -524,12 +575,17 @@ test('顶栏断开时说「未连接」而不是「空闲」', () => {
   assert.equal(p.data.barTheme, 'danger')
 })
 
-test('顶栏的「展开过程」在有可展开的组时出现', () => {
+test('折叠只有组标题一个入口：纯思考的组（plain）连这个入口都没有', () => {
   const p = makePage()
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', tool: 'Bash', phase: 'completed' })
-  assert.ok(p.data.foldable > 0, '有工具调用的组才算可展开（纯思考的组没什么可展开）')
-  assert.equal(p.data.showSteps && p.data.foldable > 0, true, '过程显示着，按钮就该在')
+  const g = stepGroups(p).at(-1)
+  assert.equal(g.tools, 1, '有工具调用的组可以展开')
+  assert.equal(g.plain, 0, '有工具就不是纯状态行，组标题那行可点')
+
+  // 折叠只有一层：组标题。组内某一步的参数/结果再点一次才展开。
+  assert.equal(typeof p.onToggleSteps, 'function', '组标题可点开/收起')
+  assert.equal(typeof p.onToggleTool, 'function', '组内某一步可点开参数与结果')
 })
 
 test('点空白收起键盘；输入区自己 catch 住不误收', () => {

@@ -438,6 +438,46 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     assert.equal(Object.keys(solo.client._cmdWaiters).length, 0, '结算后登记必须清空')
   })
 
+  test('12b. 手机解配后，主机侧必须知道这个客户端走了（否则电脑上一直显示"配对中"）', async () => {
+    /**
+     * 这条对应用户报的现象：手机上点了「解除配对」，**dsh 侧仍然显示配对中**。
+     *
+     * 根因不在界面：`unpair()` 原来只做本地清理 + 断线，**从不通知主机**。
+     * 于是主机完全不知情 —— 中继成员表里留着这部手机，`status.json` 里的
+     * 配对状态照旧，而那个状态没有任何东西会清掉。
+     *
+     * 走的是中继**已经实现**的 `session-leave`（客户端分支）→ 中继转 `peer-left`
+     * 给主机。不新增协议帧：帧名是冻结的（F1），而中继那条路本来就在。
+     *
+     * 为什么用独立一台手机：解配是不可逆的，会打掉共享装置。
+     */
+    const solo = newPhone('解配告别手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+
+    // 先发一帧，让主机把这部手机记进成员表。
+    // ⚠️ 成员是在**收到加密帧**时登记的（`onEncrypted` 里按 clientId 记），
+    // 配对刚发生时成员表是空的 —— 不先发一帧，下面那条断言会因前提不成立而假红。
+    solo.client.sendCmd({ t: 'cmd.list_sessions' })
+    await until(() => host.state().pairedClients >= 1, {
+      timeoutMs: 5_000,
+      label: '主机把这部手机记进成员表（status.json 的 pairedClients）',
+      trail: [{ kind: 'host-state', status: JSON.stringify(host.state().pairedClients) }],
+    })
+    const during = host.state().pairedClients
+    assert.ok(during >= 1, `夹具自检：解配前主机应当至少看到 1 台手机（读到 ${during}）`)
+
+    solo.client.unpair()
+
+    // 主机侧必须真的把它摘掉。这条是本用例的全部意义，所以判据是**消失**而不是"变小了"。
+    await until(() => !host.state().pairedClients, {
+      timeoutMs: 5_000,
+      label: '解配后主机侧不再把这台手机算作已连接',
+      trail: [{ kind: 'host-state', status: JSON.stringify(host.state().pairedClients) }],
+    })
+    assert.equal(host.state().pairedClients, 0, '主机仍在把这台已解配的手机算作已连接')
+    assert.equal(solo.client.status, 'needs-pair', '手机自己这一侧要落到"需要配对"')
+  })
+
   test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {
     // 为什么这条值得占一个用例：中继只要把 sessionId→conv 映射搞错一次（或用错 PSK 派生密钥），
     // 手机在两帧之后就会**永久**丢掉配对并要求重新扫码（dsh-remote-mp/miniprogram/core/client.js:294-304）。

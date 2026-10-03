@@ -199,8 +199,6 @@ const CASES = {
     // 这里数到的卡片恒为 0、内容高度恒定，判据会一直红，而红的原因不是折叠坏了。
     await page.setData({
       blocks: foldFixture(8, true, 6),
-      foldable: 8,
-      expanded: true,
       showSteps: true,
     })
     await page.waitFor(1200)
@@ -213,7 +211,14 @@ const CASES = {
     await page.waitFor(1500)
     const topBefore = await el.property('scrollTop')
 
-    await page.callMethod('onToggleAll')
+    // 逐组点标题收起来 —— 顶栏那个全局「展开过程」按钮已经删了，
+    // 折叠只剩组标题这一个入口，判据必须走用户真正会走的那条路。
+    // ⚠️ 下标要用**实际位置**：foldFixture 每轮是 turn/user/steps/text 四条交错，
+    // steps 组并不在 0..7 上（我第一版按 0..7 点，只收掉了 2 组，判据自己写错了）。
+    const idxs = (await page.data()).blocks.map((b, i) => (b.kind === 'steps' ? i : -1)).filter((i) => i >= 0)
+    for (const i of idxs) {
+      await page.callMethod('onToggleSteps', { currentTarget: { dataset: { idx: i } } })
+    }
     await page.waitFor(1800)
 
     const cardsAfter = (await page.$$('.steps-card')).length
@@ -398,10 +403,58 @@ const CASES = {
 
     return [
       [bars === 0, `运行条已经删了，不该还渲染出节点（数到 ${bars} 条）`],
-      [liveLabel === '思考中', `live 步骤组的标签要说出"它还在动"（读到「${liveLabel}」）`],
+      [
+        /^思考中 \d/.test(liveLabel),
+        `live 步骤组的标签要说出"它还在动"，且带上耗时（读到「${liveLabel}」）`,
+      ],
       [stops === 1, `运行中顶栏要有中断按钮（数到 ${stops} 个）——正文空着时它是唯一的信号`],
       [!barText.includes('思考'), `顶栏不许出现运行态文案（读到 ${JSON.stringify(barText)}）`],
       [!/思考|运行中/.test(data.barText), `barText 由 _renderBar 算出且不含运行态（${JSON.stringify(data.barText)}）`],
+    ]
+  },
+  /**
+   * 「只有 think」的组（plain）就是**一行状态**，不多给任何东西。
+   *
+   * 判据全在渲染层：数 `.steps-chev`、`.steps-card`、`.step-think` 节点，
+   * 再读那行文字。数据层 `plain === 1` 只能证明"页面算对了"，
+   * 证明不了"界面上真的没画出那些东西" —— 而后者才是用户看到的。
+   *
+   * ⚠️ 不许 `setData({open: true})` 之外再去点一次来"制造"折叠态：
+   * 卡片那一支已经带 `!item.plain`，这里要判的是**渲染结果**，
+   * 不是数据字段。
+   */
+  'plain-think-row': async (page) => {
+    await page.setData({ sessionId: 's1', inputText: '查一下这个仓库的完成度', atBottom: true })
+    await page.callMethod('onSend')
+    await page.waitFor(400)
+    await page.callMethod('_onEvent', {
+      kind: 'payload',
+      payload: { t: 'ev.run_state', sessionId: 's1', state: 'running' },
+    })
+    await page.waitFor(900)
+
+    const data = await page.data()
+    const g = data.blocks.filter((b) => b.kind === 'steps').at(-1)
+    const bars = await page.$$('.steps-bar')
+    const plainBars = await page.$$('.steps-bar-plain')
+    // ⚠️ 一行写成 `(await page.$$('.steps-chev')).length` 时，**运行时**报过
+    //   "chews is not defined"（声明就在同一作用域，源码与 node --check 都查不出问题）。
+    // 拆成两步后不复现。这里保留注释是因为"查不出来的玄学"很容易被下一个人
+    // 当成幻觉顺手改回一行 —— 那就又踩一遍。
+    const chevEls = await page.$$('.steps-chev')
+    const cards2 = (await page.$$('.steps-card')).length
+    const thinkRows2 = (await page.$$('.step-think')).length
+    // automator 的 Element **没有 parent()**，只能从选择器直接命中目标节点。
+    const plainLabelEl = await page.$('.steps-bar-plain .steps-label')
+    const plainLabel = plainLabelEl ? await plainLabelEl.text() : ''
+
+    return [
+      [!!g && g.plain === 1, `这一步组没有工具，应当是纯状态行（读到 plain=${g && g.plain}）`],
+      [bars.length > 0 && plainBars.length === bars.length, `每个组标题都要走 plain 那一支（${plainBars.length}/${bars.length}）`],
+      [chevEls.length === 0, `plain 组不该有下拉箭头 —— 它里面根本没有可展开的东西（数到 ${chevEls.length} 个）`],
+      [cards2 === 0, `plain 组不该渲染卡片（数到 ${cards2} 个）`],
+      [thinkRows2 === 0, `「思考中 4.0s」那条冗余状态行不该再单独出现（数到 ${thinkRows2} 行）`],
+      [/^思考中 \d/.test(plainLabel), `耗时要并进标题那一行（读到「${plainLabel}」）`],
     ]
   },
   /** 跑完之后运行态要消失：live 标签收掉、中断按钮收掉，不能一直挂着"在跑" */

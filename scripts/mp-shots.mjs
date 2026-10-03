@@ -254,7 +254,6 @@ const SHOTS = {
         running: true,
         barText: '已连接',
         barTheme: 'success',
-        foldable: 1,
         turn: 1,
         // 模型名在顶栏里，也要看一眼深色下的样子：文字走 --td-text-color-placeholder，
         // 比状态文字还弱一档 —— 弱到看不清就失去信息量，这一档要亲眼确认。
@@ -401,7 +400,6 @@ const SHOTS = {
         running: true,
         barText: '已连接',
         barTheme: 'success',
-        foldable: 3,
         turn: 3,
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:02' },
@@ -458,7 +456,6 @@ const SHOTS = {
         running: true,
         barText: '已连接',
         barTheme: 'success',
-        foldable: 1,
         turn: 1,
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '15:02' },
@@ -612,8 +609,6 @@ const SHOTS = {
         running: false,
         barText: '已连接',
         barTheme: 'success',
-        foldable: 1,
-        expanded: true,
         turn: 1,
         blocks: [
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '14:37' },
@@ -711,6 +706,37 @@ const SHOTS = {
       },
     },
     {
+      // 「只有 think」的组：一行「思考中 4.0s」，没有下拉箭头、没有卡片、
+      // 没有第二条重复的状态行。这三条是截图才能确认的 —— 节点数探针能查，
+      // 但"看起来是不是仍然像可点"得用眼睛。
+      name: 'chat-plain-think',
+      url: '/pages/chat/chat',
+      data: {
+        showSteps: true,
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:41' },
+          { key: 'u1', kind: 'user', text: '1', confirmed: true },
+          {
+            key: 'x1',
+            kind: 'steps',
+            closed: false,
+            // open 故意给 true：卡片那一支靠 !item.plain 挡住，
+            // 如果这个条件写错，这张图上就会多出一个空壳卡片。
+            open: true,
+            live: true,
+            plain: 1,
+            tools: 0,
+            label: '思考中 4.0s',
+            items: [{ key: 'k1', type: 'think', msText: '4.0s', startedAt: 0, done: false }],
+          },
+        ],
+      },
+    },
+    {
       // 历史：打开一条会话时读主机上已有的内容。顶部那一行是「历史读取的四种状态」之一
       // ——**还有更早**时可点。这三种态必须长得不一样：把"读不到"渲染成"这个会话没内容"
       // 是在给用户一个假事实，而截图是唯一能确认它们真的不一样的办法。
@@ -721,7 +747,6 @@ const SHOTS = {
         running: false,
         barText: '已连接',
         barTheme: 'success',
-        foldable: 1,
         turn: 2,
         historyState: 'ok',
         hasMore: true,
