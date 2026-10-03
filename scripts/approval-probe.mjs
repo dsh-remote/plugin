@@ -7,6 +7,10 @@
  *   node scripts/approval-probe.mjs --session <id> --prompt '<会撞沙箱的指令>'
  *        配对之后**由探针自己发这条指令**（桌面 App 的无障碍树在这台机器上只交出菜单栏，
  *        走不了 UI；而手机侧能做的只有 `cmd.send_prompt`，那就用它把审批问出来）。
+ *   node scripts/approval-probe.mjs --hold 6 [--port 19387]
+ *        卡片到达后**先压 6 秒不答**，这期间逐秒读宿主的 `GET /status`，对账
+ *        "挂着一条审批时 `waiting` 到底是不是 >=1"——那一行只能在这里验，单测验的是函数。
+ *        环回端口每次启动都变，默认从 `lsof` 现查，`--port` 可覆盖。
  *
  * 为什么单独要这么一支：**审批这条链在真机上从来没有一次走通过**，而它走不通的三种原因
  * （宿主没派发 / 我们没收到 / 收到了但手机没渲染）在屏幕上长得一模一样——都是"没弹"。
@@ -21,6 +25,7 @@
  * - 结束时把主机 `status.json` 的 `kernel.approvalCalls` / `approvalLast` 一起打出来——
  *   这两个字段就是"派发到了我们这一侧"的证据，缺了它就只剩一句"屏幕上没看见"。
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -34,6 +39,19 @@ const WAIT_MS = Number(getFlag('--wait') ?? 240) * 1000
 const DECISION = getFlag('--decision')
 const TARGET_SESSION = getFlag('--session')
 const PROMPT = getFlag('--prompt')
+/** 卡片到达后先压住不答的秒数（这期间去读 /status，对账"等 N 件事"）。 */
+const HOLD_SEC = Number(getFlag('--hold') ?? 0)
+/** 桌面宿主那个环回端口。每次启动都会变，所以默认从 lsof 现查，`--port` 可以覆盖。 */
+const PILL_PORT =
+  getFlag('--port') ??
+  (() => {
+    try {
+      const out = execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' })
+      return /127\.0\.0\.1:(\d+)/.exec(out.split('\n').find((line) => /DeepSeek/.test(line)) ?? '')?.[1] ?? ''
+    } catch {
+      return ''
+    }
+  })()
 
 const readStatus = () => JSON.parse(readFileSync(STATUS_FILE, 'utf8'))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -73,9 +91,6 @@ client.on((event) => {
     request = p
     // **不含凭据**：审批卡上只有工具名/理由/选项，没有 PSK，所以整帧打出来是安全的。
     console.log(`  📥 ev.permission_request ${JSON.stringify(p)}`)
-    const option = DECISION ? (p.options ?? []).find((o) => o.id === DECISION) : (p.options ?? [])[0]
-    answered = client.resolvePermission(p.sessionId, p.requestId, option?.id ?? 'approve')
-    console.log(`  📤 cmd.resolve_permission requestId=${p.requestId} decision=${option?.id ?? 'approve'}`)
   }
 })
 
@@ -105,6 +120,26 @@ if (TARGET_SESSION && PROMPT && TARGET_SESSION !== 'list') {
   client.sendPrompt(sessionId, PROMPT)
 }
 const got = await until(() => (request ? true : null), { trail, label: '收到 ev.permission_request', timeoutMs: WAIT_MS }).catch(() => null)
+
+if (got) {
+  // `--hold` 存在的理由：卡片**挂着没答**的那段时间里，桌面那颗 pill 应该报"等 N 件事"。
+  // 那一行的判据只能在这里对账——单测验的是函数，这条验的是"主机真的把它算进 /status 了"。
+  const option = DECISION ? (request.options ?? []).find((o) => o.id === DECISION) : (request.options ?? [])[0]
+  if (HOLD_SEC > 0) {
+    console.log(`  ⏸ 卡片先压 ${HOLD_SEC}s，这期间去 curl /status 看 waiting：`)
+    for (let i = 0; i < HOLD_SEC; i++) {
+      await sleep(1000)
+      try {
+        const s = await (await fetch(`http://127.0.0.1:${PILL_PORT}/plugins/dsh-remote-control/status`)).json()
+        console.log(`     +${i + 1}s waiting=${s.waiting} oldest=${s.waitingOldestSec}s label 该说「等 ${s.waiting} 件事」`)
+      } catch (error) {
+        console.log(`     读 /status 失败：${String(error?.message ?? error)}`)
+      }
+    }
+  }
+  answered = client.resolvePermission(request.sessionId, request.requestId, option?.id ?? 'approve')
+  console.log(`  📤 cmd.resolve_permission requestId=${request.requestId} decision=${option?.id ?? 'approve'}`)
+}
 
 if (!check('① 手机真的收到了审批卡', !!got, got ? `action=${request?.action}` : '一张都没收到')) {
   const k = readStatus().kernel ?? {}

@@ -887,15 +887,16 @@ export async function main() {
         '四条路由都要挂上（假 webServer 在场）',
       )
 
-      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。字段集合就那三个（本机名 2026-10-03 撤了）。
+      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。字段集合就那六个（全是非凭据；本机名 2026-10-03 撤了）。
       const before = await host.callPill(STATUS)
       assert.equal(before.status, 200)
       assert.equal(before.body.relay, 'online', `pill 要说实话：${JSON.stringify(before.body)}`)
       assert.deepEqual(
         Object.keys(before.body).sort(),
-        ['paired', 'relay', 'serverUrl', 'version'],
-        '状态路由多一个字段就要重新审一遍（这四个全是非凭据；version 是面板第三行）',
+        ['paired', 'relay', 'serverUrl', 'version', 'waiting', 'waitingOldestSec'],
+        '状态路由多一个字段就要重新审一遍（这六个全是非凭据；waiting 是抬头那句"等 N 件事"的来源）',
       )
+      assert.equal(before.body.waiting, 0, '一次交互都没发生过，抬头不该凭空报"有事在等"')
 
       // 2) 点一下：真向中继申请一张码。回答带 token/epoch，**不带 psk、不带完整 URI**。
       const minted = await host.callPill(NEW, { method: 'POST', headers: marker })
@@ -1196,6 +1197,11 @@ export async function main() {
         { id: 'q1', question: '部署到哪个环境？', options: [{ id: 'staging', label: '预发' }, { id: 'prod', label: '生产' }] },
       ])
       const request = await phone.waitForPayload('ev.question_request', '提问卡到达', { timeoutMs: 10_000 })
+      // 卡片发出去的那一刻，主机侧的 `waiting` 就必须看得见（抬头那句"等 N 件事"的唯一来源）。
+      // 这条不是锦上添花：挂起没被记进计数，桌面就永远说"已配对"，而一条回合正停在这台机器上。
+      const during = await host.callPill('/plugins/dsh-remote-control/status')
+      assert.ok(during.body.waiting >= 1, `卡已经发出去了，/status 的 waiting 却还是 ${during.body.waiting}`)
+      assert.ok(during.body.waitingOldestSec >= 0, `waitingOldestSec 必须是个数，收到 ${during.body.waitingOldestSec}`)
       assert.equal(request.sessionId, MOCK_SESSION_ID)
       assert.ok(Array.isArray(request.questions) && request.questions.length === 1, `questions 必须原样到达，收到 ${JSON.stringify(request.questions)}`)
       const question = request.questions[0]
@@ -1215,6 +1221,11 @@ export async function main() {
       assert.ok(settled, '手机端的答案 10s 内没结算到内核侧')
       assert.deepEqual(settled.answers.map((a) => a.id), ['q1'], '内核侧必须按 questionId 对上问题')
       assert.deepEqual(settled.answers[0].selected, ['预发'], '主机必须把手机回传的 id 翻回平台用的 label（红线 15）')
+      // 结算完必须**清零**。挂起条目删不掉的话，那颗 pill 会永远挂着"等 1 件事"——
+      // 一个不会消失的角标比没有角标更坏（用户从此不看它）。
+      const after = await host.callPill('/plugins/dsh-remote-control/status')
+      assert.equal(after.body.waiting, 0, `答完之后 waiting 没归零：${JSON.stringify(after.body)}`)
+      assert.equal(after.body.waitingOldestSec, 0, `没有事在等时时长也要回到 0，收到 ${after.body.waitingOldestSec}`)
       note(`question_request(${request.requestId}) → answer(${JSON.stringify(settled.answers)})`)
     })
 
