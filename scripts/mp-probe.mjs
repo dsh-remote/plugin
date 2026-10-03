@@ -528,6 +528,21 @@ const CASES = {
     const p = await mini.currentPage()
     await p.waitFor(600)
 
+    // ⚠️ **先归一到浅色**。主题在 `wx` 本地存储里、跨探针共享，而这一组判的是
+    // 「默认浅色 → 切深色 → 切回浅色」；上一组（`md-dark`）跑完会留下深色，
+    // 于是这里一开始就在深色：13 条里 11 条红，每一条都在说"不是浅色啊" ——
+    // **看起来像代码坏了，其实是我自己没归一**。
+    // 这条与 `md-dark` 开头那段归一是同一件事，两处都要写，不能只写一处：
+    // 谁先跑谁都能遇到对方留下的状态。
+    for (let i = 0; i < 3; i++) {
+      if ((await p.data()).themeName === 'light') break
+      await p.callMethod('onToggleTheme')
+      await p.waitFor(500)
+    }
+    if ((await p.data()).themeName !== 'light') {
+      return [[false, `主题归一到浅色失败（themeName=${(await p.data()).themeName}）—— 别改代码，先查存储`]]
+    }
+
     // 造出「已配对 + 有会话」的状态：字色判据要读主机名、会话标题那些节点，
     // 没配对时它们根本不渲染 —— 那样判据会静默退化成"跳过"，看起来全绿。
     // 这里只摆**渲染需要的字段**，不碰 themeClass（主题要走真实切换链）。
@@ -612,6 +627,198 @@ const CASES = {
       ...inkChecks,
     ]
   },
+
+  /**
+   * Markdown 正文：**在渲染层真的有内容**。
+   *
+   * 这组判据是被一个真 bug 逼出来的：`rich-text` 的 `nodes` 绑了 `wx:for`
+   * 作用域里的变量（`item.mdParts[i]`）时，它渲染成**高度 0 的空块** ——
+   * 界面上正文整段消失，而 data、单测、e2e **全绿**。
+   * 截图上看得见：`.reply` 有卡片（那是 padding），里面什么都没有。
+   *
+   * ⚠️ 这正是「判据必须落在渲染层」那条的又一个例子：那一轮所有能自动跑的
+   * 判据都是绿的，唯一抓住它的是 `el.size()` 读到的 **height 0**。
+   *
+   * 判据读的是**渲染层节点的尺寸与计算样式**，不是 data 里的 nodes ——
+   * data 对而界面空，正是这个 bug 的形状。
+   *
+   * ⚠️ 不许 `setData({mdBodies})` 自己塞：那会跳过 `_commit`，判出来的是
+   * "我塞进去的东西显示出来了"。这里走页面自己的链：onSend → ev.message_delta。
+   * `sessionId` 必须给：onSend 第一道门就是它，缺了会静默 return。
+   */
+  md: async (page) => {
+    const MD = [
+      '# 结论',
+      '',
+      '这是**重点**，还有 `inline` 与 [链接](https://example.com)。',
+      '',
+      '| 列A | 列B | 列C |',
+      '| --- | --- | --- |',
+      '| 一 | 二 | 三 |',
+      '',
+      '- 列表一',
+      '- 列表二',
+      '',
+    ].join('\n')
+
+    await page.setData({ sessionId: 's1', inputText: '给我一份结论', atBottom: true })
+    await page.callMethod('onSend')
+    await page.waitFor(400)
+    await page.callMethod('_onEvent', {
+      kind: 'payload',
+      payload: { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', role: 'assistant', delta: MD, done: true },
+    })
+    await page.waitFor(1500)
+
+    const data = await page.data()
+    const bodies = await page.$$('.md-body')
+    const replyEl = await page.$('.reply')
+    const reply = replyEl ? await replyEl.size() : null
+    // ⚠️ 判据里不许写死绝对像素下限（换机型就假红）。这里用**相对关系**：
+    // 有内容的 rich-text 必然比「只有 padding 的空壳」高得多，而空壳的高度
+    // 就等于卡片内边距之和 —— 用同一张卡片上另一个已知矮的节点做基准更稳。
+    // 直接取「> 0」不够：空块是 0，有内容是几十上百，量级差着 30 倍以上。
+    const h = bodies.length ? parseFloat((await bodies[0].size()).height) || 0 : 0
+    const replyH = reply ? parseFloat(reply.height) || 0 : 0
+    // wxml 的 `wx:if` 走的是 `mdBodies[item.key].length`，所以 data 里必须有
+    const mapKeys = Object.keys(data.mdBodies || {})
+    // 参照物：`.caret` 是 4rpx 宽的光标，`height:30rpx`。正文有内容时
+    // 必然远高于它；空块是 0。这个基准与机型无关（都是 rpx 定的）。
+    const caret = await page.$('.caret')
+    const caretH = caret ? parseFloat((await caret.size()).height) || 0 : 0
+
+    return [
+      [bodies.length === 1, `每个 text 块只渲染一个 rich-text（数到 ${bodies.length} 个）—— 多于一个说明回到按段落循环了`],
+      [
+        h > 0 && (caretH === 0 || h > caretH),
+        `rich-text 必须真的有高度（读到 ${h}px，光标基准 ${caretH}px）—— **0 就是"nodes 绑循环项了"那个 bug 的形状**：data 里有 nodes、界面上是空的`,
+      ],
+      [
+        replyH > h,
+        `卡片要装得下 rich-text（卡片 ${replyH}px / 正文 ${h}px）`,
+      ],
+      [mapKeys.length >= 1, `mdBodies 里要有这一块（keys=${JSON.stringify(mapKeys)}）`],
+      // 表格与正文同一个 rich-text：表格留在了 nodes 里（列宽按百分比），
+      // 所以 `.md-table-scroll` 应该是 0 —— 它已不再被使用
+      [(await page.$$('.md-table-scroll')).length === 0, '表格不再单独包 scroll-view（那样要两层索引，必然渲染成空块）'],
+    ]
+  },
+
+  /**
+   * Markdown 在**深色**下的颜色。
+   *
+   * 颜色是 `core/markdown.js` 在渲染时算成**具体色值**写进 nodes 的
+   * （`rich-text` 不认 `var()`，本项目真机踩过"深色下字全黑"）。
+   * 这里断两件事：① nodes 里确实是亮色；② **nodes 随主题重算**。
+   *
+   * ② 是这一条真正的价值：切主题的按钮在 sessions 页，从那儿切回来时
+   * chat 页的 nodes 还是按旧主题算的 —— 而 nodes 是「派生而不落库」的，
+   * 不会自动重算。不判这一条，症状是"深色卡片上压着浅色主题的字"。
+   */
+  'md-dark': async (page, mini) => {
+    const MD = '正文一段，另有一段 **粗体**。\n\n| 列A | 列B |\n| --- | --- |\n| 一 | 二 |\n'
+
+    // ⚠️ **先归一到浅色，再开始**。
+    // 主题存在 `wx` 的本地存储里，是**跨探针共享**的：上一轮跑完若留在深色，
+    // 这一轮那个 `onToggleTheme` 就把它切回浅色，于是「切到深色」那条判据
+    // 报出 `themeName=light` —— **假红，而且与被测代码无关**。
+    // 我就是这么被骗了一轮（反证时 5 条一起红，差点当成"改坏了"）。
+    //
+    // ⚠️ 归一必须在**拿 `page` 句柄之前**做完：`reLaunch` 会作废所有旧句柄，
+    // 之后再用那个 `page` 会报 "page is not on top of page stack"。
+    await mini.reLaunch('/pages/sessions/sessions')
+    const sp0 = await mini.currentPage()
+    await sp0.waitFor(600)
+    for (let i = 0; i < 3; i++) {
+      if ((await sp0.data()).themeName === 'light') break
+      await sp0.callMethod('onToggleTheme')
+      await sp0.waitFor(500)
+    }
+    if ((await sp0.data()).themeName !== 'light') {
+      return [[false, `主题归一到浅色失败（themeName=${(await sp0.data()).themeName}）—— 别改代码，先查存储`]]
+    }
+
+    // 从 sessions 进 chat（走真实的进入路径），下面全程用 `cp` 这个句柄
+    await mini.navigateTo('/pages/chat/chat?id=probe-md-dark')
+    const cp = await mini.currentPage()
+    await cp.waitFor(700)
+
+    // 浅色下先排一次版，拿到"浅色主题的 nodes"作为对照
+    await cp.setData({ sessionId: 's1', inputText: '看深色', atBottom: true })
+    await cp.callMethod('onSend')
+    await cp.waitFor(300)
+    await cp.callMethod('_onEvent', {
+      kind: 'payload',
+      payload: { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', role: 'assistant', delta: MD, done: true },
+    })
+    await cp.waitFor(1200)
+    const lightNodes = JSON.stringify((await cp.data()).mdBodies || {})
+
+    // 去 sessions 页切深色，再**回到同一个 chat 页实例** ——
+    // ⚠️ 必须 `navigateBack` 回原实例，不能 `navigateTo` 开新页：
+    // 新页是首次加载，压根没有"已排好版的 nodes 要重排"这回事，
+    // 那样测的是"新页面按新主题排版"（本来就对），不是这里要验的东西。
+    await mini.navigateTo('/pages/sessions/sessions')
+    const sp = await mini.currentPage()
+    await sp.waitFor(600)
+    await sp.callMethod('onToggleTheme')
+    await sp.waitFor(800)
+    const spData = await sp.data()
+
+    await mini.navigateBack()
+    const dp = await mini.currentPage()
+    await dp.waitFor(900)
+    // navigateBack 不会替我们调 onShow（探针不做生命周期），自己叫一次，
+    // 模拟系统把这一页切回前台 —— `_retheme` 就挂在那儿
+    await dp.callMethod('onShow')
+    await dp.waitFor(1200)
+
+    const darkData = await dp.data()
+    const darkNodes = JSON.stringify(darkData.mdBodies || {})
+    const rootClass = String((await (await dp.$('.chat-wrap')).attribute('class')) || '')
+    const el = await dp.$('.md-body')
+    const h = el ? parseFloat((await el.size()).height) || 0 : 0
+
+    // 浅色的正文色 #181818 → 深色必须换掉（#e8e8e8）
+    const lightHasDarkInk = /#181818|#7a7a7a|#0052d9|#f3f3f3|#fafafa|#e5e5e5/i.test(lightNodes)
+    const darkHasLightInk = /#e8e8e8|#9a9a9a|#5a9bff|#242424|#1e1e1e|#3a3a3a/i.test(darkNodes)
+    const darkHasLightInkGone = !/#181818|#0052d9/i.test(darkNodes)
+
+    return [
+      [spData.themeName === 'dark', `sessions 页切到深色（themeName=${spData.themeName}）`],
+      [rootClass.includes('theme-dark'), `chat 页根容器挂上 theme-dark（class="${rootClass.trim()}"）`],
+      // 同样用相对判据：0 高度是那个 bug 的形状，非 0 就说明渲染了
+      [h > 0, `深色下 rich-text 一样要有内容（${h}px）—— 0 就是空块`],
+      [lightHasDarkInk, '浅色下 nodes 里应是浅色主题的色值（sanity：证明取到过色）'],
+      [darkHasLightInk, '深色下 nodes 里应换成深色主题的色值'],
+      [
+        darkHasLightInkGone,
+        '深色下不许还留着浅色主题的色值 —— 那是「切了主题但 nodes 没重算」（颜色烘焙在 nodes 里）',
+      ],
+    ]
+  },
+}
+
+/**
+ * 把全局主题拨回浅色。
+ *
+ * 为什么需要它：主题存在 `wx` 本地存储里，**同一台模拟器上所有探针共享**。
+ * 谁改了不还原，后面的探针就替它背锅 —— 2026-10-04 一次全量跑，
+ * `theme` 那组 13 条红了 11 条，每一条都在喊"不是浅色"，而代码是好的。
+ *
+ * 探针自己会做归一（各组开头那个 for 循环）的话，这一个就是双保险；
+ * 但**别只靠开头归一** —— 单跑一组时更该保证跑完不污染现场。
+ */
+async function resetThemeLight(mini) {
+  await mini.reLaunch('/pages/sessions/sessions')
+  const p = await mini.currentPage()
+  await p.waitFor(500)
+  for (let i = 0; i < 3; i++) {
+    if ((await p.data()).themeName === 'light') return true
+    await p.callMethod('onToggleTheme')
+    await p.waitFor(400)
+  }
+  return (await p.data()).themeName === 'light'
 }
 
 /**
@@ -709,6 +916,16 @@ async function main() {
       failed += bad.length
       console.log(`${bad.length ? '✗' : '✓'} ${name}  ${checks.length - bad.length}/${checks.length}`)
       for (const [ok, label] of checks) console.log(`   ${ok ? '·' : '✗'} ${label}`)
+      // ⚠️ 每组跑完把**全局状态**归位，不靠各组自觉。
+      // 主题存在 `wx` 本地存储里、同一台模拟器上共享：不归位的话，下一组
+      // 任何"默认浅色"的判据都会一片红，而那些红与它们要验的代码毫无关系
+      // —— `md-dark` 跑完留下深色，紧随其后的 `theme` 就 13 条红了 11 条，
+      // 看起来像代码坏了。**在这里归位，各组就都自由了**（单跑一组也干净）。
+      if (!(await resetThemeLight(miniProgram))) {
+        console.log('   ! 全局主题没能还原成浅色，下一组可能假红')
+        failed += 1
+        total += 1
+      }
     }
   } finally {
     await miniProgram.disconnect()

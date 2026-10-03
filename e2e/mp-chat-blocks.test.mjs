@@ -1011,21 +1011,31 @@ function mdOf(p) {
   return b
 }
 
-/** 从 nodes 里取出所有文字（表格在 parts 里是 {__table:i} 占位，要顺着 tables 找） */
-function mdText(p) {
+/**
+ * **渲染层真正会拿去 `nodes` 的那份**：`data.mdBodies[块key]`。
+ *
+ * ⚠️ 别改成读 `blocks[i]._md`：那是 JS 侧的中间量，wxml 拿不到。
+ * `rich-text` 的 `nodes` 绑 `wx:for` 作用域里的变量会渲染成**高度 0 的空块**
+ * （正文整段消失，而 data 全绿），所以 `_commit` 把它收进顶层 map、
+ * wxml 按 `item.key` 取 —— 那份 map 就是这一层该断言的对象。
+ */
+function mdNodes(p) {
   const b = mdOf(p)
+  const map = p.data.mdBodies || {}
+  const nodes = map[b.key]
+  assert.ok(nodes, `mdBodies 里没有块 ${b.key}（keys=${Object.keys(map)}）—— wxml 会走纯文本那一支`)
+  return nodes
+}
+
+/** 从 nodes 里取出所有文字（表格现在留在原地，直接递归即可） */
+function mdText(p) {
   const txt = (x) => {
     if (x == null) return ''
     if (Array.isArray(x)) return x.map(txt).join('')
     if (x.type === 'text') return x.text
     return txt(x.children || [])
   }
-  let out = ''
-  for (const part of b.mdParts || []) {
-    if (part && part.__table !== undefined) out += txt(b.mdTables[part.__table])
-    else out += txt(part)
-  }
-  return out + (b.mdPending || '')
+  return txt(mdNodes(p)) + (mdOf(p).mdPending || '')
 }
 
 test('正文在流的时候就按 Markdown 排版（不是等 done 才切）', () => {
@@ -1035,7 +1045,7 @@ test('正文在流的时候就按 Markdown 排版（不是等 done 才切）', (
   p._flushDelta()
   const b = mdOf(p)
   assert.equal(b.done, false, '本例还没 done')
-  assert.ok((b.mdParts || []).length > 0, '还没 done 就该有 mdParts —— 否则流式期是纯文本')
+  assert.ok(mdNodes(p).length > 0, '还没 done 就该有排好版的 nodes —— 否则流式期是纯文本')
   assert.equal(mdText(p), '这是重点结论', 'md 渲染出来的文字不对：' + JSON.stringify(mdText(p)))
 })
 
@@ -1061,7 +1071,7 @@ test('未闭合的标记被暂扣住，闭合那帧才补上样式（跳变的�
   assert.equal(mdText(p), '这是重点结论')
 })
 
-test('done 之后暂扣区必须为空、且与一次性渲染一致', () => {
+test('done 之后暂扣区必须为空、且与一次性渲染完全一致', () => {
   // 反证：让 done 分支也走 renderStream 并把 pending 原样透出 → 这条红。
   const p = makePage()
   send(p, {
@@ -1082,21 +1092,50 @@ test('done 之后暂扣区必须为空、且与一次性渲染一致', () => {
   assert.ok(!mdText(p).includes('```'), '围栏标记漏进输出了：' + JSON.stringify(mdText(p)))
 })
 
-test('表格被摘进 mdTables（wxml 要拿它包 scroll-view 横滚）', () => {
-  // 反证：让 `_withMd` 不调 splitTables → 这条红。
+test('表格留在 nodes 里（不再摘出去），列宽按容器百分比', () => {
+  // 反证：让 `_withMd` 改回 `splitTables` → 下面「占位符数为 0」那条红。
+  // 而它红的原因不是难看，是**表格在界面上会整块消失**：占位符 `{__table:i}`
+  // 不是合法节点，而摘出去那条路要 wxml 两层索引 → `rich-text` 渲染成 0 高度。
   const p = makePage()
   send(p, {
     t: 'ev.message_delta',
     sessionId: 's1',
     messageId: 'm1',
-    delta: '| 列A | 列B |\n| --- | --- |\n| 一 | 二 |\n',
+    delta: '| 列A | 列B | 列C |\n| --- | --- | --- |\n| 一 | 二 | 三 |\n',
     done: true,
     role: 'assistant',
   })
   p._flushDelta()
-  const b = mdOf(p)
-  assert.equal((b.mdTables || []).length, 1, '表格该被摘进 mdTables（parts=' + JSON.stringify(b.mdParts) + '）')
-  const at = (b.mdParts || []).findIndex((x) => x && x.__table !== undefined)
-  assert.ok(at >= 0, 'parts 里该有 {__table:i} 占位，wxml 靠它换成 scroll-view')
-  assert.equal(b.mdParts[at].__table, 0)
+  const nodes = mdNodes(p)
+  const table = nodes.find((n) => n && n.name === 'table')
+  assert.ok(table, '表格该留在 nodes 里（nodes=' + JSON.stringify(nodes) + '）')
+  assert.equal(
+    nodes.filter((n) => n && n.__table !== undefined).length,
+    0,
+    '不该再有 {__table:i} 占位 —— 占位符不是合法节点，渲染时内容会凭空消失'
+  )
+  // 摘出去那条路的判据：`mdTables` 这个顶层 map 不该再被 `_commit` 产出
+  assert.equal(p.data.mdTables, undefined, 'mdTables 已不再使用（表格不摘出去）')
+  // 列宽必须是百分比而不是固定 rpx：固定 240rpx × 3 列在 334px 正文里必然溢出
+  assert.match(table.attrs.style, /width:\s*100%/, '表格应占满容器宽：' + table.attrs.style)
+  const th = table.children[0].children[0].children.filter((n) => n.name === 'th')
+  for (const c of th) assert.match(c.attrs.style, /width:\s*33\.3333%/, '每列应平分宽度：' + c.attrs.style)
+})
+
+test('多块正文各自一份 nodes，按块 key 分开（wxml 靠 key 取，不能串）', () => {
+  // 反证：`_commit` 改成只留最后一块（`bodies[最后一块key] = …`）→ 这条红。
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '第一段。', done: true })
+  p._flushDelta()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm2', delta: '第二段。', done: true })
+  p._flushDelta()
+
+  const keys = Object.keys(p.data.mdBodies)
+  assert.equal(keys.length, 2, `两个 text 块都该有 nodes，实际 keys=${JSON.stringify(keys)}`)
+  const b0 = p.data.blocks.find((x) => x.kind === 'text' && x.msgId === 'm1')
+  const b1 = p.data.blocks.find((x) => x.kind === 'text' && x.msgId === 'm2')
+  assert.deepEqual(keys.slice().sort(), [b0.key, b1.key].sort(), 'map 的键要与块的 key 一致')
+  // 而且两份内容不许串：key 对不上就是一段内容显示在另一段的位置上
+  assert.ok(mdText({ data: { blocks: [b0], mdBodies: p.data.mdBodies } }) === '第一段。', 'm1 的 nodes 不对')
+  assert.ok(mdText({ data: { blocks: [b1], mdBodies: p.data.mdBodies } }) === '第二段。', 'm2 的 nodes 不对')
 })
