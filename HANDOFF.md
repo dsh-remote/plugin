@@ -494,3 +494,10 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 
 闸门（清理后全绿）：protocol **80**、server **78（1 skip）**、control **262**、伞仓 e2e **17 步 0 失败**、
 `node --test e2e/*.test.mjs` **113**、`validate-qr` 28 ×2、四仓 `format:check` 与 `noUnusedLocals`/`noUnusedParameters` 干净。
+
+**同轮补的一个界面细节**（control `a0be454`）：宿主 dock 挤不下时会给每一项自己截断
+（「6 轮 …」「1.6M to…」），而那颗 pill 是 flex 项、默认能缩到「中文最小内容宽度 = 一个字」，
+于是「已连 1 台」竖着排成四行（用户截图）。修法是 `.drc-pill` 写死 `flex: 0 1 auto` +
+`white-space: nowrap`、`.drc-label` 给 `min-width: 0` + `text-overflow: ellipsis`，全文留在
+`title`/`aria-label` 上。**这类"CSS 写在模板字符串里"的判据只能断言注入样式的那两条规则**
+（假 DOM 不排版），而模板字符串里**不能出现反引号**——第一版注释就因为它把 CSS 断了行。
