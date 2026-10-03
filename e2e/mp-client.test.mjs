@@ -39,6 +39,7 @@ import {
   assertSessionShape,
   shutdown,
   startRelay,
+  untilAsync,
 } from './run.mjs'
 import { until } from './mp-sim.mjs'
 
@@ -466,6 +467,16 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     const during = host.state().pairedClients
     assert.ok(during >= 1, `夹具自检：解配前主机应当至少看到 1 台手机（读到 ${during}）`)
 
+    // ⚠️ 上一轮只判到`status.json` 就收工了，**漏了用户真正看的那一句**。
+    // pill 抬头那句「已配对/未配对」读的是 `pillStatus().paired`，而它当时接的是
+    // `conversationCount`（**会话数**）—— 会话按 D3 长存，手机解配也不删，
+    // 于是那个数恒为 1，电脑上就一直显示"已配对"，用户看着毫无变化。
+    // `status.json` 归零只能证明主机知道了，证明不了界面变了，所以这条必须打真路由。
+    const PILL_STATUS = '/plugins/dsh-remote-control/status'
+    const pillBefore = await host.callPill(PILL_STATUS)
+    assert.equal(pillBefore.status, 200, JSON.stringify(pillBefore.body))
+    assert.ok(pillBefore.body.paired >= 1, `夹具自检：解配前 pill 应显示已配对（读到 ${pillBefore.body.paired}）`)
+
     solo.client.unpair()
 
     // 主机侧必须真的把它摘掉。这条是本用例的全部意义，所以判据是**消失**而不是"变小了"。
@@ -476,6 +487,21 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     })
     assert.equal(host.state().pairedClients, 0, '主机仍在把这台已解配的手机算作已连接')
     assert.equal(solo.client.status, 'needs-pair', '手机自己这一侧要落到"需要配对"')
+
+    // 用户看的那一句也得跟着变。**这不是上一条断言的重复**：上面读的是
+    // `status.json`（排障用的账本），这条读的是 pill 真路由（界面上的那句文案），
+    // 两者取的是不同字段 —— 正是"账本对了、界面还错"这种漏法才需要两条判据。
+    await untilAsync(async () => (await host.callPill(PILL_STATUS)).body.paired === 0, {
+      timeoutMs: 5_000,
+      label: 'pill 抬头那句从"已配对"变成"未配对"',
+      trail: [{ kind: 'check', status: '打 pill status 路由读 paired' }],
+    })
+    // 会话必须**留着**（D3：手机回前台要用同一个 convId 回来）——所以这条同时钉住
+    // "pill 不再拿会话数冒充手机数"：会话还在，但 pill 已经不把它算成已连接了。
+    assert.ok(
+      host.state().conversations >= 1,
+      `会话不该被解配删掉（D3），读到 ${host.state().conversations}`,
+    )
   })
 
   test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {
