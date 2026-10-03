@@ -67,7 +67,7 @@
 | 路径 | 为什么不能删 |
 |---|---|
 | `apps/server/` | **已不是生产来源**（生产改跑开源产物了）。现在删它只需先重接 e2e——见 §0.1，别再当"唯一线上代码"供着 |
-| `packages/protocol/`、`packages/plugin/` | 私有开发树，与开源仓同源只差在飞改动；移植完那批改动才能删（§0.1） |
+| `packages/protocol/`、`packages/plugin/` | 私有开发树，与开源仓**不是**只差在飞改动：src 有 13 个文件、tests 有 6 个文件结构不同（开源把 `@dsh-rc/protocol/*` 改成了 `dsh-remote-wire`）；移植完那批改动才能删（§0.1） |
 | `mp/` | 小程序端源码 + **并行会话正在改的未提交改动** |
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
 | `scripts/` | `validate-qr.mjs`（改二维码必跑）、`read-session-log.mjs`、`mp-*.mjs` 等 |
@@ -83,41 +83,28 @@
 > 下次动设计文时把它改成不依赖行号的引用（比如指提交号 `d058d8f` 或指条文名），
 > 别再新增行号锚——这类锚点每次重写文档都会烂。
 
-## 3. 待办（按价值排序，前四条都不需要重新调研）
+## 3. 待办（按价值排序）
 
-1. **C3 全局帧/字节预算**——但**先给压测装置加"带流量模式"**（走完 pair-begin/claim 再打 `enc`）。
-   现在的数据量不出来：C0 测的是**空载**连接，一条业务帧都没走，而 C3 担心的正是
-   `JSON.parse` + zod 在集体突发下打满 2 vCPU。**阈值不能从空载数推**，这是清单本身的缺口。
-   处置原则已定：中继不能丢 `enc`，所以超预算判给**触发它的那条连接**（1008 + 计数进 `/healthz`）。
-2. **npm provenance 其实没挂上**。两个包都有 `publishConfig.provenance: true` + `id-token: write`，
+1. **npm provenance 其实没挂上**。两个包都有 `publishConfig.provenance: true` + `id-token: write`，
    但 pnpm 的 OIDC 换票返回 404（`ERR_PNPM_AUTH_TOKEN_EXCHANGE`）后回落到 `NODE_AUTH_TOKEN`，
    于是 `/-/npm/v1/attestations/<pkg>@1.0.0` 是 404。**别在文档里宣称带 provenance。**
    要补：去 npm 站点给这两个包配 Trusted Publishing（包已存在，够条件了），再把发布步骤改成 OIDC。
-3. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
+2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
-4. **生产中继曾经报 `droppedFrames: 456`**（同窗口 `slowConsumers:0`、`rejectedPairs:7`、`hosts:1`）。
+3. **生产中继曾经报 `droppedFrames: 456`**（同窗口 `slowConsumers:0`、`rejectedPairs:7`、`hosts:1`）。
    这个字段是"中继收下却没送出去"的可见面，456 不是零。
    **但我这次重新部署把它清零了**——它是"自本次启动以来"的累计值，进程一换就归零，
    所以**别再指望 /healthz 还能告诉你这个数**。要查历史得去服务器：
    `journalctl -u dsh-remote-control --since "2026-10-02" | grep -c "frame dropped"`
    （确切 msg 串以 `src/server.ts` 为准）。**原因本来就没取证，现在现场也没了**——
    记着这条已经不可复原，别写成"待查 /healthz"。
-5. **C4 掉线类日志按秒聚合**（`Log.throttledCount`）。量级已测出：稳态日志 0 B/s，但
-   10k 建连风暴在 0.7 s 内写了 **10 000 行 / 1.3 MB**——所以它治的是**重启风暴**。
-   **C6**（`/healthz` 加 `peers`/`rssBytes`/`sweepMaxMs`/`pingBacklog`）价值在可观测性，不是容量。
-6. **C5 会话表快照：红线等用户拍**。`docs/DESIGN.md:239` 写死"新增持久化：**0**"
-   （伞仓那份与开源 `dsh-remote-control/docs/DESIGN.md` 同一行，两份都有）。
-   D1 之后表里没有 `psk`，前半条理由已经不成立；但"谁和谁配过对"这层**元数据**落盘仍然成立。
-   且它会牵出两个必须先决定的事：systemd 要配 `ReadWritePaths=`；
-   `e2e/restart-resume.test.mjs` 在伞仓而不在开源仓——**e2e 归属哪个仓**。
-7. **C7 用户明确先不做**（改到一半已 `git restore`，`dsh-remote-server` 工作树干净）。别当待办捡起来。
-   原计划是 `listen({backlog:4096})` + upgrade raw socket `setNoDelay(true)`；sysctl 那半归用户。
-8. **Dependabot 的 PR 还红着**（actions 4→7、typescript 5.9→7.0、@types/node 22→26）。
+
+4. **Dependabot 的 PR 还红着**（actions 4→7、typescript 5.9→7.0、@types/node 22→26）。
    多半是那些分支的 `ci.yml` 还是旧的（见 §4 第 2 条），需要 rebase 才会带走。
    **大版本没审过，别顺手合。**
-9. `dsh-remote-mp` 要不要也打 `v1.0.0`（它没有 Release 流程，纯粹是"要不要有个版本页"）。
-10. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
+5. `dsh-remote-mp` 要不要也打 `v1.0.0`（它没有 Release 流程，纯粹是"要不要有个版本页"）。
+6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
 
@@ -163,8 +150,6 @@ git -C dsh-remote-control tag -a v1.0.1 -m '...' && git -C dsh-remote-control pu
 gh run watch --repo providcc/dsh-remote-control          # 看 Release 工作流
 curl -s https://registry.npmjs.org/dsh-remote-wire | head -c 200
 
-# 压测装置（C0 的成果；带流量模式还没做，见 §3.1）
-cd dsh-remote-server && env -u NODE_OPTIONS pnpm build && node scripts/loadtest-conns.mjs --n=10000 --seconds=30
 
 # 生产与私有树（伞仓）
 curl -s https://drc.provid.cc/healthz                    # 线上真相（现在=开源仓产物 version 1.0.0）
