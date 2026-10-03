@@ -7,8 +7,10 @@
 ## 0. 一句话状态
 
 产品已经开源成 **GitHub 上四个独立仓**（账号 `providcc`，MIT），四仓 CI 全绿。
-**npm 上现在有两个包**：`dsh-remote-wire@1.0.0`（协议）与 `dsh-remote-control@1.1.0`（宿主插件）；
-**两个都还没有 provenance**（`/-/npm/v1/attestations/...` 实测 404），原因与修法见 §3 第 1 条。
+**npm 上现在有两个包，且都带 provenance**（2026-10-03 深夜口径）：
+`dsh-remote-wire@1.0.1`（协议）与 `dsh-remote-control@1.2.0`（宿主插件），
+`/-/npm/v1/attestations/<pkg>@<ver>` 实测都能取到 sigstore bundle。
+更早的 `wire@1.0.0`、`control@1.0.0/1.1.0` 是拿 token 发的、**永远补不上 attestation**（npm 既定行为，§3 第 1 条）。
 **中继不发 npm**：`dsh-remote-server` 这个包名属于第三方（`bondzhu`/`MRZHUH`，一个走 SSH 执行命令的
 无关工具），2026-10-03 试过接发布线之后撤回，细节与留下的闸门见 §9.7。
 
@@ -21,10 +23,12 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 私有那套 2.x 编号作废，以后只有开源的号。
 
 **配对入口已经收敛成一条**（2026-10-03 下午到深夜）：状态栏那颗 pill。右栏自动弹码、终端文本码、
-`/drc pair` 三条旧路全部删除，配置键换成 `pill.enabled`；**已在真屏幕上复验两次**
-（点一下出 QR + 6 位码 + 倒计时，`epoch`/`ETag`/`sha256` 三者原子对上，`problems` 为空）。
-但**还没发版**：npm 上仍是 `1.1.0`，本机 profile 跑的是未发布的 HEAD 产物（字节见 §0.2）。
-同一轮还把四仓的死代码清了一遍（§9.6），并撤回了一次中继发包（§9.7）。
+`/drc pair` 三条旧路全部删除，配置键换成 `pill.enabled`；抬头那句现在是
+`未配对`（灰）/ `已配对`（绿），**点进去是连接信息**，发码要再按一次面板里那颗按钮（§9.8）。
+**已在真屏幕上复验三次**（最后一次连"点开不发码"一起证了：`epoch`/`ETag`/`sha256` 三者原子对上，`problems` 为空）。
+这一轮**已经发版**：control `1.2.0` 带 provenance 发到 npm（发布运行 10/10 步全绿，attestation 已用 curl 复核），
+`~/.dsh/profiles/desktop` 里装的字节与 npm 上那版一致（§0.2）。同一轮还把四仓的死代码清了一遍（§9.6），
+并撤回了一次中继发包（§9.7）。
 
 > ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
 > `node e2e/run.mjs` = **17 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
@@ -55,16 +59,16 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 | | 版本 | 从哪来 | 现状 |
 |---|---|---|---|
 | 生产中继 | **`1.0.1`** | `dsh-remote-server/`（开源仓已发布产物） | ✅ 线上字节 = Release 产物（sha256 `45526fd5…180c9` 两边实测相同，2026-10-03 复核） |
-| 生产宿主插件 | **未发布的 HEAD**（npm 上还是 `1.1.0`） | `dsh-remote-control/`（单一 bundle：`index.js` + `client.cjs`） | ⚠️ `~/.dsh/profiles/desktop` 里装的是 §9.6/§9.7 之后的产物字节（`index.js` `231e20b40e1f…`、`client.cjs` `3509d7a8330c…`，2026-10-03 深夜 `shasum` 实测），**不是 npm 上的 1.1.0**。要么发 `1.2.0` 把它转正，要么 `npm pack dsh-remote-control@1.1.0` 解出来覆盖回去——两条都要重启宿主才算数 |
-| 协议 / 小程序 | 开源 `dsh-remote-wire@1.0.0` / mp `aac0f60` | 私有树那两份在飞改动已移植并各自跑绿 | ✅ 私有树删除后唯一事实源就是开源仓；**别再引用 `packages/*`、`apps/server`、`mp/` 这些伞仓旧路径** |
+| 生产宿主插件 | **`1.2.0`（已发 npm，带 provenance）** | `dsh-remote-control/`（单一 bundle：`index.js` + `client.cjs`） | ✅ `~/.dsh/profiles/desktop` 里装的就是 `1.2.0`（`node_modules/dsh-remote-control/package.json` = `1.2.0`），且两半产物与仓内 `dist/bundle/` **逐字节相同**（`index.js` `058289e3b4dc0…`、`client.cjs` `0dfb8fb44518a…`）。⚠️ **字节哈希随构建方式变**（esbuild 会内嵌 cwd 相关的模块路径标签，§4 第 20 条），所以别拿哈希判"新不新"，判据是版本号 + 解出来的文案（`client.cjs` 里 `未配对`/`已配对`/`生成配对码` 都在）。**要用户重启宿主才在屏幕上生效** |
+| 协议 / 小程序 | 开源 `dsh-remote-wire@1.0.1` / mp `aac0f60` | 私有树那两份在飞改动已移植并各自跑绿 | ✅ 私有树删除后唯一事实源就是开源仓；消费仓依赖写的是 `^1.0.0`，`1.0.1` 是区间内的补丁版（无代码变更，只为拿 attestation），**别再引用 `packages/*`、`apps/server`、`mp/` 这些伞仓旧路径** |
 
 ## 1. 四个开源仓（这是要长期留存的东西）
 
 | 仓 | 内容 | npm 包 | HEAD（本次） | Release | CI |
 |---|---|---|---|---|---|
-| `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.0`**（用户 2026-10-03 定：**不下**，两边都引用它） | `beff2e6` | `v1.0.0`（`v1.0.1` 待发，卡在 TP） | 绿 |
+| `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.1`**（用户 2026-10-03 定：**不下**，两边都引用它；`1.0.1` 无代码变更，只为第一个带 attestation 的发布） | `6711808` | **`v1.0.1`**（带 provenance） | 绿 |
 | `dsh-remote-server/` | 零知识中继（单文件产物） | **不发**：`dsh-remote-server` 这个包名属于第三方（`bondzhu`/`MRZHUH`），试过又撤回，见 §9.7 | `d174787` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
-| `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.1.0`**（`1.2.0` 待发） | `a0be454` | **`v1.1.0`** | 绿 |
+| `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.2.0`**（带 provenance） | `eeddb07` | **`v1.2.0`** | 绿 |
 | `dsh-remote-mp/` | 微信小程序客户端 | 不发 | `aac0f60` | 无（用户 2026-10-03 定：mp 只是象征性开源，不打 Release） | 绿 |
 
 三条必须知道的规则：
@@ -81,7 +85,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
    **别再把它拆回去**，也别往 npm 加第二个包。
    折并的理由（"宿主缺 `webServer` 时只有那一行不激活"）现在由
    `src/pill/start.ts` 的软探测提供，`tests/pill-isolation.test.ts` 逐字段对照钉住。
-   ⚠️ **那一半的内容已经换了**：1.1.0 是"右栏自动弹码"，`[未发布]`（1.2.0）把它与终端文本码
+   ⚠️ **那一半的内容已经换了**：1.1.0 是"右栏自动弹码"，1.2.0 把它与终端文本码
    一起删掉，换成状态栏那颗 pill——**配对入口只剩 pill，`/drc pair` 已不存在**。
    §9.1 里那些 `sidebar.*` / `/pairing?session=` 的取证是**当时**的事实，别当成现状。
 3. **协议是 npm 依赖（`^1.0.0`），不是 git 依赖**。别退回 git 依赖：pnpm 11.7 下 git 包的
@@ -95,8 +99,12 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 发 npm、建 GitHub Release。标签与包版本不一致工作流会主动失败。**中继仓不在这份名单里**：它的
 Release 只挂单文件产物 + `SHA256SUMS`，**不发 npm**——`dsh-remote-server` 这个包名属于第三方
 （`bondzhu`/`MRZHUH`），2026-10-03 接过一次发布线又撤回，闸门与原因见 §9.7。
-**两个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
-Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 attestation"）——见 §3 第 1 条。
+**两个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：它发布后去查
+attestations 接口，查不到就让工作流红——**工作流绿不等于带 provenance**，这条自检才是判据。
+2026-10-03 深夜两个包的 Trusted Publishing 都配好了、两版都带 attestation 发出去（§3 第 1 条）；
+这步以后就是常态体检。凭据走 GitHub OIDC，Publish 步骤**刻意显式清空 `NODE_AUTH_TOKEN`**
+（不是"不设"：`actions/setup-node` 带 `registry-url` 时会塞一个默认 token 进 `.npmrc`，
+pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
 
 ## 2. 伞仓里剩下的东西（都不开源，也都不再持有源码副本）
 
@@ -127,73 +135,45 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 
 ## 3. 待办（按价值排序）
 
-1. **npm provenance 还是没挂上**（本轮 `dsh-remote-control@1.1.0` 再次证实）。发布日志里的原话：
-   `[WARN] Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE: Failed token exchange request with body
-   message: Unknown error (status code 404)` → 回落到 `NODE_AUTH_TOKEN` 发的，
-   于是 `/-/npm/v1/attestations/dsh-remote-control@1.1.0` 仍返回 `{"error":"Not found"}`。
-   **别在文档里宣称带 provenance。**
-   为什么本轮没顺手修：Trusted Publishing 只能在 **npm 网页 UI** 上配（npm CLI 10.9.9 没有对应命令，
-   也没有可信的公开 API 路径），而那需要用户在浏览器里登录 npmjs.com——本轮用户拍板
-   「先用现有 NPM_TOKEN 发 1.1.0，TP 留给下一版」。
-   **下一次要做的事**（权威口径来自 npm 12 自带的 `npm-trust` 文档，不是网页猜的）：
-   CLI 就能配，不必用网页——但要**一次交互式 2FA 授权**。两条实测事实决定了它只能由人做一次：
-   - 用户在终端里 `npm login`（npm **10.9.9** 跑的）之后，`npm whoami` / `npm profile get` 都通过，
-     账号 `tfa.mode = auth-and-writes`；但 trust 端点**连只读的 `npm trust list` 都返回 `EOTP`**
-     并要求打开 `https://www.npmjs.com/auth/cli/<id>`。文档那句"带 bypass 2FA 的 Granular/Automation
-     token 不支持 trust"就是这个现象的来源——**10.9.9 写进 `~/.npmrc` 的那把不满足要求**。
-   - 所以别把 `trust list` 当确认手段：它自己也卡在授权上，返回 `EOTP` **不等于**"没配上"。
-     真正的确认只有两条：要么在**能完成浏览器授权**的那个终端里跑一次 `npm trust list <pkg>`，
-     要么直接用发布路径去撞（我们已经撞过了，见下面第 3 点）。
-   可行的两条修法：**(a)** `npx -y npm@12.2.0 login`（会写一把 npm 12 认的会话凭据，
-   跑之前先备份 `~/.npmrc`，它会被覆盖）之后再 `npx -y npm@12.2.0 trust github …`；
-   **(b)** 直接给 trust 带 `--otp=<6位>`（口令码 30s 一换，得现拿现用）。npm 需 ≥ 11.15.0，
-   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。**两包各一条**（中继不在内：它不发 npm，见 §9.7）：
+1. **✅ 已解决（2026-10-03 深夜）：两个包都配好了 Trusted Publishing、都带 provenance 发出去了。**
+   现口径：`dsh-remote-wire@1.0.1`、`dsh-remote-control@1.2.0` 两版都能从
+   `https://registry.npmjs.org/-/npm/v1/attestations/<pkg>@<ver>` 取到 sigstore bundle（curl 实测）；
+   control `1.2.0` 的发布运行 10/10 步全绿（含末尾 `Verify provenance landed`）。
+   ⚠️ `wire@1.0.0`、`control@1.0.0/1.1.0` 是拿 token 发的，**已发布出去的版本永远补不上 attestation**
+   （npm 既定行为），只能往前发新版——**别在文档里宣称那三个老版本带 provenance。**
+   Trusted Publishing 配置命令（两包各一条，中继不在内：它不发 npm，见 §9.7）：
+   CLI 要 npm ≥ 11.15（本机 10.9.9，一律 `npx -y npm@12.2.0`），且**需要一次真 TTY 的浏览器 2FA 授权**：
    ```sh
    npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
    npm trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol  --file release.yml --allow-publish
    ```
-   ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
-   不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
+   ⚠️ **协议包必须显式写 `--repo`**：仓名 `dsh-remote-protocol` ≠ 包名 `dsh-remote-wire`，
+   不写就会拿 `package.json` 的 `repository.url` 去推——那条指的就是包名对不上的仓。
    GitHub 的 claim 只有 `repository` + `workflow file`（+ 可选 `environment`），
    **没有 tag/分支 pattern 这种东西**（原文里"tag pattern 建议留空"是我说错了）。
-   **已经做完的两件事**（不需要 npm 侧权限，所以先落了）：
-   - 两仓 Release 工作流的 Publish 步骤**删掉了 `NODE_AUTH_TOKEN`**（control `ce8e0bf`、protocol `b11b23c`）。
-     token 在场就会掩盖 OIDC 失败；没了它，TP 没配好时发布会**直接红**，而不是发一个没证明的版本。
-   - 两仓各加一步 `Verify provenance landed`：发布后最多轮询 60s 查 attestations 接口，
-     查不到就红，并把该跑的 `npm trust` 命令原样印在报错里。
-     **判据永远是那个接口，不是工作流的绿。**
-   - 协议仓版本抬到 `1.0.1`（`13d40df`，**没有代码变更**，唯一目的是当第一个带 provenance 的发布），
-     并且**已经用发布路径本身撞过一次，得到决定性结论**：标签 `v1.0.1` 推上去后，Release 运行
-     `37101490457` **红在 `Publish to npm`**，日志还是那行 404 ⇒ **npm 侧那条 trust 配置确实不存在**。
-     同时 `npm view dsh-remote-wire versions` 仍是 `["1.0.0"]` —— **没有半发布**：Publish 是唯一的
-     网络写步骤，它一失败就不会往下建 GitHub Release。这就是删掉 token 换来的行为差异
-     （以前是"绿着发出一个没证明的版本"，现在是"响亮地失败、什么也没发"）。
-     **标签保留没删**：TP 配好之后不用重打标签，直接
-     `gh run rerun 37101490457 --repo providcc/dsh-remote-protocol --failed` 即可。
-   - **剩下唯一需要人的一步**：在能完成浏览器 2FA 授权的终端里把两包各配一条
-   （命令与凭据要求见上面 (a)/(b)）：
-   ```sh
-   npx -y npm@12.2.0 trust github dsh-remote-wire    --repo providcc/dsh-remote-protocol --file release.yml --allow-publish
-   npx -y npm@12.2.0 trust github dsh-remote-control --repo providcc/dsh-remote-control  --file release.yml --allow-publish
-   ```
-   命令必须有**真 TTY**（`script -q /dev/null npx …` 这种伪装能拿到授权 URL，但点批准还是要人），
-   两条之间有 5 分钟的 2FA 宽限窗口（npm 文档写明），所以连着跑第二条不再问一次。
-   ⚠️ **每个包同时只能有一条 trust 配置**，要改先 `npm trust list <pkg>` 拿 id、
-   `npm trust revoke --id <id> <pkg>`，再建新的。
-   ⚠️ 已发布出去的版本（`wire@1.0.0`、`control@1.0.0/1.1.0`）**永远补不上 attestation**，
-   这是 npm 侧的既定行为，别指望"回头再签一次"。
-   配好之后**不用重打标签**（`v1.0.1` 还在）：
-   `gh run rerun 37101490457 --repo providcc/dsh-remote-protocol --failed`
-   → `gh run watch` 看最后一步必须打出 `provenance 已挂上：dsh-remote-wire@1.0.1`，
-   再用 `curl -s https://registry.npmjs.org/-/npm/v1/attestations/dsh-remote-wire@1.0.1` 复核。
-   control 不必空发一版，等下一次真改动搭同一条链路（自检会替我们确认那时真的挂上了）。
+   ⚠️ **每个包同时只能有一条 trust 配置**：要改先 `npm trust list <pkg>` 拿 id、
+   `npm trust revoke --id <id> <pkg>` 再建新的。
+   踩过的两个坑（都别再踩）：
+   - **`NODE_AUTH_TOKEN` 在场会静默掩盖 OIDC 失败**。`actions/setup-node` 一旦收到 `registry-url`，
+     就把它的 `token` 输入（默认 `github.token`）写进 `NODE_AUTH_TOKEN`、并往 `$NPM_CONFIG_USERCONFIG`
+     落一句 `_authToken=${NODE_AUTH_TOKEN}`；pnpm 见了它"先试 OIDC、换票失败就静默回落成 token 发布"，
+     表现是**包发出去了、工作流也绿了、attestation 一个没有**（`1.0.0`/`1.1.0` 就这么发的，
+     日志里只留一行 `Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE … 404`）。
+     两仓 Publish 步骤现在都**显式赋值 `NODE_AUTH_TOKEN: ''`**，把"没有 token 这条路"写死——
+     配好 TP 之后 OIDC 是唯一路径，再退回 token 会响亮地失败。
+   - **自检窗口给太短会把成功的发布判成红**。协议仓第一版自检只轮询 60s，注册表侧 attestation
+     落地比这慢；`1.0.1` **Publish 成功、attestation 也在**，却被自检先判红，
+     `Create GitHub Release` 整步没跑。修法：窗口放宽到 200s（`seq 1 40` × `sleep 5`），
+     并给 Publish 加幂等检查（版本已在注册表就跳过 publish、继续往下建 Release）。
+     那条 Release 已用 `gh release create v1.0.1 --title "v1.0.1" --generate-notes --verify-tag` 补上。
 2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
    本轮用户明确"token 安全问题先不管"，所以这条仍未做——它不是我做完了忘了，是被搁置的。
    **另**：npm 站点顶部横幅（2026-10-03 实测）写着 bypass-2FA token 将在
-   2026-08 起限制账号变更、**2027-01 起禁止直接发包**——这把 token 的可用期是有终点的，
-   Trusted Publishing 不是可选项而是必经路。
+   2026-08 起限制账号变更、**2027-01 起禁止直接发包**——这把 token 的可用期是有终点的。
+   好在发包已改走 OIDC（Trusted Publishing，§3 第 1 条），两仓 Release 不再需要 `NPM_TOKEN`；
+   仓库里那个 secret 现在只是历史遗留，撤销与否不影响发布。
 3. **`droppedFrames` 查不到历史，因为中继压根不为丢帧写日志**（本轮把这条查清了，推翻了原来的说法）。
    原文写的是"去服务器 `journalctl | grep -c "frame dropped"`"——**那个 msg 串在代码里不存在**
    （全仓 grep `frame dropped` 为空）。四处计数点
@@ -220,11 +200,11 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
-7. **发 `dsh-remote-control@1.2.0`**（pill 收敛 + §9.6 那轮清理都在里面）。
-    pill 的真屏幕复验**已经做完**（§9.5 末尾与 §9.6：点一下出码、`epoch` 三者原子一致、
-    `problems` 为空；挤不动那一排时也不再逐字断行）。剩下的顺序是：先配好 §3 第 1 条的
-    Trusted Publishing，再抬版本打标签——用 token 发就又是一版"没有 attestation 且永远补不上"的包。
-    ⚠️ 每次换产物都要重启用户本机那个 Harness（它是用户正在用的应用），**动手前问一句**。
+7. **✅ `dsh-remote-control@1.2.0` 已发布**（2026-10-03 深夜，pill 收敛 + §9.6 那轮清理 + §9.8 文案都在里面）。
+    发布运行 10/10 步全绿、带 provenance（注册表 curl 复核过），GitHub Release `v1.2.0` 已建。
+    pill 的真屏幕复验做了三次（§9.5/§9.6/§9.8）。
+    **剩下要人做的**：重启本机那个 Harness（DeepSeek Harness.app），profile 里装的 `1.2.0` 字节
+    才会在屏幕上生效——**动手前问一句**（那是用户正在用的应用）。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
@@ -337,7 +317,14 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     线上产物、对拍 fixture）里，就先当成契约**，要动就两侧一起动。同类需要先看证据再删的三处：
     中继 `bucketAt()` 越界抛、`noteBackpressure` 的 `bufferedAmount ?? 0`、`run.mjs` 的
     `importBuildArtifact` 重试（防的是本机并行会话清 `dist/`）。
-
+20. **产物的 sha256 不是"代码变没变"的判据——同一个 commit 换一次构建就可能换哈希。**
+    esbuild 会把依赖的模块路径标签内嵌进 bundle，于是"在 `packages/plugin` 里 build"与
+    "从伞仓根跑 `install-to-profile.sh`"出来的两份 `bundle/*.js` **内容语义相同、字节不同**。
+    2026-10-03 深夜就栽在这上面：屏幕上验过的那版 `client.cjs` 是 `9328b1e5…`，
+    发布时 `prepare` 重新构建、装进 profile 的是 `0dfb8fb4…`，两边**其实是同一份源码**。
+    **判据换成**：版本号（`node_modules/<pkg>/package.json` 的 `version`）+ 解出来的文案
+    （挑一个只有新版才有的中文串，注意 esbuild 把非 ASCII 转成 `\uXXXX`，要 `String.fromCharCode`
+    解码后再 grep）。`shasum` 只能用来判"同一台机器、同一条命令产出的两份是不是同一份文件"。
 
 ## 5. 命令速查
 
@@ -380,7 +367,7 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 
 | 事 | 证据 |
 |---|---|
-| `dsh-remote-control@1.1.0` 发出去了 | 标签 `v1.1.0` → Release 工作流 success → `npm view dsh-remote-control versions` = `[1.0.0, 1.1.0]`；`npm pack` 解包核对：tarball 只有 `dist/bundle/{index.js,client.cjs}` + `cordis.patch.yml` + `LICENSE`，232 KB；**provenance 没挂上**（§3 第 1 条附日志原文） |
+| `dsh-remote-control@1.1.0` 发出去了 | 标签 `v1.1.0` → Release 工作流 success → `npm view dsh-remote-control versions` = `[1.0.0, 1.1.0]`；`npm pack` 解包核对：tarball 只有 `dist/bundle/{index.js,client.cjs}` + `cordis.patch.yml` + `LICENSE`，232 KB；**provenance 没挂上**（§3 第 1 条附日志原文；这一版永远是裸的，provenance 从 `1.2.0` 起才有） |
 | 1.1.0 装进真宿主 profile | `sh dsh-remote-control/scripts/install-to-profile.sh` → `node_modules/dsh-remote-control/package.json` 里 `version:"1.1.0"`、`dsh.client.platform:"web"`、`exports` 含 `./client`；退役条目连目录一起摘掉（**这条做过变异验证**：回插后再跑，脚本把它删掉） |
 | **live-e2e 真机全绿** | `node e2e/live-e2e.mjs --rounds 2` → **合计 36 项检查，通过 36，失败 0**（真中继 `wss://drc.provid.cc` + 真内核 `carrier=services`）：配对→会话列表 14 条→发指令回合跑完（`done:true`、正文非空）→防休眠 `backend=caffeinate`→零知识（上行 3 帧 enc、经中继无明文）→解配 `needs-pair` |
 | **右栏那条路由在真宿主上取证**（⚠️ 该方案已在同日 `[未发布]` 里删除，这行是当时的取证） | `GET http://127.0.0.1:19387/plugins/dsh-remote-control/pairing?session=<真会话>` → `{"state":"ready","epoch":"575e1d4172857484",address:"dsh-resource://file/session/…//Users/linbin/dsh-remote-control/.dsh/sidebar-qr.png",expiresAt:…}`；zxing 解出落盘 PNG（392×392，0600）→ **解出文本的 sha256 前 16 位 == 路由给的 epoch**，且与 `status.pairing.qr` 逐字节一致；负面四条也实测：非环回 `Host` → 403、跨站 `Origin` → 403、缺 `session` → 400、**旧包路径 `/plugins/dsh-remote-control-presentation/pairing` → 404** |
@@ -402,20 +389,20 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 
 ### 9.3 还欠着的
 
-1. **Trusted Publishing**（§3 第 1 条）：卡在"要用户在浏览器登录 npmjs.com"这一步，本轮按拍板留到下一版。
+1. ~~Trusted Publishing~~ **✅ 2026-10-03 深夜已解决**（§3 第 1 条，两包都配好并发出了带 provenance 的版本）。
 2. **`hostId` 那条配置**（§3 第 4 条）：一行 patch 就能让宿主身份稳定，但那是改用户线上配置，等他点头。
 3. **审批卡 / 提问卡的真机取证**（§3 第 6 条）：原因仍是本机 `approval/policy: never` 与这一代宿主没有
    `registerProvider`，**别再问第二遍**；两条都有本地闭环测试。
 4. **`dsh-remote-mp` 不打 Release**（用户 2026-10-03 定："只是象征性的开源"），原来的"要不要打 v1.0.0"这条待办作废。
 
-### 9.4 「点一下配对」落地（2026-10-03，control 仓 `[未发布]`）
+### 9.4 「点一下配对」落地（2026-10-03，当时 control 仓还是 `[未发布]`，现已随 `1.2.0` 发布）
 
 用户两条拍板：`/drc pair` **去掉**，改成点状态栏那颗 pill；二维码**放在弹出窗里**；
 但"仅 pill 不可用时才把 `pair` 注册回来"这个兵分要保留。做成了：
 
 | 事 | 证据 |
 |---|---|
-| 宿主侧多三条路由 | control `packages/plugin/src/presentation/pair-actions.ts`：`POST /pairing/new`（幂等；跨站判据是同源才发得出的 `x-drc-pair` 头，**不是** `Origin`）、`GET /pairing.png`（现渲染、`no-store` + `ETag`）、`GET /status`（`relay`/`paired`/`hasCode`）。测试 **319 pass / 0 fail**：`presentation-pair-actions.test.ts` 22 条（含"回答里不许出现 `psk`/完整 URI"这条红线、注销一条抛错仍摘掉其余）、`presentation-isolation.test.ts` 的"兵分/接线/只挂上右栏那条"三条、`presentation-client-bundle.test.ts` 那 13 条 pill 用例 |
+| 宿主侧多三条路由 | control `packages/plugin/src/presentation/pair-actions.ts`：`POST /pairing/new`（幂等；跨站判据是同源才发得出的 `x-drc-pair` 头，**不是** `Origin`）、`GET /pairing.png`（现渲染、`no-store` + `ETag`）、`GET /status`（当时的字段是 `relay`/`paired`/`hasCode`，`hasCode` 已在 §9.8 换成 `hostLabel`/`serverUrl`）。测试 **319 pass / 0 fail**：`presentation-pair-actions.test.ts` 22 条（含"回答里不许出现 `psk`/完整 URI"这条红线、注销一条抛错仍摘掉其余）、`presentation-isolation.test.ts` 的"兵分/接线/只挂上右栏那条"三条、`presentation-client-bundle.test.ts` 那 13 条 pill 用例 |
 | `/drc pair` 降成兜底 | 判据是 `sidebar.available`（右栏那条 + pill 三条**全挂上**才算）。挂不上时 hint 自动把 `pair` 加回来；挂上了 `pair` 只指路、**不顺手发第二张**（那会绕开幂等）。`/drc pair force` 是"路由在、pill 因为宿主给不出 `react`/没有 `slots` 而没出现"时不能堵死的退路，走的仍是幂等入口 |
 | 新功能不许砸老功能 | pill 那三条单独一个 `try`（`sidebar.ts`）；浏览器面拿 `react` 走**运行期**（`client/src/pill.ts` 文件头第 2 条），`inject` 仍只声明 `sidebarRight` |
 
@@ -441,7 +428,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 把"是哪一道守卫拒的"印进 403 回答（再让 pill 把它显示出来）才查得出来；这条判据现在的形状与
 它为什么不能是 `Origin`，都写在 `pair-actions.ts` 文件头与 `docs/HOST-SIDE.md` §6.1。
 
-### 9.5 收敛成"只有 pill"（2026-10-03，control `[未发布]` = 1.2.0）
+### 9.5 收敛成"只有 pill"（2026-10-03，control 1.2.0，现已发布）
 
 用户拍板："清理掉之前的 sidebar 方案和 ansi 方案，只保留这个 pill"。三问三答定了边界：
 `/drc pair` **全删**（配对只有 pill）、配置键**改名成 `pill`**（旧键不静默失效）、
@@ -479,16 +466,14 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 闸门：control **261 项全绿**、e2e **17 步 0 失败**、`node --test e2e/*.test.mjs` 113 全绿、
 `validate-qr` 28 组 ×2 产物 0 失败、**真屏幕复验通过**（上面那段）。
 
-**还欠着的：**
+**还欠着的（当时）：**
 
-1. **没发版**。`[未发布]` 那节在 CHANGELOG 里，版本仍是 `1.1.0`。发 `1.2.0` 是 npm 上不可逆的动作，
-   而且 §3 第 1 条的 Trusted Publishing 还没配——用户 2026-10-03 已拍板"先配 TP 再发"。
-2. **本机 profile 跑的是未发布的 HEAD 产物**，不是 npm 上的 1.1.0（§9.4 那轮装进去的字节
-   已经被 §9.5 这轮的删除改掉，所以别再引用旧哈希——要现值就 `shasum -a 256` 比
-   `~/.dsh/profiles/desktop/node_modules/dsh-remote-control/{index.js,client.cjs}` 与
-   `packages/plugin/dist/bundle/`）。要么发版把它转正，要么还原成 1.1.0：
-   `/tmp/drc-profile-backup/dsh-remote-control-1.1.0`（**/tmp 重启就没**，届时改用
-   `npm pack dsh-remote-control@1.1.0` 解出来的产物覆盖回去），两条路都要再重启一次宿主才算数。
+1. ~~没发版~~ **✅ 2026-10-03 深夜已发 `1.2.0`**（Trusted Publishing 先配好，再抬版本打标签；
+   发布带 provenance、10/10 步全绿）。当时"先配 TP 再发"这条拍板已执行。
+2. ~~本机 profile 跑的是未发布的 HEAD 产物~~ **✅ 已转正**：重装后 profile 里就是 npm 上那版
+   `1.2.0`（§0.2）。⚠️ 别再引用这里说的旧哈希或 `/tmp` 备份——**字节哈希随构建方式变（§4 第 20 条）**，
+   判据是版本号；`/tmp/drc-profile-backup/…1.1.0` **/tmp 重启就没了**，要回滚改用
+   `npm pack dsh-remote-control@1.1.0`。回滚要再重启一次宿主才算数。
 
 ### 9.6 全仓删死代码（2026-10-03 晚，四仓 + 伞仓）
 
@@ -559,3 +544,41 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 
 以后真要发中继包，先定名字：2026-10-03 实测 `dsh-remote-relay`、`drc-relay`、`dsh-rc-relay`
 都空着（`dsh-relay` 已被占），改动要同步 `release.yml`、上面那条闸门与两份文档。
+
+### 9.8 抬头改成"未配对/已配对"、点开改成连接信息（2026-10-03 深夜，已随 control `1.2.0` 发布）
+
+用户两句话：`点一下配对`/`配对中` → **未配对**（灯是灰的）、`已连 N 台` → **已配对**、
+**点进去是连接信息**；外加一句"图片是不是可以不用在工作区了"。
+
+**做了什么**：
+
+| 面 | 改动 |
+|---|---|
+| 抬头那句 | `pillLabel` 只剩五种说法：`远程未启动` / `远程未连接` / `连接中` / `未配对` / `已配对`。台数**不写进抬头**（那排宽度是宿主给的，中文会被逐字断行，见 §9.6 那条截图坑），"有码还没人扫"也不再单列——绿只能表示真配上了一台 |
+| 面板 | 顶部多四行**连接信息**（本机名 / 中继 `host:port` / 状态 / 配了几台），任何一态都在场。中继地址只留 `host:port`：240px 的弹窗装不下带 scheme 和 path 的整条 URI |
+| 发码时机 | **点开不发码**。原来"点 pill = 发码"，因为那颗 pill 唯一用途就是配对；现在抬头是状态，点它的第一预期变成"看一眼连得怎么样"，而一张码是有寿命的资源——把"看一眼"接到 `ensureFresh` 上等于每次点开都可能向中继申请一张新的挂在 pending 表里。发码改成面板里那颗 **生成配对码**（已配上时叫 **再配一台**） |
+| `/status` 路由 | 字段从 `{relay, paired, hasCode}` 变成 `{relay, paired, hostLabel, serverUrl}`。`hasCode` 删掉是因为**没人读它了**（抬头不再区分有码没码）；新加的两个是**非凭据**（这两条本来就印在手机上看到的那张码里、也在 `status.json` 里），红线不变：没有 `psk`、没有 6 位码、没有 `dshr:` 片段 |
+
+**"图片放系统 temp 目录"这条的前提不成立**：代码里**没有任何一条路把 QR 写到磁盘**——
+`pairing.png` 那条路由是有人要图的时候现渲染、现回字节（`no-store` + `ETag`），
+`src/` 与 `client/` 全量 grep 无落盘点。工作区里那几张 `.dsh/*.png` 与 `~/.dsh/dsh-remote-control/*.png`
+是**右栏方案的历史残渣**（那个方案按节拍往会话工作区写文件），本轮删掉 5 份；
+`~/.dsh/dsh-remote-control/status.json` 留着，它是排错入口不是图。
+所以"改放 temp 目录"= 给一条不存在的路换目的地。
+
+**顺带抓到一条脚本级缺陷**：`install-to-profile.sh` 那段 heredoc 的定界符**刻意不加引号**
+（要让 `$PROFILE` 展开），于是注释里那对反引号被 shell 当成命令替换执行——
+每次安装都喷一句 `syntax error near unexpected token 'newline'`，而退出码还是 0、
+bundles 列表照样打出来。改成「」。**推论**：写进未加引号 heredoc 的注释里不许出现反引号，
+这条与 §4 里"python heredoc 里嵌套英文引号会死"是同一类坑。
+
+**取证**（真屏幕，`index.js` `b362fec0…` / `client.cjs` `9328b1e5…`，配方见 `docs/HOST-SIDE.md` §6）：
+`● 未配对` → 点开 `dialog dsh-remote-control 连接信息` 四行 + `生成配对码`，**这一刻 `status.json` 里没有码**；
+再按才出 QR + `570461` + `扫码配对 · 1 分 58 秒后过期`，`?e=` / `ETag` / `sha256(qr)` 前 16 位三者相同
+（`34f0592ef489f470`）。闸门：control `pnpm -r test` **265 pass / 0 fail**、`typecheck` 过、
+`format:check` 过、伞仓 `node e2e/run.mjs` **17 步 0 失败**。
+**收尾**：这一版随 control `1.2.0` 发到 npm（带 provenance，发布运行 10/10 步全绿），
+`~/.dsh/profiles/desktop` 重装到 `1.2.0`（装出来是 `index.js` `058289e3…` / `client.cjs` `0dfb8fb4…`，
+与仓内 `dist/bundle/` 逐字节相同）——**屏幕上的哈希 `b362fec0…`/`9328b1e5…` 是当时那次构建的产物，
+换一次构建就变**（esbuild 内嵌 cwd 相关的模块路径标签，§4 第 20 条）：别拿字节哈希判"代码变了没"，
+判据是版本号 + 解出来（非 ASCII 会转成 `\uXXXX`）的文案。

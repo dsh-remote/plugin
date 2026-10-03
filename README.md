@@ -18,7 +18,7 @@
 |---|---|---|
 | **协议层** | `dsh-remote-protocol/`（npm 包名 `dsh-remote-wire`） | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
 | **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继。生产入口是**单文件产物** `dist/bundle/main.js`（`ws`/`zod`/协议层都内联在里面，运行时零依赖）。分发只有 GitHub Release 的那个单文件与从源码构建两条：**本仓不发 npm**，`dsh-remote-server` 这个包名属于另一个无关项目，别照抄任何 `npm i -g` 的写法 |
-| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`）：状态栏那颗"点一下配对"的 pill 是**配对的唯一入口**（右栏自动弹码与终端文本码 2026-10-03 删除） |
+| **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/pill/` + 浏览器面 `client/`）：状态栏那颗写"未配对 / 已配对"的 pill 是**配对的唯一入口**（右栏自动弹码与终端文本码 2026-10-03 删除） |
 | **小程序客户端** | `dsh-remote-mp/`（代码在它的 `miniprogram/` 下） | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
 | **测试装置** | `e2e/`（伞仓） | 本地全链路 + 逐字节对拍 + 生命周期 + 真实链路取证（见「测试」） |
 | **取证脚本** | `scripts/`（伞仓） | `validate-qr.mjs`（改二维码必跑）、`check-mp-ui.mjs`、`mp-*.mjs` |
@@ -99,7 +99,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 
 ### 配对与使用
 
-1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：它抬头显示连接状态（`远程未连接` / `连接中` / `已连 N 台`），点一下就**当场生成一张一次性码**并把二维码弹在同一颗按钮上方，6 位数字与图同时在场、倒计时走完自动换一张。这条路走的是宿主侧三条同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 那句状态）——**三条回答里都没有 `psk`，也没有完整配对 URI**；
+1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：抬头那句是连接状态（`远程未启动` / `远程未连接` / `连接中` / `未配对` / `已配对`，灯分别是灰 / 灰 / 黄 / 灰 / 绿）。点一下弹面板，顶部那几行是**连接信息**（本机名、中继 `host:port`、状态、配了几台）；要配对再按面板里那颗 **生成配对码**（已经配上了就叫 **再配一台**），二维码与 6 位数字同时出现在同一颗按钮上方，倒计时走完自动换一张。这条路走的是宿主侧三条同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 那句状态 + 那几行信息）——**三条回答里都没有 `psk`，也没有完整配对 URI**；点开时**不会**顺手发码，发码必须是那一次显式的按下；
 2. **命令行没有配对入口**：`/drc` 只剩 `status` 与 `unpair`。`/drc pair`、终端文本码、右栏自动弹码三条旧路都在 2026-10-03 删掉了——命令行那条走的是"每次发一张新码"，会在 pill 那张之外再多挂一个仍然有效的 PSK，而手机扫的是屏幕上那张；
 3. **那颗 pill 没出现时怎么查**：先看 `status.json` 的 `pill` 探针（`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `routes:"register threw: …"` / `pill:"disabled"`）——它不是 `routes:"registered"` 时就一定同时有一条 `warn:pill`。浏览器面那一半（向装载器拿 `react`、拿 `slots`）失败只在 DevTools 里留一行 `[dsh-remote-control pill]` 开头的 warn，宿主侧看不见。图片是唯一出口：DSH 命令卡的行高会把半块文本码切成条、扫不出来；
 4. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；

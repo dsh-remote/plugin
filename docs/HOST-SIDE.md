@@ -13,14 +13,14 @@
 ## 1. 产物形态：一个 bundle，两半
 
 `dsh-remote-control@1.1.0` 把界面上那一半（原来是独立包 `dsh-remote-control-presentation`）折进了
-主插件；`[未发布]`（1.2.0）先加上状态栏那颗"点一下配对"的 pill，随后把**右栏自动弹码**与
+主插件；`1.2.0`（已发布、带 provenance）先加上状态栏那颗配对 pill，随后把**右栏自动弹码**与
 **终端文本码**两条老路整个删掉——配对入口现在只有那颗 pill。一次构建产出两半，
 实测尺寸 `index.js 1242 KB / client.cjs 18 KB`：
 
 | 产物 | 跑在哪 | 干什么 |
 |---|---|---|
 | `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**挂 3 条同域路由给那颗 pill（发码 / 图片 / 状态） |
-| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 向装载器拿 `react`、软探测 `slots`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态（2s 轮 `/status`），点击 `POST /pairing/new` 并把 `/pairing.png` 弹在同一颗按钮上方 |
+| `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 向装载器拿 `react`、软探测 `slots`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态（2s 轮 `/status`），**点开先给连接信息**，要发码得再按面板里那颗按钮（`POST /pairing/new`）并把 `/pairing.png` 弹在同一颗按钮上方 |
 
 宿主注入的东西（`cordis`、`@deepseek-ai/*`）刻意**留在 externals**——打进去会造成两份实例。
 协议层 `dsh-remote-wire` 是 npm 依赖，esbuild 打包时内联，所以 profile 里不需要 `node_modules`。
@@ -154,7 +154,9 @@ curl -s -X POST -H "x-drc-pair: 1" -H "Origin: dsh-app://app" \
 curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing/new"        # → 405（只接受 POST）
 curl -si "http://127.0.0.1:<P>/plugins/dsh-remote-control/pairing.png" | head -5
 # → 200 + Content-Type: image/png + Cache-Control: no-store + ETag: "<epoch>"；没有效码时 204
-curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"              # → {"relay":"online","paired":0,"hasCode":true}
+curl -s "http://127.0.0.1:<P>/plugins/dsh-remote-control/status"
+# → {"relay":"online","paired":0,"hostLabel":"linbin-desk","serverUrl":"wss://drc.provid.cc:443/relay"}
+#   四个字段全是非凭据：抬头那句状态与面板顶部那几行连接信息由同一份回答驱动
 ```
 
 ⚠️ **这条写路由的跨站判据是那个头，不是 `Origin`**。第一版判据写成"Origin 必须存在且环回"，
@@ -205,12 +207,16 @@ print('y 区间：', min(ys), max(ys), '— 点它的文字（再往右 30~40px�
 AX 树正常时应该看到这一排（**按元素点**，坐标点容易打歪）：
 
 ```text
-212 pop up button Description: 配对中, Help: dsh-remote-control：配对中     ← 那颗 pill
-213 dialog dsh-remote-control 配对
-214   image Description: 配对二维码, URL: dsh-app://app/plugins/dsh-remote-control/pairing.png?e=<epoch>
-216   text 小程序里扫码，或手输这 6 位数字 · 1 分 59 秒后过期
-217   button 换一张
+212 pop up button Description: 未配对, Help: dsh-remote-control：未配对     ← 那颗 pill
+213 dialog dsh-remote-control 连接信息
+214   text 本机 … / 中继 … / 状态 已连接 / 已配对 0 台        ← 顶部那几行连接信息
+215   button 生成配对码                                       ← 发码要这一次显式的按下
+216   image Description: 配对二维码, URL: dsh-app://app/plugins/dsh-remote-control/pairing.png?e=<epoch>
+217   text 扫码配对 · 1 分 59 秒后过期
+218   button 换一张
 ```
+
+按下去之后 214~218 那一段才会出现（先只有 213/214/215）。
 
 **[已验证 2026-10-03 下午，本机 `~/.dsh/profiles/desktop` + 生产中继 `wss://drc.provid.cc`]**
 pill 出现在输入框那一排（排在 provider-usage 那颗用量 pill 右边）、抬头随 `/status` 变、
@@ -225,6 +231,18 @@ pill 出现在输入框那一排（排在 provider-usage 那颗用量 pill 右�
 `ETag: "ff5d01936e40437d"`、`status.json` 里那张 `qr` 的 `sha256` 前 16 位也是它，路由回的 PNG
 解出来 `…&t=057482`。`status.json` 这轮是 `pill={"webServer":"via inject","routes":"registered"}`
 **且 `problems=[]`**——上一版这里同时写着 `routes:"registered"` 和 `warn:pill`，那是启动快照的假警报。
+
+**[已验证 2026-10-03 深夜，抬头改成"未配对/已配对"、点开改成连接信息那一版（当时构建 `index.js` `b362fec0…` / `client.cjs` `9328b1e5…`；发布时同一源码重建出 `058289e3…`/`0dfb8fb4…`，**哈希随构建方式变**，别拿它判新旧）]**
+这一轮改的是**文案与点开后的内容**，所以判据也跟着换：
+`● 未配对`（灰灯，`/status` 回的 `paired:0`）→ 点一下弹 `dialog dsh-remote-control 连接信息`，
+里面四行 `本机 bins-macbook / 中继 drc.provid.cc / 状态 已连接 / 已配对 0 台` 加一颗
+**生成配对码**；**这一刻 `/status.json` 里没有码**（点开不发码这条就是这么证的）。
+再按那颗按钮才出 QR + `570461` + `扫码配对 · 1 分 58 秒后过期` + `换一张`，
+原子核对仍然过：dialog 里图片 URL 的 `?e=34f0592ef489f470` == `pairing.png` 的
+`ETag: "34f0592ef489f470"` == `sha256(status.json 里那张 qr)` 前 16 位，且 `status.json` 的
+`pairing.token` 就是屏幕上那 6 位。Escape 收得掉。
+`GET /status` 这轮起回的是 `{relay, paired, hostLabel, serverUrl}` 四个非凭据字段
+（`hasCode` 删了：抬头不再区分"有码/没码"，而"看一眼"也不该去消耗 pending 表）。
 
 ⚠️ **这一轮真正踩到的坑在浏览器那一半，而它不在 `status.json` 里**：`status.json` 的 `pill`
 只答"宿主侧那三条路由挂没挂"，屏幕上有没有那颗按钮是另一半的事。把 client 模块的 `inject`
