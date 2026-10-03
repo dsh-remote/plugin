@@ -28,9 +28,9 @@
 `packages/plugin/client/src/pill.ts` 文件头），拿不到只是少一颗 pill，而不是整页 web boot 失败。
 
 **隔离现在由代码提供**：那一半需要 `webServer` 服务，而主插件刻意不写任何 `inject:` 闸门。
-`src/presentation/pill.ts` 只软探测 `webServer`，拿不到就整半不起（一条路由都不挂），
+`src/pill/start.ts` 只软探测 `webServer`，拿不到就整半不起（一条路由都不挂），
 `status.json` 的 `pill` 块会写明为什么。这条隔离有测试钉住：
-`packages/plugin/tests/presentation-isolation.test.ts` 把"有 webServer / 没有 / `register()` 抛错 /
+`packages/plugin/tests/pill-isolation.test.ts` 把"有 webServer / 没有 / `register()` 抛错 /
 `pill.enabled:false`"四种形态各跑一遍 `apply()`，要求主链路可观察字段**逐个相等**、
 `/drc unpair` 的返回**逐字节相等**，差别只许出现在 `pill` 探针与那一条 `warn:pill` 上。
 

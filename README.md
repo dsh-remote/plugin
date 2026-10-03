@@ -100,8 +100,8 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 ### 配对与使用
 
 1. **点状态栏那颗 `dsh-remote-control`**（输入框那一排，`@chaoset/provider-usage` 那颗用量 pill 旁边）：它抬头显示连接状态（`远程未连接` / `连接中` / `已连 N 台`），点一下就**当场生成一张一次性码**并把二维码弹在同一颗按钮上方，6 位数字与图同时在场、倒计时走完自动换一张。这条路走的是宿主侧三条同域路由（`POST …/pairing/new` 幂等发码、`GET …/pairing.png` 现渲染、`GET …/status` 那句状态）——**三条回答里都没有 `psk`，也没有完整配对 URI**；
-2. 命令行入口 `/drc pair` 降为兜底：那颗 pill 挂不上（宿主没有 `webServer` 服务、或路由名被占）时它自动回来发码；pill 在的时候它只指路，**不顺手多挂一张**——"屏幕上永远只有一张有效码"是配对能成事的前提。`/drc pair force` 是"路由挂上了、pill 却因为宿主给不出 `react` / 没有 `slots` 服务而没出现"时那条不能堵死的退路，走的仍是幂等入口；
-3. **右栏会自动弹出当前配对码**（`dsh-remote-control/packages/plugin` 里的 `src/presentation/` + 浏览器面 `client/`；宿主没有 `webServer` 服务时这一半自己不起，配对/中继不受影响）——没弹出时先查 `status.json` 的 `sidebar` 那块（它会说 `webServer=none` / `disabled` / `register threw: …` / `actions=…`），再按卡片给的路径打开那张 PNG 扫码。图片才是主路径：DSH 命令卡的行高会把半块文本码切成条、扫不出来；卡片同时给可粘贴的 `dshr:/p?…` 一行兜底，`qrOpen`（替你打开查看器）仍默认关；
+2. **命令行没有配对入口**：`/drc` 只剩 `status` 与 `unpair`。`/drc pair`、终端文本码、右栏自动弹码三条旧路都在 2026-10-03 删掉了——命令行那条走的是"每次发一张新码"，会在 pill 那张之外再多挂一个仍然有效的 PSK，而手机扫的是屏幕上那张；
+3. **那颗 pill 没出现时怎么查**：先看 `status.json` 的 `pill` 探针（`webServer:"none"` / `"get threw: …"` / `"object without register()"` / `routes:"register threw: …"` / `pill:"disabled"`）——它不是 `routes:"registered"` 时就一定同时有一条 `warn:pill`。浏览器面那一半（向装载器拿 `react`、拿 `slots`）失败只在 DevTools 里留一行 `[dsh-remote-control pill]` 开头的 warn，宿主侧看不见。图片是唯一出口：DSH 命令卡的行高会把半块文本码切成条、扫不出来；
 4. 微信开发者工具打开 `dsh-remote-mp/`（`project.config.json` 在仓根，代码在 `miniprogram/`；TDesign 产物已预置在 `miniprogram/miniprogram_npm/`，**不需要**「构建 npm」；`appid` 是本项目自用的，fork 必须换成自己的）；
 5. 首页扫码或粘贴二维码内容 → 自动连接；
 6. 真机必须 `wss://`，且域名要在小程序后台的 **socket 合法域名** 白名单里。

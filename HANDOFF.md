@@ -80,7 +80,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
    `pnpm -r publish --dry-run` 只会列出 `dsh-remote-control` 一个——这是可复核的判据。
    **别再把它拆回去**，也别往 npm 加第二个包。
    折并的理由（"宿主缺 `webServer` 时只有那一行不激活"）现在由
-   `src/presentation/pill.ts` 的软探测提供，`tests/presentation-isolation.test.ts` 逐字段对照钉住。
+   `src/pill/start.ts` 的软探测提供，`tests/pill-isolation.test.ts` 逐字段对照钉住。
    ⚠️ **那一半的内容已经换了**：1.1.0 是"右栏自动弹码"，`[未发布]`（1.2.0）把它与终端文本码
    一起删掉，换成状态栏那颗 pill——**配对入口只剩 pill，`/drc pair` 已不存在**。
    §9.1 里那些 `sidebar.*` / `/pairing?session=` 的取证是**当时**的事实，别当成现状。
@@ -311,8 +311,8 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     **推论两条**：软探测要配"晚到补挂"，但**别指望它能替代闸门**——要"服务到位之后再激活"就声明它；
     而只有一个**同步返回服务的假 ctx** 的 fixture 抓不到这类 bug（"绿"和"绿的是当前代码"是两件事，
     见第 15 条；这里还要再加一条："绿"和"绿的是屏幕上的东西"也是两件事）。
-    现在两侧假 ctx 都能演晚到：`presentation-isolation.test.ts` 的 `lateWeb`/`flushInject`，
-    `presentation-client-bundle.test.ts` 的 `lateSlots`/`flushInject` + `ctx.slots` 那个 getter。
+    现在两侧假 ctx 都能演晚到：`pill-isolation.test.ts` 的 `lateWeb`/`flushInject`，
+    `client-bundle.test.ts` 的 `lateSlots`/`flushInject` + `ctx.slots` 那个 getter。
 
 18. **`api.npmjs.org/dependents` 已经退役，对小包一律 404——那不是"没人依赖"。**
     2026-10-03 我据此说过 `dsh-remote-wire` "0 反向依赖"，被用户当场质疑后查注册表才发现：
@@ -455,7 +455,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 
 **删掉兜底之后补的那道锁**：配对入口不可用（没 `webServer` / 路由挂不上 / `pill.enabled:false`）
 现在必须在 `status.json` 里留 `warn:pill` + `pill` 探针——否则表现是"这台主机配不了对，
-而没有任何地方说为什么"。`tests/presentation-isolation.test.ts` 五种形态各钉一条。
+而没有任何地方说为什么"。`tests/pill-isolation.test.ts` 五种形态各钉一条。
 **这条 warn 是每次写快照时现判的，不是在 `apply()` 里 push 一次的**：真机重启后抓到过
 `pill.routes="registered"` 与 `problems=["warn:pill"]` 并存——`webServer` 是 `ctx.inject`
 的回调晚到的，apply 那一刻它还不在，一次性判断就把启动快照冻成了永久告警。
@@ -471,7 +471,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 **这一轮新抓到的一个真缺陷**（是新写的对照测试抓的，不是老测试）：三条路由依次 `register`，
 第二条抛错时第一条**没被回滚**，于是它永久留在宿主上、`stop()` 再也拿不到注销函数——
 表现会是"重载一次之后那颗 pill 再也不出现"。修法在 `registerPillRoutes` 里，
-判据是 `presentation-pill-routes.test.ts` 的"第二条挂不上时第一条必须被回滚掉"。
+判据是 `pill-routes.test.ts` 的"第二条挂不上时第一条必须被回滚掉"。
 
 **e2e 补上了此前那条空白**（§9.4 说过"e2e 没覆盖那三条新路由"）：`e2e/run.mjs` 现在给假
 `webServer`，在**真中继在线**时点那三条——发码、幂等复点同一张、PNG 的 `ETag` 与主机维护的
