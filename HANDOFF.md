@@ -6,17 +6,25 @@
 
 ## 0. 一句话状态
 
-产品已经开源成 **GitHub 上四个独立仓**（账号 `providcc`，MIT），两个 npm 包已发布，四仓 CI 全绿。
+产品已经开源成 **GitHub 上四个独立仓**（账号 `providcc`，MIT），四仓 CI 全绿。
+**npm 上现在有两个包**：`dsh-remote-wire@1.0.0`（协议）与 `dsh-remote-control@1.1.0`（宿主插件）；
+**两个都还没有 provenance**（`/-/npm/v1/attestations/...` 实测 404），原因与修法见 §3 第 1 条。
+**中继不发 npm**：`dsh-remote-server` 这个包名属于第三方（`bondzhu`/`MRZHUH`，一个走 SSH 执行命令的
+无关工具），2026-10-03 试过接发布线之后撤回，细节与留下的闸门见 §9.7。
+
 **伞仓已经不再持有源码副本**：`apps/server`、`packages/{protocol,plugin,presentation}`、`mp`
 五棵树已删除（提交 `f5a6853`），代码的唯一事实源就是那四个开源仓目录。伞仓只剩下
 **不开源的取证与运维资产**：`e2e/`、`scripts/`、`docs/`、`deploy/`。
 
 生产中继跑的是**开源仓已发布的 v1.0.1 产物**：先 `shasum -c SHA256SUMS` 校验再从 Release 下载，
-scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回到 1（线上宿主插件自动重连
-到新中继）——"能换"是这么证的，不是猜的。私有那套 2.x 编号作废，以后只有开源的号。
-**本轮（2026-10-03 上午）又往前走了一步**：右栏那一半折进主插件并发出 `dsh-remote-control@1.1.0`，
-真宿主装的就是这个版本，`live-e2e --rounds 2` 36 项全过、那条同域路由在真机上取证成功（§9）。
-线上"已发布的产物"与"在跑的字节"是同一个（sha256 两侧实测相同）。
+scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回到 1——"能换"是这么证的。
+私有那套 2.x 编号作废，以后只有开源的号。
+
+**配对入口已经收敛成一条**（2026-10-03 下午到深夜）：状态栏那颗 pill。右栏自动弹码、终端文本码、
+`/drc pair` 三条旧路全部删除，配置键换成 `pill.enabled`；**已在真屏幕上复验两次**
+（点一下出 QR + 6 位码 + 倒计时，`epoch`/`ETag`/`sha256` 三者原子对上，`problems` 为空）。
+但**还没发版**：npm 上仍是 `1.1.0`，本机 profile 跑的是未发布的 HEAD 产物（字节见 §0.2）。
+同一轮还把四仓的死代码清了一遍（§9.6），并撤回了一次中继发包（§9.7）。
 
 > ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **113 pass / 0 fail**，
 > `node e2e/run.mjs` = **17 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×2 产物 0 失败。
@@ -47,7 +55,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 | | 版本 | 从哪来 | 现状 |
 |---|---|---|---|
 | 生产中继 | **`1.0.1`** | `dsh-remote-server/`（开源仓已发布产物） | ✅ 线上字节 = Release 产物（sha256 `45526fd5…180c9` 两边实测相同，2026-10-03 复核） |
-| 生产宿主插件 | **`1.1.0`** | `dsh-remote-control/`（折并后单一 bundle） | ✅ 已装进 `~/.dsh/profiles/desktop`，退役的 `dsh-remote-control-presentation` 目录与 bundles 条目都已摘掉；live-e2e 真机 36/36 过（见 §9） |
+| 生产宿主插件 | **未发布的 HEAD**（npm 上还是 `1.1.0`） | `dsh-remote-control/`（单一 bundle：`index.js` + `client.cjs`） | ⚠️ `~/.dsh/profiles/desktop` 里装的是 §9.6/§9.7 之后的产物字节（`index.js` `231e20b40e1f…`、`client.cjs` `3509d7a8330c…`，2026-10-03 深夜 `shasum` 实测），**不是 npm 上的 1.1.0**。要么发 `1.2.0` 把它转正，要么 `npm pack dsh-remote-control@1.1.0` 解出来覆盖回去——两条都要重启宿主才算数 |
 | 协议 / 小程序 | 开源 `dsh-remote-wire@1.0.0` / mp `aac0f60` | 私有树那两份在飞改动已移植并各自跑绿 | ✅ 私有树删除后唯一事实源就是开源仓；**别再引用 `packages/*`、`apps/server`、`mp/` 这些伞仓旧路径** |
 
 ## 1. 四个开源仓（这是要长期留存的东西）
@@ -55,7 +63,7 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 | 仓 | 内容 | npm 包 | HEAD（本次） | Release | CI |
 |---|---|---|---|---|---|
 | `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.0`**（用户 2026-10-03 定：**不下**，两边都引用它） | `beff2e6` | `v1.0.0`（`v1.0.1` 待发，卡在 TP） | 绿 |
-| `dsh-remote-server/` | 零知识中继（单文件产物 + **`drc-relay` 命令**） | 将发 **`dsh-remote-server@1.1.0`**（`bin: drc-relay`，产物同一个文件；TP 待配） | `78622e2` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
+| `dsh-remote-server/` | 零知识中继（单文件产物） | **不发**：`dsh-remote-server` 这个包名属于第三方（`bondzhu`/`MRZHUH`），试过又撤回，见 §9.7 | `d174787` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
 | `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.1.0`**（`1.2.0` 待发） | `a0be454` | **`v1.1.0`** | 绿 |
 | `dsh-remote-mp/` | 微信小程序客户端 | 不发 | `aac0f60` | 无（用户 2026-10-03 定：mp 只是象征性开源，不打 Release） | 绿 |
 
@@ -82,12 +90,12 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 **fork 要改的东西**：`dsh-remote-mp/project.config.json` 里的 `appid` 是本项目自用的（仓内 README
 第 60-61 行已写明），别人跑自己的必须换成自己的 appid，真机还要在微信后台配 socket 合法域名。
 
-**怎么发一个新版**（`dsh-remote-wire` / `dsh-remote-control` / `dsh-remote-server`）：改
+**怎么发一个新版**（`dsh-remote-wire` / `dsh-remote-control`——**只有这两个发包**）：改
 `package.json` 版本 → 提交 → 推 main → 打 `v<版本>` 并推标签 → Release 工作流自己跑校验、
-发 npm、建 GitHub Release。标签与包版本不一致工作流会主动失败。**中继仓现在两条分发路一起出**：
-GitHub Release 挂单文件 + `SHA256SUMS`，同时发 npm 包（`drc-relay` 就是那个文件，`bin` 与
-`main` 同指 `dist/bundle/main.js`），两条都走 OIDC provenance。
-**三个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
+发 npm、建 GitHub Release。标签与包版本不一致工作流会主动失败。**中继仓不在这份名单里**：它的
+Release 只挂单文件产物 + `SHA256SUMS`，**不发 npm**——`dsh-remote-server` 这个包名属于第三方
+（`bondzhu`/`MRZHUH`），2026-10-03 接过一次发布线又撤回，闸门与原因见 §9.7。
+**两个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
 Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 attestation"）——见 §3 第 1 条。
 
 ## 2. 伞仓里剩下的东西（都不开源，也都不再持有源码副本）
@@ -99,7 +107,7 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 | `e2e/` | 全部取证资产：逐字节对拍、本地全链路、生命周期、live-e2e。**开源仓里没有等价物** |
 | `scripts/` | `validate-qr.mjs`（改二维码必跑）、`mp-*.mjs` 等 |
 | `docs/DESIGN.md`、`docs/DESIGN-REVIEW.md` | 契约表 B1-B9 / F1-F13 / T1-T8、偏离 D1-D9、复核结论。开源仓的 `docs/` 是它们的**换算过名字的历史副本** |
-| `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（含 `sidebarQr`）、`status.json` 字段与本机实测值、右栏路由的 curl 取证配方、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
+| `docs/HOST-SIDE.md` | **本机宿主侧**手册：profile 安装语义、配置键全表（现在只有 `pill.enabled` 这一族）、`status.json` 字段与本机实测值、pill 那三条路由的 curl 取证配方（含 `epoch`↔`ETag`↔`sha256` 的原子核对与"AX 树不给内容时按像素找那颗 6px 灯"的兜底）、live-e2e 的配对码前置与"改配置要成对还原"。中继侧部署**不在这份里**，权威是 `dsh-remote-server/docs/SELF-HOSTING.md`——伞仓原来那份同名副本（还写着 `apps/server`/`@dsh-rc/*`/`2.0.0`）已删，别再复制回来 |
 | `docs/legacy-spec/` | 重写前从旧实现提取的事实档案 |
 | `HANDOFF.md`（本文） | 伞仓**没有 remote**，这些提交只在本地 |
 
@@ -139,11 +147,10 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
    可行的两条修法：**(a)** `npx -y npm@12.2.0 login`（会写一把 npm 12 认的会话凭据，
    跑之前先备份 `~/.npmrc`，它会被覆盖）之后再 `npx -y npm@12.2.0 trust github …`；
    **(b)** 直接给 trust 带 `--otp=<6位>`（口令码 30s 一换，得现拿现用）。npm 需 ≥ 11.15.0，
-   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。三包各一条（中继 2026-10-03 起也发 npm）：
+   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。**两包各一条**（中继不在内：它不发 npm，见 §9.7）：
    ```sh
    npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
    npm trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol  --file release.yml --allow-publish
-   npm trust github dsh-remote-server --repo providcc/dsh-remote-server   --file release.yml --allow-publish
    ```
    ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
    不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
@@ -213,10 +220,11 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
 6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
-7. **「点一下配对」那颗 pill 要在真屏幕上验一次，然后才谈发版**（细节与做法见 §9.4）。
-    顺序是有意的：先配好 §3 第 1 条的 Trusted Publishing，再发 `1.2.0`——
-    用 token 发就又是一版"没有 attestation 且永远补不上"的包。
-    ⚠️ 验 pill 要重启用户本机那个 DeepSeek Harness（它是用户正在用的应用），**动手前问一句**。
+7. **发 `dsh-remote-control@1.2.0`**（pill 收敛 + §9.6 那轮清理都在里面）。
+    pill 的真屏幕复验**已经做完**（§9.5 末尾与 §9.6：点一下出码、`epoch` 三者原子一致、
+    `problems` 为空；挤不动那一排时也不再逐字断行）。剩下的顺序是：先配好 §3 第 1 条的
+    Trusted Publishing，再抬版本打标签——用 token 发就又是一版"没有 attestation 且永远补不上"的包。
+    ⚠️ 每次换产物都要重启用户本机那个 Harness（它是用户正在用的应用），**动手前问一句**。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
@@ -306,6 +314,19 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
     现在两侧假 ctx 都能演晚到：`presentation-isolation.test.ts` 的 `lateWeb`/`flushInject`，
     `presentation-client-bundle.test.ts` 的 `lateSlots`/`flushInject` + `ctx.slots` 那个 getter。
 
+18. **`api.npmjs.org/dependents` 已经退役，对小包一律 404——那不是"没人依赖"。**
+    2026-10-03 我据此说过 `dsh-remote-wire` "0 反向依赖"，被用户当场质疑后查注册表才发现：
+    已发布的 `dsh-remote-control@1.0.0/1.1.0` 的 manifest 里明明白白写着
+    `"dsh-remote-wire": "^1.0.0"`。**判断"有没有人依赖一个包"的可用镜头只有两个**：
+    `curl -s https://registry.npmjs.org/<自己的包>/<版本>` 读它的 `dependencies` 字段，
+    以及"谁 import 这个符号"的全仓 grep。`https://api.npmjs.org/downloads/...` 同样会返回
+    `package not found`（对零下载的新包），**空结果先问是用什么 lens 得到的**。
+19. **`files` 白名单写一个不存在的路径，npm 不报错，只是静默不打包。**
+    同一轮里我把 `"SELF-HOSTING.md"` 写进 `files`，而它实际在 `docs/` 下——`npm pack` 退出码 0，
+    清单里就是没有它。发现方式是 `npm pack --dry-run` 的逐行清单（**别用 `tail`，前几行会被切掉**）。
+    判据两条：`npm pack --dry-run` 输出里逐项都在，以及测试里对 `pkg.files` 每一项跑一次
+    `existsSync`。同理 `bin` 指的文件必须真的在 `files` 里，否则装出来是个空壳。
+
 17. **删"防御性代码"之前，先问另一侧实现怎么处理同一个输入**（2026-10-03 晚删错一次）。
     协议仓 `normalizePairingToken(raw: string)` 开头的 `String(raw ?? '')` 看着像"替违反类型的
     调用方兜底"——类型是 `string`，`?? ''` 永远走不到。删掉之后伞仓 `e2e/protocol.test.mjs` 的
@@ -338,7 +359,7 @@ cat ~/.dsh/dsh-remote-control/status.json                 # 插件侧真相
 env -u NODE_OPTIONS node e2e/run.mjs                      # 本地全链路
 env -u NODE_OPTIONS pnpm -r test                          # 伞仓闸门 = e2e 全部 *.test.mjs + run.mjs
 env -u NODE_OPTIONS npm --prefix dsh-remote-mp run check   # 小程序三道闸（verify/theme/contrast）
-env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑（28 组 ×3 产物）
+env -u NODE_OPTIONS node scripts/validate-qr.mjs          # 动过二维码必跑（28 组 ×2 产物：PNG 与裸矩阵）
 gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 ```
 
@@ -351,7 +372,8 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 | 中继版本尾巴收掉：发 `v1.0.1`，并把**已发布的产物**部署上线 | Release v1.0.1 带 `dsh-remote-relay.mjs` + `SHA256SUMS`；`shasum -c` OK 后才 scp；线上 `/healthz` 报 `version:"1.0.1"`、`hosts:1`（重启后主机自动重连成功） |
 | 插件的"假事实"bug 移植进开源仓 | control `5bd4227`，224 项全绿，CI success |
 | mp 的在飞改动移植进开源仓 | mp `aac0f60`：`npm run check` 三道闸全过（verify / theme:check / contrast 242 组达标），私有标识符扫描为空 |
-| **e2e 跑绿**（§0 那条警告已消） | 伞仓 `cb5297f`：`pnpm -r test` = 112 pass / 0 fail + 全链路 16 步 0 失败；`validate-qr` 28 组 ×3 产物 0 失败。顺带抓到并修掉"帧抓取只装了一份 `ws`"那条装置级缺陷（§4 第 10 条） |
+| **e2e 跑绿**（§0 那条警告已消） | 伞仓 `cb5297f`：`pnpm -r test` = 112 pass / 0 fail + 全链路 16 步 0 失败；`validate-qr` 28 组 ×3 产物 0 失败。顺带抓到并修掉"帧抓取只装了一份 `ws`"那条装置级缺陷（§4 第 10 条）。
+      **这行是当时的数**：文本码删除后 validate-qr 变成 ×2 产物，全链路 17 步、e2e 单测 113（现值见 §0） |
 | **presentation 折进主插件，control 仓只剩 `packages/plugin`** | control `a3025a3`（`feat!`，版本 `1.1.0`）：`pnpm typecheck && pnpm -r test` = **280 pass / 0 fail**，`format:check` 过；隔离由 `src/presentation/sidebar.ts` 软探测 + `tests/presentation-isolation.test.ts` 逐字段对照提供（没有 webServer / 正常 / `register()` 抛错三种形态都覆盖）；`install-to-profile.sh` 改成一个 bundle 并退役旧条目；CI 产物校验点名 `client.cjs` |
 
 **同一轮做完并有真机证据的（2026-10-03 上午）：**
@@ -495,7 +517,7 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 的并行会话清 `dist/`，不是想象出来的竞态）。另外用户拍板**保留** `validate-qr` 的"裸矩阵"那条腿
 ——它是插件 `qrMatrix` 的唯一外部消费者，删了编码器几何回归就只能靠 PNG 间接发现。
 
-闸门（清理后全绿）：protocol **80**、server **78（1 skip）**、control **262**、伞仓 e2e **17 步 0 失败**、
+闸门（清理后全绿）：protocol **80**、server **79（1 skip）**、control **262**、伞仓 e2e **17 步 0 失败**、
 `node --test e2e/*.test.mjs` **113**、`validate-qr` 28 ×2、四仓 `format:check` 与 `noUnusedLocals`/`noUnusedParameters` 干净。
 
 **同轮补的一个界面细节**（control `a0be454`）：宿主 dock 挤不下时会给每一项自己截断
@@ -504,3 +526,36 @@ actions / 删掉 `pair` 的 pill 分支 / 把 200+`unavailable` 当成功 / `ins
 `white-space: nowrap`、`.drc-label` 给 `min-width: 0` + `text-overflow: ellipsis`，全文留在
 `title`/`aria-label` 上。**这类"CSS 写在模板字符串里"的判据只能断言注入样式的那两条规则**
 （假 DOM 不排版），而模板字符串里**不能出现反引号**——第一版注释就因为它把 CSS 断了行。
+
+### 9.7 中继试发 npm 又撤回（2026-10-03 深夜，server `78622e2` → `d174787`）
+
+用户先要"wire 下掉、server 也发 npm"。两件事都**没照原样执行**，各有各的原因：
+
+1. **wire 不能下**：17 处 import（中继 5、宿主插件 12）在用它，1390 行源码必须有归宿；
+   而且**已发布的 `dsh-remote-control@1.0.0/1.1.0` 的 manifest 里写着 `dsh-remote-wire: ^1.0.0`**，
+   真下掉会让那两个版本 `npm install` 直接 404。用户拍板"不能删除，两边都引用"→ 不动。
+   ⚠️ 我一度拿 `api.npmjs.org/dependents` 的 404 当"没人依赖"的证据——**那个接口已退役、
+   对小包一律 404**，读它等于没读。真正的证据在注册表 manifest 里（见 §4 第 18 条）。
+2. **server 发不出去**：`dsh-remote-server` 这个包名在 npm 上属于 `bondzhu` /
+   `MRZHUH/dsh-remote-server`（0.1.1，2026-08-17 发，"在 DSH 会话里 @ 服务器走 SSH 执行命令、
+   两级审批"——**跟我们毫无关系，但同名**）。发布前查名是免费的，发布后才撞就是 403。
+   用户拍板"先不发"。
+
+**撤回时最要紧的一条不是回滚代码，是回滚文档**：那几分钟里 README 与 `SELF-HOSTING.md` 已经写上了
+`npm i -g dsh-remote-server` + `drc-relay`——**照做的人装到的是别人的一个能执行命令的工具**。
+现在两处都改成"本仓不发 npm，别照抄那条命令"，并且有一条闸门测试钉住半发状态：
+`private` 必须为 `true`、`bin`/`files` 不许回来、`release.yml` 里不许出现 `npm|pnpm publish|pack`
+与 `id-token: write`（变异验证：去掉 `private` 立刻红）。
+
+**撤回之后仍然留下的两条修正**（与发不发 npm 无关，是产物事实）：
+
+- `dependencies` 清空、`ws` 移到 `devDependencies`：产物早就把 `ws`/`zod`/`dsh-remote-wire`
+  内联了（`bundle-relay` 的日志会列出内联了哪几个包），列在运行时依赖里就是让源码消费者白拉一棵树。
+- 产物第一行加 `#!/usr/bin/env node`：于是 `install -m 755 relay.mjs && ./relay.mjs` 成立。
+
+**顺带学到的一条**（已写进 §4 第 19 条）：`files` 白名单里写一个不存在的路径，npm **不报错，
+只是静默不打包**——我把 `SELF-HOSTING.md` 写在根目录（实际在 `docs/` 下），是 `npm pack --dry-run`
+的清单暴露的。以后动发布形状，判据是"pack 清单里逐项都在"，不是"pnpm pack 退出码 0"。
+
+以后真要发中继包，先定名字：2026-10-03 实测 `dsh-remote-relay`、`drc-relay`、`dsh-rc-relay`
+都空着（`dsh-relay` 已被占），改动要同步 `release.yml`、上面那条闸门与两份文档。

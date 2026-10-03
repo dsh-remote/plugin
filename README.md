@@ -17,7 +17,7 @@
 | 组成 | 位置 | 作用 |
 |---|---|---|
 | **协议层** | `dsh-remote-protocol/`（npm 包名 `dsh-remote-wire`） | 帧与载荷的 zod 定义 + E2E crypto（tweetnacl）+ 配对 URI + 防休眠命令构造器。**无 I/O、无定时器、不认识平台** |
-| **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继。生产入口是**单文件产物** `dist/bundle/main.js`（`ws`/`zod`/协议层都内联在里面，运行时零依赖）；同一个文件也发成 npm 包 `dsh-remote-server`，命令名 `drc-relay` |
+| **中继服务** | `dsh-remote-server/` | 零知识 WebSocket 中继。生产入口是**单文件产物** `dist/bundle/main.js`（`ws`/`zod`/协议层都内联在里面，运行时零依赖）。分发只有 GitHub Release 的那个单文件与从源码构建两条：**本仓不发 npm**，`dsh-remote-server` 这个包名属于另一个无关项目，别照抄任何 `npm i -g` 的写法 |
 | **Host 插件** | `dsh-remote-control/packages/plugin` | 跑在 DSH 进程里的 cordis bundle：端口/适配器分层，产物是自包含单文件。**界面上那一半已折进这个包**（`src/presentation/` + 浏览器面 `client/`）：状态栏那颗"点一下配对"的 pill 是**配对的唯一入口**（右栏自动弹码与终端文本码 2026-10-03 删除） |
 | **小程序客户端** | `dsh-remote-mp/`（代码在它的 `miniprogram/` 下） | 微信小程序：配对 / 会话列表 / 对话 / 审批 / 提问 / 防休眠（**冻结，不改**） |
 | **测试装置** | `e2e/`（伞仓） | 本地全链路 + 逐字节对拍 + 生命周期 + 真实链路取证（见「测试」） |
@@ -114,7 +114,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 |---|---|---|
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 80 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
-| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **发布形状**（bin/files 白名单/运行时依赖为空/shebang） | 79（1 skip） |
+| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行） | 79（1 skip） |
 | `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的三条路由：发码幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行**） | 262 |
 | `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram、theme:check、对比度 | 242 组达标 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 17 步 |
