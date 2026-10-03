@@ -123,11 +123,18 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
    也没有可信的公开 API 路径），而那需要用户在浏览器里登录 npmjs.com——本轮用户拍板
    「先用现有 NPM_TOKEN 发 1.1.0，TP 留给下一版」。
    **下一次要做的事**（权威口径来自 npm 12 自带的 `npm-trust` 文档，不是网页猜的）：
-   CLI 就能配，不必用网页——但要**一次交互式登录**（实测：拿 `~/.npmrc` 里那把 token 直接
-   `npm trust list` 会被要求打开 `https://www.npmjs.com/auth/cli/…`，因为 trust 端点
-   **不接受带 bypass-2FA 的 Granular/Automation token**；本机 `npm profile get` 显示账号
-   `tfa.mode = auth-and-writes`，2FA 这条前置已经满足）。npm 需 ≥ 11.15.0，本机是 10.9.9，
-   所以用 `npx -y npm@12.2.0 trust …`。两包各一条：
+   CLI 就能配，不必用网页——但要**一次交互式 2FA 授权**。两条实测事实决定了它只能由人做一次：
+   - 用户在终端里 `npm login`（npm **10.9.9** 跑的）之后，`npm whoami` / `npm profile get` 都通过，
+     账号 `tfa.mode = auth-and-writes`；但 trust 端点**连只读的 `npm trust list` 都返回 `EOTP`**
+     并要求打开 `https://www.npmjs.com/auth/cli/<id>`。文档那句"带 bypass 2FA 的 Granular/Automation
+     token 不支持 trust"就是这个现象的来源——**10.9.9 写进 `~/.npmrc` 的那把不满足要求**。
+   - 所以别把 `trust list` 当确认手段：它自己也卡在授权上，返回 `EOTP` **不等于**"没配上"。
+     真正的确认只有两条：要么在**能完成浏览器授权**的那个终端里跑一次 `npm trust list <pkg>`，
+     要么直接用发布路径去撞（我们已经撞过了，见下面第 3 点）。
+   可行的两条修法：**(a)** `npx -y npm@12.2.0 login`（会写一把 npm 12 认的会话凭据，
+   跑之前先备份 `~/.npmrc`，它会被覆盖）之后再 `npx -y npm@12.2.0 trust github …`；
+   **(b)** 直接给 trust 带 `--otp=<6位>`（口令码 30s 一换，得现拿现用）。npm 需 ≥ 11.15.0，
+   本机是 10.9.9，所以一律走 `npx -y npm@12.2.0`。两包各一条：
    ```sh
    npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
    npm trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol  --file release.yml --allow-publish
@@ -142,29 +149,31 @@ Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 at
    - 两仓各加一步 `Verify provenance landed`：发布后最多轮询 60s 查 attestations 接口，
      查不到就红，并把该跑的 `npm trust` 命令原样印在报错里。
      **判据永远是那个接口，不是工作流的绿。**
-   - 协议仓顺手把版本抬到 `1.0.1` 并写了 CHANGELOG（**没有代码变更**，唯一目的就是当第一个带
-     provenance 的发布）。⚠️ **标签还没打**——TP 配好之前打，新加的自检会把它拦下来（这是设计）。
-   **只剩这一步需要人**：在浏览器里登录 npmjs.com 并批准 CLI 的 2FA 授权，然后跑
+   - 协议仓版本抬到 `1.0.1`（`13d40df`，**没有代码变更**，唯一目的是当第一个带 provenance 的发布），
+     并且**已经用发布路径本身撞过一次，得到决定性结论**：标签 `v1.0.1` 推上去后，Release 运行
+     `37101490457` **红在 `Publish to npm`**，日志还是那行 404 ⇒ **npm 侧那条 trust 配置确实不存在**。
+     同时 `npm view dsh-remote-wire versions` 仍是 `["1.0.0"]` —— **没有半发布**：Publish 是唯一的
+     网络写步骤，它一失败就不会往下建 GitHub Release。这就是删掉 token 换来的行为差异
+     （以前是"绿着发出一个没证明的版本"，现在是"响亮地失败、什么也没发"）。
+     **标签保留没删**：TP 配好之后不用重打标签，直接
+     `gh run rerun 37101490457 --repo providcc/dsh-remote-protocol --failed` 即可。
+   - **剩下唯一需要人的一步**：在能完成浏览器 2FA 授权的终端里把两包各配一条
+   （命令与凭据要求见上面 (a)/(b)）：
    ```sh
-   npx -y npm@12.2.0 trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol --file release.yml --allow-publish
-   npx -y npm@12.2.0 trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
+   npx -y npm@12.2.0 trust github dsh-remote-wire    --repo providcc/dsh-remote-protocol --file release.yml --allow-publish
+   npx -y npm@12.2.0 trust github dsh-remote-control --repo providcc/dsh-remote-control  --file release.yml --allow-publish
    ```
-   实测（2026-10-03）：`npm login` 成功后 `npm whoami` / `npm profile get` 用现在这把 token 都能读，
-   但 **trust 端点连 `trust list`（只读）都要求再走一次 `https://www.npmjs.com/auth/cli/<id>`**
-   ——那条只能人在浏览器里点，代跑会在 `Press ENTER to open in the browser…` 处挂着等授权。
-   命令要在**有 TTY 的终端**里跑（`script -q /dev/null npx …` 这种伪装能拿到 URL，但授权还是要人点）。
+   命令必须有**真 TTY**（`script -q /dev/null npx …` 这种伪装能拿到授权 URL，但点批准还是要人），
    两条之间有 5 分钟的 2FA 宽限窗口（npm 文档写明），所以连着跑第二条不再问一次。
-   ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
-   不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
-   GitHub 的 claim 只有 `repository` + `workflow file`（+ 可选 `environment`），
-   **没有 tag/分支 pattern 这种东西**。
    ⚠️ **每个包同时只能有一条 trust 配置**，要改先 `npm trust list <pkg>` 拿 id、
    `npm trust revoke --id <id> <pkg>`，再建新的。
    ⚠️ 已发布出去的版本（`wire@1.0.0`、`control@1.0.0/1.1.0`）**永远补不上 attestation**，
    这是 npm 侧的既定行为，别指望"回头再签一次"。
-   配好之后：`cd dsh-remote-protocol && git tag -a v1.0.1 -m '…' && git push origin v1.0.1`
-   → 看 `gh run watch --repo providcc/dsh-remote-protocol`，最后一步必须是
-   `provenance 已挂上：dsh-remote-wire@1.0.1`。control 不必空发一版，等下一次真改动搭车。
+   配好之后**不用重打标签**（`v1.0.1` 还在）：
+   `gh run rerun 37101490457 --repo providcc/dsh-remote-protocol --failed`
+   → `gh run watch` 看最后一步必须打出 `provenance 已挂上：dsh-remote-wire@1.0.1`，
+   再用 `curl -s https://registry.npmjs.org/-/npm/v1/attestations/dsh-remote-wire@1.0.1` 复核。
+   control 不必空发一版，等下一次真改动搭同一条链路（自检会替我们确认那时真的挂上了）。
 2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
