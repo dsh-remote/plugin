@@ -651,3 +651,49 @@ if (doc.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return   // ← �
 
 **闸门（本轮）**：control `pnpm -C packages/plugin test` **267 pass / 0 fail**、`typecheck` 过、
 `format:check` 只剩并行会话那份 `src/platform/carrier-services.ts`（不是我的改动）。
+
+#### 9.9.2 收尾提交（2026-10-03 深夜）
+
+两个仓都已落成提交，工作树干净（除下面那两条"不处理"的）：
+
+- control `ccf695a`（`feat(pill)!`）：面板收成一颗按钮 + 退出配对路由；`/drc` 整条删。14 文件 `+644/−583`。
+- 伞仓 `066181b`（`docs(pill)`）：HANDOFF / README / HOST-SIDE / MINI-PROGRAM / SECURITY 五份文档
+  + `e2e/run.mjs`。提交前 `e2e/run.mjs` 过了 `node --check`。
+
+两者都叠在并行会话刚提交的 `1d36e33`（control，`feat(plugin): 审批下发 expiresAt…`）与
+`f7280b4`（伞仓，`test(chat): 探针与截图…`）之上。
+
+`~/.dsh/profiles/desktop` 已用新源码重装并核对字节：`index.js` `9ed00a0a…` / `client.cjs` `b7bee07c…`；
+把 bundle 里非 ASCII 解出来是 `刷新`×2、`已断开连接`×1、`退出配对`×2、`生成配对码`×2、`drc-hint` **0**
+——⚠️ esbuild 把这些写成**大写** `\uXXXX`（`\u5237\u65B0`），按小写那套 grep 会假报 0。
+
+**没处理的两条（只记事实，不动手）**：
+
+1. `format:check` **只剩**并行会话那份 `src/platform/carrier-services.ts`——它随 `1d36e33` 提交进来，
+   不是这一轮碰的（`prettier` 想去掉的只是空行与两处换行）。CI 若在 build 前跑 `format:check`，
+   control 仓 main 会因这一条变红；要不要顺手 `prettier --write` 由用户定。
+2. `~/.dsh/profiles/desktop/cordis.patch.yml.bak-*` 有 10 个备份，其中 **6 个含 `hostToken`**（权限 0600）。
+   清不清、清哪些等用户点头。
+
+**还欠着的（用户 2026-10-03 选择"先别重启 / 先等等"）**：
+
+1. **重启宿主、真屏幕复验**——重装那半已做完，只差"重启 + 看一眼"；
+2. **伞仓全量 e2e**（`node e2e/run.mjs` + `node --test e2e/*.test.mjs`）在干净工作树上补跑。
+
+#### 9.9.3 面板正文补成中继 / 状态 / 版本三行（2026-10-03 深夜，用户当天第二次点单）
+
+用户看到真屏幕（§9.9.1 那版）："弹窗现在状态只剩 中继 一个了，有点单薄，再加两个有必要显示的状态，
+组合 3 个。" 三个候选摆给他挑（中继+本机+版本 / 中继+本机+已配对 / 中继+状态+版本），他选了**第三条**。
+
+| 面 | 改动 | 判据 |
+|---|---|---|
+| **第三行数据** | `GET …/status` 加 `version`——**非凭据**（本机装的这一版号）；`PillStatus` 加 `version` | `pill-routes.test.ts` 字段集合四条 + `pill-isolation.test.ts` 的 `/status` 断言 |
+| **版本从哪来** | 新增 `src/version.ts`：`typeof __DRC_VERSION__ === 'string' ? __DRC_VERSION__ : 'dev'`；`bundle-plugin.mjs` 读 `package.json` 的 version 注入 `define` | 构建后 `dist/bundle/index.js` 里是 `var PLUGIN_VERSION = true ? "1.2.0" : "dev"`、`__DRC_VERSION__` 残留 0；源码直跑那条由 isolation 测试钉成 `'dev'` |
+| **正文三行** | `relayRow` / 新增 `relayStateRow`（online=已连接、connecting=连接中、offline=已断开、idle=未启动、其余=空串）/ 新增 `versionRow`；`relayBlock` 换成 `infoRows()`，**每一行拿不到值就不建那一行** | `client-bundle.test.ts`：三条新断言（三行的键值对与次序 / 老版路由没给 version 时那一行消失 / `状态` 按 relay 翻译）；`FakeElement` 加了 `findAll` |
+| **样式** | `.drc-info + .drc-info { margin-top: 2px; padding-top: 0; border-top: 0 }`——只有第一行画那条分隔线 | 同上那两条渲染断言 |
+
+**闸门**：control `pnpm -C packages/plugin test` **269 pass / 0 fail**、`typecheck` 过、
+`format:check` 仍只剩并行会话那份 `carrier-services.ts`。提交为 control `ab36a15`（`feat(pill)`），
+伞仓文档与 `e2e/run.mjs` 随本次提交一起走（`e2e/run.mjs` 的 `/status` 字段集合也加了 `version`）。
+重装已做（`index.js` `0695d8c9…` / `client.cjs` `13b78528…`，host bundle 里 `PLUGIN_VERSION` 那行实测是
+`true ? "1.2.0" : "dev"`）；仍**没重启**，屏幕上还没看见这三行。

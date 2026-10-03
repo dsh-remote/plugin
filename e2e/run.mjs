@@ -893,8 +893,8 @@ export async function main() {
       assert.equal(before.body.relay, 'online', `pill 要说实话：${JSON.stringify(before.body)}`)
       assert.deepEqual(
         Object.keys(before.body).sort(),
-        ['paired', 'relay', 'serverUrl'],
-        '状态路由多一个字段就要重新审一遍（三个全是非凭据）',
+        ['paired', 'relay', 'serverUrl', 'version'],
+        '状态路由多一个字段就要重新审一遍（这四个全是非凭据；version 是面板第三行）',
       )
 
       // 2) 点一下：真向中继申请一张码。回答带 token/epoch，**不带 psk、不带完整 URI**。
