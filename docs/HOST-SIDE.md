@@ -19,7 +19,7 @@
 
 | 产物 | 跑在哪 | 干什么 |
 |---|---|---|
-| `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**挂 3 条同域路由给那颗 pill（发码 / 图片 / 状态） |
+| `dist/bundle/index.js` | DSH 的 Node 侧（cordis fiber） | 配对、中继连接、会话与命令、审批转发、防休眠，**外加**挂 4 条同域路由给那颗 pill（发码 / 图片 / 状态 / 解配） |
 | `dist/bundle/client.cjs` | DSH 的浏览器面（`window.__ModuleLoader__`） | 向装载器拿 `react`、软探测 `slots`、往 `conversation.composer.dock` 注册那颗 pill：抬头显示连接状态（2s 轮 `/status`），**点开是精简面板**——一行状态 + 一行中继地址 + 右上角一颗按钮（未配对=`生成配对码`、已配对=`退出配对`），发码要按那颗按钮（`POST /pairing/new`），退出配对按同一颗（`POST /unpair`） |
 
 宿主注入的东西（`cordis`、`@deepseek-ai/*`）刻意**留在 externals**——打进去会造成两份实例。
@@ -124,7 +124,12 @@ cat ~/.dsh/dsh-remote-control/status.json
 - `problems`：`level:field` 形态的诊断清单。除配置问题外还包括 `warn:pill`（没有配对入口）与 `warn:pairOnStartSec`（status.json 里带着有效码）。配置那条的原因全文在宿主日志里（`apply` 时逐条 log），**`warn:pill` 的原因只在同一个快照的 `pill` 探针里**——所以那一条要看上面那个字段，别在日志里找。
 - 已经删掉的键（`qrImage`/`qrOpen`/`qrAnsi`/`qrStyle`/`sidebarQr`）留在 profile 里**什么效果都没有**，也不会有一条 warn——2026-10-03 曾经为这五把键留过告警表，当天按"删了就不会回来，用到再重写"撤了。看到 `problems` 里没有它们**不是漏报**。
 - `outbound`：按载荷类型的出站计数——分清"插件没发"还是"发了但路上丢了"。
-- `kernel.*`：`eventTypes` / `unmappedEventTypes`（内核发了但我们没认）、`listenerErrors`、`approvalFace` / `questionsFace`（人工交互那两面到底登记上没有）。
+- `kernel.*`：`eventTypes` / `unmappedEventTypes`（内核发了但我们没认）、`listenerErrors`、
+  `approvalFace` / `questionsFace`（人工交互那两面到底登记上没有），以及审批那**四条读数**：
+  `approvalCalls`（监听器真被派发过几次）、`approvalLast`（最后一次走到哪一步）、
+  `approvalAsked` / `approvalDecided`（内核自己报的审计：问过几次、最后一次怎么收的场）。
+  **`approvalFace=registered` 不等于"能弹卡"**——它只证明挂上去了；派发按作用域过滤、
+  又按 waterfall 顺序排队，所以"没弹"有三种形状，靠这四条读数才分得开（取证见 HANDOFF §9.10）。
 - `probe`：`applyCount`（同一进程内 `apply` 被调了几次——bundle 被重复挂载能看出来）、`injectChildren`、`fiberStates`。
 - `pairing`：只有开了 `pairOnStartSec` 才有（`token`/`psk`/`expiresAt` ISO/`qr`/`ageSec`）。
 

@@ -30,7 +30,13 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 **没有**本机名 / 状态 / 已配对那几行、没有「再配一台」、也没有「换一张」（码过期不再自动换）；
 配上之后面板从二维码翻回状态视图。宿主侧那四条路由多了一条 `POST …/unpair`。
 上一版面板已在真屏幕上复验三次（§9.8，`epoch`/`ETag`/`sha256` 三者原子对上、`problems` 为空）；
-**这一版面板改动尚待重装宿主复验**——而且第一次复验已经撞上一个"新 JS + 旧 CSS"的错位（§9.9）。
+§9.9/§9.9.1 那一版第一次复验撞上了"新 JS + 旧 CSS"的错位（已修），§9.9.3 又把正文补成三行。
+**这几版都已重装并重启到屏幕上**（那颗 pill 在真屏幕上看得见、抬头是绿的 `已配对`，
+`GET …/status` 实测回 `{relay,paired,serverUrl,version}` 四个字段），**只剩"面板正文那三行"
+还差人在屏幕上点一下那颗 pill**——这台机器上 Computer Use 走不通（AX 树只交出菜单栏，
+截图策略 `AX_ONLY` 让坐标点击一律被拒，见 §9.10 末）。
+**审批卡这一轮（§9.10）第一次真机闭环**：手机真的收到 `ev.permission_request`、回了"允许一次"、
+主机侧 `approvalDecided=allowed-once`。
 这一轮**已经发版的是 1.2.0**（§9.8）：control `1.2.0` 带 provenance 发到 npm（发布运行 14 步全绿，
 attestation 已用 curl 复核），`~/.dsh/profiles/desktop` 里装的字节与 npm 上那版一致（§0.2）；
 **§9.9 这一版跑在 1.2.0 之后的未发布改动上**，工作树里的版本号还没动。同一轮还把四仓的死代码清了一遍（§9.6），
@@ -203,9 +209,12 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    不是依赖不兼容；唯一真实的不兼容是 **typescript 7**：协议仓的 `tsc` 不再自动纳入 `@types/node`
    （`Cannot find name 'TextEncoder'` 一类），加一行 `"types": ["node"]` 就修好，且对 TS 5.9 中性。
    **本轮没有合任何一个**（用户只要证据清单）。
-6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
-    审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
-    这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
+6. **✅ 审批卡已真机闭环（2026-10-04 凌晨，见 §9.10）**；**还欠一条：提问卡**。
+    审批那条以前"没弹"不是策略问题也不是手机问题，是我们登记 `approval/request` 的方式
+    （要 `{global:true, prepend:true}`），修法与读数都在 §9.10。
+    提问卡仍未取证的原因是**宿主版本**：这一代 `ctx.userQuestions` 不带 `registerProvider`，
+    而且 `takeOverQuestions` 默认关（开了会剥夺桌面 UI 的提问能力）。两条都有本地闭环测试。
+    ⚠️ 别把审批策略改回 `never` 来"排除干扰"——用户已表态，**别再问第二遍**。
 7. **✅ `dsh-remote-control@1.2.0` 已发布**（2026-10-03 深夜，pill 收敛 + §9.6 那轮清理 + §9.8 文案都在里面）。
     发布运行 14 步全绿、带 provenance（注册表 curl 复核过），GitHub Release `v1.2.0` 已建。
     pill 的真屏幕复验做了三次（§9.5/§9.6/§9.8）。
@@ -697,3 +706,101 @@ if (doc.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return   // ← �
 伞仓文档与 `e2e/run.mjs` 随本次提交一起走（`e2e/run.mjs` 的 `/status` 字段集合也加了 `version`）。
 重装已做（`index.js` `0695d8c9…` / `client.cjs` `13b78528…`，host bundle 里 `PLUGIN_VERSION` 那行实测是
 `true ? "1.2.0" : "dev"`）；仍**没重启**，屏幕上还没看见这三行。
+
+### 9.10 审批卡修好：`approval/request` 那条 waterfall 要 `global` **且** `prepend`（2026-10-04 凌晨）
+
+用户拿手机截图回来一句话："弹窗还是有问题，先解决"。截图里主机侧的 agent 明说
+"现在审批策略是 `ask`，所以我把这次重试发出去，**让你看到审批弹窗**"，而手机上那条步骤停在
+"正在执行"、**一张卡都没有**。这一轮从"没弹"查到"闭环"，中间走错了一次，两步都值得记。
+
+**第一现场（改代码之前先取的数）**：`status.json` 里 `approvalFace=registered`、
+`eventTypes` 有 `approval/asked`、`problems` 是空的，而 `outbound` 里**连
+`permission_request_no_peer` 都没有**——那个计数在发送之前就 +1，所以"没有计数"=
+"根本没走到发送"。协议层（`ev.permission_request` / `cmd.resolve_permission` 都在
+`dsh-remote-protocol`）与手机层（`chat.js` 的 `_onPermission` + `chat.wxml` 那张
+`需要审批` 卡，初始提交就有）都不是断点。
+
+**根因在登记方式，不在读请求的那几行**。宿主派发用的是
+`ctx.waterfall(scopeTarget(req.agent, req.agent), 'approval/request', req, next)`
+（桌面 asar 里 `ApprovalService.decide`，取证方式见下面那条"读平台实现"），而 cordis 的
+`dispatch()` 判据是 `hook.global || !filter || filter.call(thisArg, hook.ctx)`，
+`scopeTarget` 的 filter 只放行"未打标签的上下文"与"派发键的**祖先**作用域"
+（原文注释：'A tag BELOW the dispatch key stays excluded — events flow up the chain, never down'）。
+插件那条 fiber 与 agent 作用域是**兄弟**——于是登记成功、`registered` 报得理直气壮，
+监听器一次都不会被调用。第一版改成 `{ global: true }`（`EventOptions` 的原文：
+'Receive the event regardless of context filter checks'）。
+
+**第一版不够，而这是真机告诉我的**：装上去复测，`approvalCalls` 仍然是 0。
+于是加了两条读数 `approvalAsked` / `approvalDecided`（内核自己报的审计面），再量一次拿到
+**`approvalAsked=1`、`approvalDecided=not-seen`、`approvalCalls=0`** ——
+"请求确实派发了、还卡着没结论、但我们没被调用"，这三件事同时成立只剩一种解释：
+**waterfall 是"外层不 `next()` 内层永远轮不到"，而 `dispatch()` 返回数组的第一个就是外层**
+（`register()` 用 `unshift` 实现 `prepend`），桌面 UI 的应答者登记得更早，它一拿到请求就去等
+真人点按钮且不 `next()`。补上 `prepend: true` 之后一次跑通完整闭环。
+
+**"没人答"与"别人抢先答了"在现场长得一模一样**——这一轮如果不是先加了 `approvalDecided`，
+第二版就会往"还是被过滤了"那个方向去查。所以四条新读数（`approvalCalls` / `approvalLast` /
+`approvalAsked` / `approvalDecided`）不是装饰，它们是这条链上唯一能分叉的判据。
+
+**最终真机读数**（`scripts/approval-probe.mjs` 那一轮，主机侧 + 手机侧一起对账）：
+
+| 侧 | 读数 |
+|---|---|
+| 主机 | `approvalCalls=1`、`approvalLast=answered-by-phone(allowed-once)`、`approvalDecided=allowed-once`、`outbound.permission_request=1` |
+| 手机（探针收到的原帧） | `{action:'write', reason:'escalate sandbox to workspace-write: …', options:[{approve,允许一次},{reject,拒绝}], expiresAt:…}` |
+
+**⚠️ 代价，写在 `APPROVAL_SUBSCRIBE_OPTIONS` 的注释里**：`prepend` 排到最外层，意味着也排在
+Auto 预置的自动审阅之前（那条也是 `prepend` 登记的）。本机 profile 里只有
+read-only / workspace-write / danger-full-access 三个预置，**没有 Auto，所以没有安全闸门被跳过**；
+哪天接上 Auto，这一行要重新审（正确做法大概是"先让自动审阅跑完再轮到手机"）。
+
+**新增资产 `scripts/approval-probe.mjs`**（伞仓，不开源）：配一张真码、**保持配对不动**、
+可选地自己发一条会撞沙箱的指令，然后把收到的 `ev.permission_request` 原样打出来、回一个决定、
+最后对着基线核 `approvalCalls` 有没有涨。为什么需要它：`e2e/run.mjs` 打的是 mock 内核，
+测不到 cordis 那条 waterfall 的**派发**；`live-e2e.mjs` 挑会话且跑完就解配，等不到一张卡。
+用法（`pairOnStartSec` 那条见下面"临时改过什么"）：
+
+```sh
+curl -sS -X POST -H "x-drc-pair: 1" http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing/new
+node scripts/approval-probe.mjs --session <有工具的会话 id> \
+  --prompt '用 run_code 工具调用 tools.write，把内容 ok 写到文件 approval-live.txt。如果被沙箱拒绝，请按错误信息里给的升级路径用 sandbox_permissions 重试同一次写入。'
+node scripts/approval-probe.mjs --session list        # 只看会话列表（哪条有工具）
+```
+
+三个坑都是真机踩出来的：① **探针自己读 `status.json` 会读早**（那文件按定时器刷），
+第一次就因此报过一句假的 `approvalCalls=0`，现在是"带基线地轮 15s"；
+② **会话必须真有工具**——`live-e2e` 默认挑第一条 idle，那几条是 API 建的空壳会话，
+模型会回一句"本会话根本没有给我提供任何写文件的工具"然后什么都不触发；
+③ **`--prompt` 里别写"你必须提权"**，那种命令式口吻会被模型当成不合理请求直接拒绝
+（连着两轮 914/740 字的"我做不到"就是这么来的），要写成一句自然的小任务。
+
+**读平台实现的方式**（这一轮最有效的一招，比猜快十倍）：宿主是打包过的 Electron，
+`grep -a` 直接打在 `/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 上就能拿到
+源码文本；`node -e` 把整块读进来按 `indexOf` 定位、切上下文打印，比 `grep -o` 好用。
+CLI 那一代（`/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/*`）
+带 `.d.ts`，`dsh-user-approval/lib/types/index.d.ts` 就是这道 seam 的权威签名
+（`ctx.approval` 只有 `setPolicy` / `request` / `overrideOf`，**没有注册应答者的 API**——
+应答只能靠参与 `approval/request` 这条 waterfall）。
+
+**临时改过什么、还原的证据**：为了让审批真的被问出来，改过 profile 两处
+——`pairOnStartSec: 120`（否则 `status.json` 里没有 `pairing.qr`，探针拿不到 PSK）与
+`permissionPresets.defaultPreset: danger-full-access → read-only`（默认档是 `approval: never`，
+永远不问人）。改之前整份备份到 `/tmp/cordis.patch.yml.orig-drc-approval`，跑完 `cp` 回去，
+`diff` 输出为空 = **逐字节还原**，并重启宿主让 `pairing` 回到 `null`（实测 `pairing: null`、
+`problems: []`）。⚠️ 留着 `pairOnStartSec` 等于把"仍然有效的配对码 + PSK"长期写在 0600 的
+status.json 里，这是它默认关着的原因。
+
+**顺带**：`format:check` 现在**全绿**了——`carrier-services.ts`（并行会话那份）与
+`src/transport/relay.ts`（随 `4e2528c` 进来的长签名）一起 `prettier --write` 掉了。
+§9.9.2 里"没处理的两条"的第 1 条到此结掉（第 2 条那 6 个含 `hostToken` 的备份仍未动，等用户点头）。
+
+**闸门（这一轮）**：control `pnpm -C packages/plugin test` **273 pass / 0 fail**（上一版 269）、
+`pnpm typecheck` 过、`pnpm format:check` 全绿。提交：control `ab81650`（`global`）→
+`1ed6b91`（`asked`/`decided` 读数）→ `1b0df97`（`prepend`）→ `a33c94b`（CHANGELOG）；
+伞仓随本次提交走探针与这两节文档。
+
+**这一轮还欠的**：① 手机被这几轮重启与解配踢掉了，**要用户重新扫一次码**才能在自己手机上看那张卡；
+② pill 面板正文那三行（§9.9.3）还没在屏幕上看过——这台机器上 Computer Use 走不通
+（AX 树只交出菜单栏，截图策略是 `AX_ONLY` 所以坐标点击一律被拒），只能靠用户点一下那颗 pill；
+③ 提问卡仍未取证（`questionsFace=not-taken-over`，且这一代宿主的 `ctx.userQuestions`
+没有 `registerProvider`）。
