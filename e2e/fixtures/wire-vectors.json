@@ -1,8 +1,8 @@
 {
  "_meta": {
-  "note": "由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 mp/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。",
-  "oracle": "mp/core/codec.js",
-  "oracleSha256": "b50f325b13a52fd1fd12aa6d0f4754299af2492b048b7bbe4ff9a3fd1e85497b",
+  "note": "由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 dsh-remote-mp/miniprogram/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。",
+  "oracle": "dsh-remote-mp/miniprogram/core/codec.js",
+  "oracleSha256": "2f8d7bb4b5cbb8da79b3498379502ad6010ad60ced14609bc91aa0f6b95a488c",
   "generatedBy": "e2e/tools/gen-vectors.mjs",
   "counts": {
    "text": 8,
