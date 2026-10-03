@@ -82,6 +82,8 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 **怎么发一个新版**（`dsh-remote-wire` / `dsh-remote-control`）：改 `package.json` 版本 → 提交 →
 推 main → 打 `v<版本>` 并推标签 → Release 工作流自己跑校验、发 npm、建 GitHub Release。
 标签与包版本不一致工作流会主动失败。中继仓打标签只会产出 Release + 产物附件，不发 npm。
+**两个发包仓的 Release 工作流末尾多了一步 `Verify provenance landed`**：npm 侧那条
+Trusted Publishing 没配好，发布就会红在那里（而不是"绿但没 attestation"）——见 §3 第 1 条。
 
 ## 2. 伞仓里剩下的东西（都不开源，也都不再持有源码副本）
 
@@ -127,13 +129,35 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
    不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
    GitHub 的 claim 只有 `repository` + `workflow file`（+ 可选 `environment`），
    **没有 tag/分支 pattern 这种东西**（原文里"tag pattern 建议留空"是我说错了）。
-   然后：Release 工作流的 Publish 步骤**删掉 `NODE_AUTH_TOKEN`**（留着就会像本轮这样
-   "OIDC 失败 → 静默回落 token"，版本发出去但没 attestation），打完标签后用
-   `curl -s https://registry.npmjs.org/-/npm/v1/attestations/<pkg>@<version>` 验，别看工作流绿。
+   **已经做完的两件事**（不需要 npm 侧权限，所以先落了）：
+   - 两仓 Release 工作流的 Publish 步骤**删掉了 `NODE_AUTH_TOKEN`**（control `ce8e0bf`、protocol `b11b23c`）。
+     token 在场就会掩盖 OIDC 失败；没了它，TP 没配好时发布会**直接红**，而不是发一个没证明的版本。
+   - 两仓各加一步 `Verify provenance landed`：发布后最多轮询 60s 查 attestations 接口，
+     查不到就红，并把该跑的 `npm trust` 命令原样印在报错里。
+     **判据永远是那个接口，不是工作流的绿。**
+   - 协议仓顺手把版本抬到 `1.0.1` 并写了 CHANGELOG（**没有代码变更**，唯一目的就是当第一个带
+     provenance 的发布）。⚠️ **标签还没打**——TP 配好之前打，新加的自检会把它拦下来（这是设计）。
+   **只剩这一步需要人**：在浏览器里登录 npmjs.com 并批准 CLI 的 2FA 授权，然后跑
+   ```sh
+   npx -y npm@12.2.0 trust github dsh-remote-wire   --repo providcc/dsh-remote-protocol --file release.yml --allow-publish
+   npx -y npm@12.2.0 trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
+   ```
+   实测（2026-10-03）：`npm login` 成功后 `npm whoami` / `npm profile get` 用现在这把 token 都能读，
+   但 **trust 端点连 `trust list`（只读）都要求再走一次 `https://www.npmjs.com/auth/cli/<id>`**
+   ——那条只能人在浏览器里点，代跑会在 `Press ENTER to open in the browser…` 处挂着等授权。
+   命令要在**有 TTY 的终端**里跑（`script -q /dev/null npx …` 这种伪装能拿到 URL，但授权还是要人点）。
+   两条之间有 5 分钟的 2FA 宽限窗口（npm 文档写明），所以连着跑第二条不再问一次。
+   ⚠️ **协议包必须显式写 `--repo`**：仓名是 `dsh-remote-protocol` 而包名是 `dsh-remote-wire`，
+   不写就会拿 `package.json` 的 `repository.url` 去推断——那条指的就是包名对不上的仓。
+   GitHub 的 claim 只有 `repository` + `workflow file`（+ 可选 `environment`），
+   **没有 tag/分支 pattern 这种东西**。
    ⚠️ **每个包同时只能有一条 trust 配置**，要改先 `npm trust list <pkg>` 拿 id、
    `npm trust revoke --id <id> <pkg>`，再建新的。
    ⚠️ 已发布出去的版本（`wire@1.0.0`、`control@1.0.0/1.1.0`）**永远补不上 attestation**，
    这是 npm 侧的既定行为，别指望"回头再签一次"。
+   配好之后：`cd dsh-remote-protocol && git tag -a v1.0.1 -m '…' && git push origin v1.0.1`
+   → 看 `gh run watch --repo providcc/dsh-remote-protocol`，最后一步必须是
+   `provenance 已挂上：dsh-remote-wire@1.0.1`。control 不必空发一版，等下一次真改动搭车。
 2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
