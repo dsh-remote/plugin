@@ -14,6 +14,9 @@
 生产中继跑的是**开源仓已发布的 v1.0.1 产物**：先 `shasum -c SHA256SUMS` 校验再从 Release 下载，
 scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回到 1（线上宿主插件自动重连
 到新中继）——"能换"是这么证的，不是猜的。私有那套 2.x 编号作废，以后只有开源的号。
+**本轮（2026-10-03 上午）又往前走了一步**：右栏那一半折进主插件并发出 `dsh-remote-control@1.1.0`，
+真宿主装的就是这个版本，`live-e2e --rounds 2` 36 项全过、那条同域路由在真机上取证成功（§9）。
+线上"已发布的产物"与"在跑的字节"是同一个（sha256 两侧实测相同）。
 
 > ✅ **e2e 已跑绿**（2026-10-03 本轮）：`node --test e2e/*.test.mjs` = **112 pass / 0 fail**，
 > `node e2e/run.mjs` = **16 步 0 失败**，`node scripts/validate-qr.mjs` = 28 组 ×3 产物 0 失败。
@@ -43,17 +46,18 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 
 | | 版本 | 从哪来 | 现状 |
 |---|---|---|---|
-| 生产中继 | **`1.0.0`** | `dsh-remote-server/`（开源仓） | ✅ 已合并成一条线 |
-| 宿主插件 / 协议 | 开源 `1.0.0` | 开源拷贝**不是**私有树的快照：它同时做了重构（包名 `@dsh-rc/protocol/*` → `dsh-remote-wire`、协议层目录分组）。私有树最后提交都在 2026-10-02，其上的未提交改动已把插件那个假事实 bug 移植进开源仓（`5bd4227`）；**mp/ 那份在飞改动仍未移植** | 见 §0.1 |
+| 生产中继 | **`1.0.1`** | `dsh-remote-server/`（开源仓已发布产物） | ✅ 线上字节 = Release 产物（sha256 `45526fd5…180c9` 两边实测相同，2026-10-03 复核） |
+| 生产宿主插件 | **`1.1.0`** | `dsh-remote-control/`（折并后单一 bundle） | ✅ 已装进 `~/.dsh/profiles/desktop`，退役的 `dsh-remote-control-presentation` 目录与 bundles 条目都已摘掉；live-e2e 真机 36/36 过（见 §9） |
+| 协议 / 小程序 | 开源 `dsh-remote-wire@1.0.0` / mp `aac0f60` | 私有树那两份在飞改动已移植并各自跑绿 | ✅ 私有树删除后唯一事实源就是开源仓；**别再引用 `packages/*`、`apps/server`、`mp/` 这些伞仓旧路径** |
 
 ## 1. 四个开源仓（这是要长期留存的东西）
 
 | 仓 | 内容 | npm 包 | HEAD（本次） | Release | CI |
 |---|---|---|---|---|---|
 | `dsh-remote-protocol/` | 线协议纯函数库 | **`dsh-remote-wire@1.0.0`** | `c02f590` | `v1.0.0` | 绿 |
-| `dsh-remote-server/` | 零知识中继（单文件产物） | 不发 | `d421206` | `v1.0.0`（**挂 `dsh-remote-relay.mjs` + `SHA256SUMS`**） | 绿 |
-| `dsh-remote-control/` | 宿主插件 monorepo | **`dsh-remote-control@1.0.0`** | `f4734ac` | `v1.0.0` | 绿 |
-| `dsh-remote-mp/` | 微信小程序客户端 | 不发 | `734c59f` | 无 | 绿 |
+| `dsh-remote-server/` | 零知识中继（单文件产物） | 不发 | `28f76db` | **`v1.0.1`**（挂 `dsh-remote-relay.mjs` + `SHA256SUMS`；线上跑的就是这份字节，见 §0） | 绿 |
+| `dsh-remote-control/` | 宿主插件（**只剩 `packages/plugin` 一个包**） | **`dsh-remote-control@1.1.0`** | `c6bdc98` | **`v1.1.0`** | 绿 |
+| `dsh-remote-mp/` | 微信小程序客户端 | 不发 | `aac0f60` | 无（用户 2026-10-03 定：mp 只是象征性开源，不打 Release） | 绿 |
 
 三条必须知道的规则：
 
@@ -101,25 +105,50 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 
 ## 3. 待办（按价值排序）
 
-1. **npm provenance 其实没挂上**。两个包都有 `publishConfig.provenance: true` + `id-token: write`，
-   但 pnpm 的 OIDC 换票返回 404（`ERR_PNPM_AUTH_TOKEN_EXCHANGE`）后回落到 `NODE_AUTH_TOKEN`，
-   于是 `/-/npm/v1/attestations/<pkg>@1.0.0` 是 404。**别在文档里宣称带 provenance。**
-   要补：去 npm 站点给这两个包配 Trusted Publishing（包已存在，够条件了），再把发布步骤改成 OIDC。
+1. **npm provenance 还是没挂上**（本轮 `dsh-remote-control@1.1.0` 再次证实）。发布日志里的原话：
+   `[WARN] Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE: Failed token exchange request with body
+   message: Unknown error (status code 404)` → 回落到 `NODE_AUTH_TOKEN` 发的，
+   于是 `/-/npm/v1/attestations/dsh-remote-control@1.1.0` 仍返回 `{"error":"Not found"}`。
+   **别在文档里宣称带 provenance。**
+   为什么本轮没顺手修：Trusted Publishing 只能在 **npm 网页 UI** 上配（npm CLI 10.9.9 没有对应命令，
+   也没有可信的公开 API 路径），而那需要用户在浏览器里登录 npmjs.com——本轮用户拍板
+   「先用现有 NPM_TOKEN 发 1.1.0，TP 留给下一版」。
+   **下一次要做的事**（两包各自）：登录 npm → 包页 Access → 配 GitHub Actions Trusted Publisher
+   （owner `providcc`、repo 对应仓、workflow `release.yml`、tag pattern 建议留空=任意 `v*`）→
+   把该仓 Release 工作流的 `NODE_AUTH_TOKEN` 那行删掉（OIDC 与 token 同时在场时 pnpm 会走 token）→
+   再打标签，然后**用 attestations 接口验证**而不是看工作流绿。
+   ⚠️ 已发布出去的版本（`wire@1.0.0`、`control@1.0.0/1.1.0`）**永远补不上 attestation**，
+   这是 npm 侧的既定行为，别指望"回头再签一次"。
 2. **用户应在 npm 站点 revoke 一把旧 token**（`bypass_2fa:false` 那把，曾在对话里贴出来过）。
    它能登录但没有发包权限，仍然是有效凭据。可用的那把在 `~/.provid/env-v3` 的
    `DSH_REMOTE_NPM_TOKEN`（**值绝不写进仓库/文档/测试**），两仓 secret 已经是它。
-3. **生产中继曾经报 `droppedFrames: 456`**（同窗口 `slowConsumers:0`、`rejectedPairs:7`、`hosts:1`）。
-   这个字段是"中继收下却没送出去"的可见面，456 不是零。
-   **但我这次重新部署把它清零了**——它是"自本次启动以来"的累计值，进程一换就归零，
-   所以**别再指望 /healthz 还能告诉你这个数**。要查历史得去服务器：
-   `journalctl -u dsh-remote-control --since "2026-10-02" | grep -c "frame dropped"`
-   （确切 msg 串以 `src/server.ts` 为准）。**原因本来就没取证，现在现场也没了**——
-   记着这条已经不可复原，别写成"待查 /healthz"。
-
-4. **Dependabot 的 PR 还红着**（actions 4→7、typescript 5.9→7.0、@types/node 22→26）。
-   多半是那些分支的 `ci.yml` 还是旧的（见 §4 第 2 条），需要 rebase 才会带走。
-   **大版本没审过，别顺手合。**
-5. `dsh-remote-mp` 要不要也打 `v1.0.0`（它没有 Release 流程，纯粹是"要不要有个版本页"）。
+   本轮用户明确"token 安全问题先不管"，所以这条仍未做——它不是我做完了忘了，是被搁置的。
+   **另**：npm 站点顶部横幅（2026-10-03 实测）写着 bypass-2FA token 将在
+   2026-08 起限制账号变更、**2027-01 起禁止直接发包**——这把 token 的可用期是有终点的，
+   Trusted Publishing 不是可选项而是必经路。
+3. **`droppedFrames` 查不到历史，因为中继压根不为丢帧写日志**（本轮把这条查清了，推翻了原来的说法）。
+   原文写的是"去服务器 `journalctl | grep -c "frame dropped"`"——**那个 msg 串在代码里不存在**
+   （全仓 grep `frame dropped` 为空）。四处计数点
+   `dsh-remote-server/src/server.ts:341/360/377/387` 都只 `counters.droppedFrames += 1`，
+   其中两处注释就写明"它在日志里不留痕，只能靠这个计数被发现"。
+   所以：**journalctl 查不到，/healthz 只在当前进程内有值**，想要历史必须自己落计数快照。
+   本轮实测：线上 `version:1.0.1`、`droppedFrames:56`（uptime 6294s），空载 30 秒不涨
+   （56 → 56），也就是说丢帧集中在**活动窗口**而不是稳态。
+4. **新发现（值得拍板）：生产宿主没配 `hostId`，每加载一次就换一个身份。**
+   `packages/plugin/src/index.ts:244` 是 `hostId: config.hostId || 'h_' + randomBytes(3)`，
+   而 profile 的 `dsh-remote-control` 那条 config 里**没有 hostId**（默认 `''`）。
+   实测线上 5 分钟内出现三个 hostId：`h_c2073b`(10:05:04) → `h_051405`(10:05:29) →
+   `h_0919dc`(10:09:40)，中继日志里每一次都是 `host online … replaced:0`
+   （**换了身份所以顶不了号**，旧 socket 只能等宽限/清扫）。
+   这与 3 里那些丢帧是同一个形状：手机连的会话对应的宿主身份已经换人了，
+   中继往"没有钥匙的对端"推 → 计数 +1。
+   **一条修复就是给 profile 的 patch 写死 `hostId: drc-bins-macbook`**（配置改动，不是代码改动；
+   要不要改由用户拍板，改了以后宿主重启/重载都能顶号而不是新建身份）。
+5. **Dependabot 已逐个审过，判定写在 §9.2**（四仓共 19 个开放 PR）。
+   一句话结论：红色的多数是**分支基线陈旧**（旧 `ci.yml` 里 pnpm 还写 `version:`、node20 直绑工具链），
+   不是依赖不兼容；唯一真实的不兼容是 **typescript 7**：协议仓的 `tsc` 不再自动纳入 `@types/node`
+   （`Cannot find name 'TextEncoder'` 一类），加一行 `"types": ["node"]` 就修好，且对 TS 5.9 中性。
+   **本轮没有合任何一个**（用户只要证据清单）。
 6. **真机取证还欠两条**：审批卡与提问卡。原因都是**本机部署配置/宿主版本**而非代码——
     审批策略全量是 `never`（用户已表态先不改，**别再问第二遍**），
     这一代宿主的 `ctx.userQuestions` 不带 `registerProvider`。两条都有本地闭环测试。
@@ -163,6 +192,13 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
     现在的装法是**按被测产物实际解析到的位置取副本**（`createRequire(PLUGIN_ENTRY)('ws')`），
     装不上就抛——少装一份等于把主机侧断言全变成"看不到帧"，那是最坏的一种通过。
     **同类坑还在**：`qrcode`/`tweetnacl` 也是两份副本，将来谁想用 prototype 补丁观察它们，得同样按位置取。
+11. **shell 里的 `node -e "…"` 是一整段双引号字符串：JS 里出现英文双引号会把脚本提前截断，而退出码仍是 0**。
+    `install-to-profile.sh` 的注册步骤真实踩过：我在 JS 注释里写了一条 `"bundle 在列表里但目录已删"`，
+    shell 在第一个内层 `"` 就收了尾，剩下的 JS 变成 node 的位置参数被丢弃——脚本照常打 ✅、照常写备份，
+    **退役条目却一条都没摘**（`ls` 才看见旧 bundle 还在）。现在那段改成不带引号的 heredoc
+    （`<<NODEJS`；`$PROFILE` 这类变量仍会在传进去之前展开）。
+    这条的教训形状比修法更值钱：**"脚本跑完 + exit 0"不等于"它要做的事发生了"**，
+    判据必须落在被改的对象上——本轮的变异验证是把退役条目与目录**回插**再跑，看它是否真删。
 
 ## 5. 命令速查
 
@@ -200,16 +236,36 @@ gh pr list --repo providcc/dsh-remote-server --state open # Dependabot 积压
 | **e2e 跑绿**（§0 那条警告已消） | 伞仓 `cb5297f`：`pnpm -r test` = 112 pass / 0 fail + 全链路 16 步 0 失败；`validate-qr` 28 组 ×3 产物 0 失败。顺带抓到并修掉"帧抓取只装了一份 `ws`"那条装置级缺陷（§4 第 10 条） |
 | **presentation 折进主插件，control 仓只剩 `packages/plugin`** | control `a3025a3`（`feat!`，版本 `1.1.0`）：`pnpm typecheck && pnpm -r test` = **280 pass / 0 fail**，`format:check` 过；隔离由 `src/presentation/sidebar.ts` 软探测 + `tests/presentation-isolation.test.ts` 逐字段对照提供（没有 webServer / 正常 / `register()` 抛错三种形态都覆盖）；`install-to-profile.sh` 改成一个 bundle 并退役旧条目；CI 产物校验点名 `client.cjs` |
 
-**剩下要做的（本轮的终点是"发出去 + 真机取证"）：**
+**同一轮做完并有真机证据的（2026-10-03 上午）：**
 
-1. **推 GitHub + 发 npm `1.1.0`**：control 仓那次提交还在本地。发之前先把 Trusted Publishing
-   配上（§3 第 1 条），否则 `provenance` 还是挂不上、文档里就照旧不许宣称带 provenance。
-2. **真宿主 live-e2e 取证**：折并后的单 bundle 装进 profile、重启 Harness、跑
-   `node e2e/live-e2e.mjs`。**这条是折并唯一还没被真实宿主证明过的部分**——右栏弹码、
-   `client.cjs` 外壳、路由改名 `/plugins/dsh-remote-control/pairing` 三件事在单测里全绿，
-   但"右栏真的弹出那张图"只有真机能证。
-3. 生产中继重部（本轮 control 改动不涉及中继产物；线上仍是 `dsh-remote-server` 的 v1.0.1，
-   重部的动作是把**已发布产物**再核一遍哈希并确认 `/healthz` 与 `hosts`）。
-4. Dependabot 三个 PR 审（§3 第 4 条）。**大版本没审过，别顺手合。**
+| 事 | 证据 |
+|---|---|
+| `dsh-remote-control@1.1.0` 发出去了 | 标签 `v1.1.0` → Release 工作流 success → `npm view dsh-remote-control versions` = `[1.0.0, 1.1.0]`；`npm pack` 解包核对：tarball 只有 `dist/bundle/{index.js,client.cjs}` + `cordis.patch.yml` + `LICENSE`，232 KB；**provenance 没挂上**（§3 第 1 条附日志原文） |
+| 1.1.0 装进真宿主 profile | `sh dsh-remote-control/scripts/install-to-profile.sh` → `node_modules/dsh-remote-control/package.json` 里 `version:"1.1.0"`、`dsh.client.platform:"web"`、`exports` 含 `./client`；退役条目连目录一起摘掉（**这条做过变异验证**：回插后再跑，脚本把它删掉） |
+| **live-e2e 真机全绿** | `node e2e/live-e2e.mjs --rounds 2` → **合计 36 项检查，通过 36，失败 0**（真中继 `wss://drc.provid.cc` + 真内核 `carrier=services`）：配对→会话列表 14 条→发指令回合跑完（`done:true`、正文非空）→防休眠 `backend=caffeinate`→零知识（上行 3 帧 enc、经中继无明文）→解配 `needs-pair` |
+| **右栏那条路由在真宿主上取证** | `GET http://127.0.0.1:19387/plugins/dsh-remote-control/pairing?session=<真会话>` → `{"state":"ready","epoch":"575e1d4172857484",address:"dsh-resource://file/session/…//Users/linbin/dsh-remote-control/.dsh/sidebar-qr.png",expiresAt:…}`；zxing 解出落盘 PNG（392×392，0600）→ **解出文本的 sha256 前 16 位 == 路由给的 epoch**，且与 `status.pairing.qr` 逐字节一致；负面四条也实测：非环回 `Host` → 403、跨站 `Origin` → 403、缺 `session` → 400、**旧包路径 `/plugins/dsh-remote-control-presentation/pairing` → 404** |
+| 线上中继"发布的就是在跑的" | Release `v1.0.1` 下载 + `shasum -a 256 -c SHA256SUMS` OK；与服务器 `/opt/dsh-remote-control/server/relay.mjs` 的 `sha256sum` **完全相同**（`45526fd5…180c9`）→ 本轮中继侧无需重部（control 的改动不碰中继产物） |
+| 临时改的配置已还原 | 为让 live-e2e 能自动取真码，临时在 profile 的 patch 里加了 `pairOnStartSec: 120`；**跑完立刻删掉并重启宿主**，现在 `grep -c pairOnStartSec cordis.patch.yml` = 0、`status.json` 的 `pairing:null`、`problems:[]` |
+
+### 9.2 Dependabot 审计结论（19 个开放 PR，本轮只出证据、一个都没合）
+
+审法：不看 dependabot 分支的红绿（那些分支的 `ci.yml` 是旧的，混杂了工作流问题），而是
+**取各仓当前 main 的快照**（`git archive main`）到 `/tmp`，只改 `package.json` 里那一行依赖，
+重装 lockfile 后跑仓里现在的闸门。这样"依赖不兼容"与"分支陈旧"才分得开。
+
+| bump | 实测（main 快照 + 只换这一个依赖） | 判定 |
+|---|---|---|
+| typescript 5.9.3 → **7.0.2** | 协议仓：`tsc -p` 报 `TS2591 Cannot find name 'node:buffer'`、`TS2304 Cannot find name 'TextEncoder'/'TextDecoder'`（`@types/node` 不再被自动纳入）；**加 `"types": ["node"]` 后 TS7 与 TS5.9 都绿**（两个版本各跑一遍，所以这条改动是版本中性的）。中继仓：typecheck PASS + 78 项（1 skip）PASS。插件仓：PASS + **280 全绿** | **先给三仓 tsconfig 补 `"types": ["node"]` 再合**；不补就合 = 协议仓 CI 必红。这是本轮唯一的**真**不兼容 |
+| @types/node 22.20.4 → **26.6.3** | 协议 82 全绿 / 中继 78（1 skip）全绿 / 插件 280 全绿 | 可合（红的那些是分支工作流陈旧） |
+| esbuild 0.27.7 → **0.28.2** | 中继：PASS，含 `bundle-relay` 与 Node 20 空目录起单文件产物的 smoke。插件：PASS，bundle 断言都在 build 里 | 可合 |
+| actions/checkout 4→7、actions/setup-node 4→7、pnpm/action-setup 4→6 | 纯 CI 版本跳。红的原因实测到位：control#3 的失败日志是 `Dependencies lock file is not found`（分支从"加 pnpm-lock.yaml"之前切出），node20 作业是 `This version of pnpm requires at least Node.js v22.13` + `No such built-in module: node:sqlite`（旧 `ci.yml` 把 matrix 版本直绑到工具链）。mp 那两个、以及各仓刚被 dependabot 更新过分支的那几个已经全绿 | **rebase 到 main 即可**，不是依赖问题 |
+
+### 9.3 还欠着的
+
+1. **Trusted Publishing**（§3 第 1 条）：卡在"要用户在浏览器登录 npmjs.com"这一步，本轮按拍板留到下一版。
+2. **`hostId` 那条配置**（§3 第 4 条）：一行 patch 就能让宿主身份稳定，但那是改用户线上配置，等他点头。
+3. **审批卡 / 提问卡的真机取证**（§3 第 6 条）：原因仍是本机 `approval/policy: never` 与这一代宿主没有
+   `registerProvider`，**别再问第二遍**；两条都有本地闭环测试。
+4. **`dsh-remote-mp` 不打 Release**（用户 2026-10-03 定："只是象征性的开源"），原来的"要不要打 v1.0.0"这条待办作废。
 
 
