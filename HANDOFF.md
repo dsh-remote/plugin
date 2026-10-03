@@ -20,12 +20,13 @@ scp 上线后 `/healthz` 报 `version:"1.0.1"`，重启后 5 秒内 `hosts` 回�
 > 插件产物位置、mp 的目录层级都变了，而且这批文件正被并行会话同时编辑（见 §4 第 9 条）。
 > **在 `node e2e/run.mjs` 与 `node --test e2e/*.test.mjs` 重新跑绿之前，任何 e2e 结论都别引用。**
 
-### 0.1 还没合完的部分（下一步就按这个清单做）
+### 0.1 剩下的事（源码副本已删，开源仓为准）
 
 | 待办 | 现状 |
 |---|---|
 | ~~移植 `packages/plugin` 的在飞改动~~ | ✅ **已移植**（开源 control 仓 `5bd4227`：宿主注入的 `user/message` 不再冒充用户指令 + 留痕计数，3 条新测试，224 项全绿） |
-| 移植 `mp/` 与 `packages/presentation` 的在飞改动 | presentation 与开源仓只差结构（import 名），未见未提交改动；**mp/ 那份还没搬**（app.wxss / core/client.js / chat / sessions / theme，并行会话在飞） |
+| 移植 mp 的在飞改动 | ✅ 已移植（mp `aac0f60`，verify/theme:check/contrast 三道闸全过）；presentation 的功能按用户拍板要折进主插件，见 §9.1 |
+| 开源仓不含设计文档 | ✅ 已执行（control `a6aebc5` 删掉整个 docs/，连带修好 README 与 feature_request.yml 里会 404 的两处引用）。**保留**：server 仓 `docs/SELF-HOSTING.md`、mp 仓 `docs/ARCHITECTURE.md`、四仓根目录的 README/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG |
 | 删除伞仓五棵私有树 | ✅ **已删**（提交 f5a6853）；同轮把 e2e/scripts 的 22 个文件改指开源仓，残留私有路径引用 0 |
 | 重接 `e2e/`、`scripts/` 到开源仓路径 | 已改的文件：`e2e/{run.mjs,restart-resume.test.mjs,mp-crypto.test.mjs,protocol.test.mjs,mp-client.test.mjs,multi-pair.test.mjs,package.json}`、`scripts/{bundle-plugin.mjs,bundle-presentation.mjs,bundle-relay.mjs,relay-start.sh,validate-qr.mjs,install-to-profile.sh,mp-shots.mjs,check-mp-ui.mjs,mp-probe.mjs}`。包名与目录结构都变了（`@dsh-rc/protocol/*` → `dsh-remote-wire`；协议层从扁平改成 `crypto/`、`identity/` 等分组） | **但没跑绿**——这是接手第一件事，见 §0 的警告框
 | ⚠️ 协作冲突 | `e2e/run.mjs`、`e2e/package.json`、`e2e/mp-*.test.mjs` **正被并行会话编辑**。改这批文件前先确认它停了，否则两边互相覆盖 |
