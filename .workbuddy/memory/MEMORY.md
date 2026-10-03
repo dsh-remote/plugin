@@ -42,6 +42,17 @@ TDesign 已按依赖闭包裁到只剩 `button`/`empty`/`switch`（+ common）�
 改插件后**必须重启 Harness**（HMR 只重载配置，替换 `dist` 不重载）；
 重新部署用 `./scripts/install-to-profile.sh`，不能只 `pnpm -r build`。
 
+status.json 里**三个数语义必须分开**，混了就会得出相反结论：
+`pairedClients`（手机台数，去重 clientId）、`conversations`（会话数，重配会涨）、
+`pendingPairs`（还没被用掉的配对码）。「解配 → 重配」会开**新会话**，
+所以拿会话数回答"几台手机"会得到"解完配对数字反而变大"。
+
+## 协议不一定要改：先查服务端有没有现成的路
+
+帧名是冻结的（F1），但**中继里往往已经有那条路**。2026-10-03 查「解配要通知主机」时，
+`dsh-remote-server/src/server.ts` 的 `session-leave` **客户端分支早就实现了**
+（转 `peer-left` 给主机），缺的只是小程序没发。加协议帧之前先 grep 服务端。
+
 ## 构建纪律
 
 `env -u NODE_OPTIONS pnpm -r build` / `-r test`；`node e2e/run.mjs`；`pnpm -C e2e test`。
@@ -51,7 +62,7 @@ plugin 单跑用 `pnpm -C packages/plugin test`（根包与 plugin **包名相�
 **有并行 agent 在提交**：开工与交付前各 `git log --oneline -3`；同一文件几分钟内可能被改，
 判断代码对不对之前先看 mtime。
 
-## 反复出现的四个教训
+## 反复出现的五个教训
 
 1. **静态断言写完必须反证，反证样例要「构造」最小错误形态** —— 在真实文件上做替换来反证靠不住
    （前置条件常不成立，断言不响会被误判成"断言无效"）。自检里匹配文本前**先剥注释**。
@@ -74,6 +85,13 @@ plugin 单跑用 `pnpm -C packages/plugin test`（根包与 plugin **包名相�
    （`_onEvent` / `onSend`），而 **`onSend` 第一道门是 `sessionId`，缺了静默 return**。
    **判据里不许写死绝对像素下限**（我拍的 88px 换机型就假红）—— 改成相对关系
    （"按钮比文字宽出内边距"）。
+5. **反证后必须确认「破坏真的生效了」** —— 判据没红**最常见的原因是替换没匹配上**
+   （`perl -0pi` 多行替换静默不生效；`grep -c` 一下就知道）。
+   **破坏要最小**：只去掉要验的那一样。破坏太狠会让测试**挂死**而不是变红
+   （把整行变注释 → 那个 `if` 分支什么都不做 → socket 永不关 → e2e 跑满 5 分钟）。
+   多行替换用 Python 显式 `assert old in s`，别赌正则。
+   **恢复后核对文件身份**（`head -2` 看文件头），别只看 `cp` 成功 ——
+   我手滑把 socket 的备份拷到了 client.js 头上，靠核对头发现。
 
 ## 打包约束
 
@@ -95,10 +113,17 @@ plugin 单跑用 `pnpm -C packages/plugin test`（根包与 plugin **包名相�
   隐藏一个分支只能用**独立 `wx:if`**，带条件的 `wx:elif` 会落到末尾 `wx:else`。
   运行态只认 `ev.run_state`；思考正文永远拿不到（M28 红线）。
   **顶栏那一行的语义是「当前处于什么状态」**：连接状态（颜色有语义、不可点，排障唯一线索）
-  → 弱化的模型名 → 「展开过程」→ 中断。**模型名必须弱化**：无底色/无边框/无 hover，
+  → 弱化的模型名 → 中断。**模型名必须弱化**：无底色/无边框/无 hover，
   胶囊 + 手势这套语言等于说"这里能点"，而内核 `modelFace = no-list+no-set` 换不了。
   **没有独立的运行条**（`runText` / `.runbar` / `.jump-up` 已删）：运行态由最新那条
-  live 步骤组的标签承担，正文空时落点是顶栏的中断按钮。思考行只显示状态、不可展开。
+  live 步骤组的标签承担，正文空时落点是顶栏的中断按钮。
+  **顶栏没有「展开过程」**（`expanded`/`foldable`/`onToggleAll`/`.bar-btn` 全删）：
+  折叠只有组标题一行这一个入口 —— 全局一键全收会顺手把正在跑的那组也收起来。
+  **纯思考组（`plain`，组内只有 think、一个工具都没调）不是可展开的东西**：
+  无箭头/无 hover/不绑手势/卡片 `wx:if="{{item.open && !item.plain}}"`，
+  耗时并进标题成一行「思考中 4.0s」。**长得能点却展开不出内容，比一个纯标签更像坏了。**
+  think 条目数据层照落（审批要知道主机在干什么）；还在跑的那条**没有 `ms`**，
+  耗时要现算 `Date.now() - startedAt`，否则标题会停在 0 直到收尾才跳一下。
 - 审批：真实通道是 waterfall `approval/request`，**只有参与它才能到达手机**
   （`approval/asked|decided` 是审计事件，不能应答）。guard 里
   `WATERFALL_PARTICIPANTS = ['approval/request']` 是显式极窄名单。
