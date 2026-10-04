@@ -1446,3 +1446,31 @@ wire 138/0。mp-shots 新增 chat-composer 渲染层验收。
 → server 1.0.3（已上线，healthz=1.0.3）→ mp 1.1.0（已传开发版）。
 ⚠️ 中继重启是按既有设计会失效手机通道的那一类（relay 的会话表是内存态、由配对claim
 创建，resync 只删不建）——手机下次回前台会提示重新扫码，扫一次即可（主机侧不用动）。
+
+### 9.25 配对码两条 TTL 分叉：本地过期、中继还有效时发码回半条码（2026-10-04 23:00，control 536bc83）
+
+用户实测：小程序断开重连后点 pill 的「刷新」，报「配对请求没成功：
+发码回答里的码不完整」，而且按一次撞一次。
+
+**根因**：两条 TTL 分叉——中继日志里 pair token issued 的 ttlMs 是 **180000**
+（不是我写在 env 里的 90s，那个值没生效；服务端默认就是 180s），插件本地默认 120s。
+中继的 pair-ready 会用服务端权威 TTL 改写 **slot** 的过期时刻，而
+`currentPairing()` 回的是 `active.pairing` 里那份出码时的旧值（没人更新它）。
+于是本地过期之后、中继还有效的整整一段里：`resolveFor` 认这张码（slot 活着）
+→ 发码路由回 ready，却拿旧值算 `expiresInMs = max(0, …) = 0` → pill 判「码不完整」。
+直到 slot 也过期才重烧一张——中间那一分钟里每次点刷新都撞。
+
+**修法两道**（都在 index.ts）：
+1. `currentPairing()` 改读 **slot** 的过期时刻（服务端权威，与 status.json 的
+   `describeActivePairing` 同一个口径）；
+2. `ensureFreshPairing()` 加运行时兜底：resolveFor 用 clock.now()、路由算 expiresInMs
+   用 Date.now()，两个时钟之间有窗口——到点的码不当 fresh，现补一张（中继不在就
+   回 null 走 unavailable），而不是回半条码。
+
+**判据**：e2e/pair-ttl.test.mjs（本地 ttl 1s vs 中继默认 180s，越过本地 TTL 后
+/pairing/new 必须仍回完整码、且是同一张）。**先在旧 dist 上跑红过**
+（实测 state=ready, expiresInMs=0——与用户报的一字不差），rebuild 后绿。
+伞仓 143/0、run.mjs 17 步、plugin 341/0。
+
+**同一条报错里的另一半**（pill 在手机离线时闪「未配对」）是今天那个三态修复，
+在 main 上但要重启才生效——与这个修复同一个重启窗口（control 536bc83 已装 profile）。
