@@ -1,7 +1,9 @@
 # 自举迭代评估：免扫码重连 + appid 自适应配对
 
 > 评估日期 2026-10-04。结论基于代码实读，每条都给了 `文件:行号`。
-> 这份文档只做评估与设计，**尚未实施**。
+>
+> **§2（免扫码重连）已于 2026-10-04 实施完毕**，落点见文末「实施结果」。
+> §3（appid 不可行）与 §4（自举还缺什么）的结论不变。
 
 ## 0. 结论摘要
 
@@ -199,3 +201,61 @@ appid 只是其中的一个索引键，不改变结论。
 - 落盘文件的权限与原子性在真机上（模拟器里 0600 语义不完全可靠）；
 - 主机重启后手机侧的恢复时序（`onShow` → `_maybeLoadHistory` 走一遍是否真能接上）；
 - 中继代次方案对**中继滚动重启**的表现（生产是 `Restart=always`，会重启）。
+
+---
+
+## 7. 实施结果（2026-10-04）
+
+范围：**只做免扫码重连**。回滚路径（§4.1②）与审批续做（§4.1③）按用户要求本轮不做。
+
+### 落地的东西
+
+| 文件 | 改动 |
+|---|---|
+| `packages/plugin/src/shell/pair-store.ts` | **新增**。会话簿落盘 `~/.dsh/dsh-remote-control/conversations-<hostId>-<hash8>.json`，0600 + 临时文件 rename |
+| `packages/plugin/src/core/keys.ts` | 加 `restore()` / `snapshot()`；**删** `closeBefore()`；`Conversation.generation` → `restored?: boolean`；`PrunePolicy` 加 `restoredIdleTtlMs`（默认 7 天） |
+| `packages/plugin/src/transport/relay.ts` | `hello-ok` **不再清会话**；加 `restoreConversations()` / `relayGeneration` / `onStructuralChange`（立刻落盘）/ `onBookActivity`（只标脏） |
+| `packages/plugin/src/shell/config.ts` | 加 `restoredIdleTtlSec`、`pairStoreFile`（`''` 自动 / `'off'` 关 / 显式路径）与 `resolvePairStoreFile()` |
+| `packages/plugin/src/index.ts` | 恢复**必须在 `relay.connect()` 之前**；恢复出会话即 `runtime.start()`；3 秒 tick 批量落盘；`stop()` 补落盘；status.json 加 `pairStore` |
+| `.gitignore` | 覆盖 `conversations-*.json`（含 `.tmp-*`） |
+
+落盘的是 **PSK + convId + 时间量**，不存派生密钥（派生是纯函数，存结果就多了一份
+必须与 psk 永远相等的第二真相），也**不存 `clientIds`**（那是"此刻谁连着"的瞬时态，
+落盘它会让主机一启动就往没人收的通道广播）。
+
+### 与本文 §5 的建议有一处不同：没做 `hello-ok` 权威代次
+
+§5 建议第 1、2 步同提交做权威代次。**本轮跳过了第 1 步**，因为它需要协议仓发 npm
+新版本、plugin 升依赖号才能生效，而第 2 步本身不依赖它也能成立：
+
+`generation` 从"中继代次"退化成"主机连接代号"，**只喂给 `PairingWindow` 换码**
+（中继的 pending-pair 表是内存态，重启即清空，挂在屏幕上的那张码成了死码必须换）。
+§2.4 里担心的"中继重启后旧配对全部作废"由既有的「只允许一台」策略覆盖：
+新配对发生时 `onPeerJoined` 作废除它以外的全部通道；手机侧早已撞上
+`unknown_session` → needs-pair（e2e `restart-resume` 的 (b) 用例锁着这条路）。
+两边都有出口，孤儿密钥最多留到下一次剪枝（≤7 天）。
+
+**代价**：中继重启后 status.json 的 `conversations` 在那段时间偏大。若日后要做
+权威代次，落点很干净（`relay.ts` 的 `hello-ok` 分支）。
+
+### 两个不查代码就会踩的坑
+
+1. **`runtime.start()` 原来只写在 `onPeerJoined` 里**，那假设了"每次有会话可用都伴随
+   一次新配对"。落盘打破了这个假设：主机重启后手机是**恢复**而非重配，不发
+   `pair-begin-client`，`onPeerJoined` 永远不来 —— 主机不订阅内核事件、不挂交互 sink、
+   不起刷新节拍，手机却显示"在线"。症状与配对丢失在用户眼里完全一样，
+   且 status.json 里 `conversations=1`、`carrier` 也正常，更难查。
+2. **恢复出来的会话不能按 24 小时剪**。那条 TTL 是给"新配了却没人用"设计的；
+   恢复出来的那条代表"用户早就配好了、只是主机重启了"。按 24h 剪等于长假之后
+   主机一启动就把唯一那条通道清掉，免扫码重连白做。
+
+### 验证
+
+- plugin 单测 311/311（新增 `pair-store.test.ts` 14 条 + `ids-and-keys` 4 条 +
+  `relay-client` 3 条，删掉 `closeBefore` 那条正向测试）；
+- e2e 131/131。`restart-resume` 的 (c) 判据**整个翻面**：从"必须 needs-pair"
+  改成"必须免扫码续用（同一条 convId + 审批卡照到 + 回合跑得完）"；
+  新增 (d) 作对照：`pairStoreFile: 'off'` 时旧路径原样保留、**不许静默黑洞**
+  ——没有这条，"关掉落盘时那条路仍然干净"就没人钉着了；
+- 三处反证确认判据在缺陷状态下真的红：注回 `hello-ok` 清会话的两行、
+  从 `.gitignore` 删掉 `conversations-*`、把 (c) 的 `pairStoreFile` 改 `'off'`。

@@ -10,11 +10,16 @@
  * (b) **中继被 SIGTERM 重启**：路由表全空（内存态、有意不持久化），客户端拿旧 convId 发帧
  *     必须撞上 `error{code:'unknown_session'}`，手机才会中文提示"会话已失效，请重新配对"
  *     （取证 mp-client-contract §3.3；只断连接的表现是"重连…+空列表"死循环）。
- * (c) **主机侧重启**（generation 变化 / `resync` 声明自己还持有哪些密钥）：
- *     D3+D6 合起来会造出一个静默黑洞——中继留着会话、主机没了密钥，手机把密文发给
- *     一个听不见的对端，`unknown_session` 永远不会发生（复核 R1，docs/DESIGN-REVIEW.md:508）。
- *     本条不要求是哪一种出口，只要求**必须观察到 `unknown_session` 或 `peer-left` 之一**，
- *     也就是"不许静默"。
+ * (c) **主机侧重启 + 落盘开启**（2026-10-04 起判据整个翻面）：配对通道的密钥簿落盘在
+ *     `~/.dsh/dsh-remote-control/conversations-<hostId>.json`，主机重启后从盘上恢复，
+ *     **同一条 convId 免扫码续用** —— 手机不发 `pair-begin-client`，不撞 `unknown_session`，
+ *     不进 needs-pair。这条是"自举迭代"（改代码 → 重装 → 重启）不用人守着的前提。
+ *     落盘的是 `psk` 而不是派生密钥：`derivePskKey` 是纯函数，存派生结果等于多一份
+ *     必须与 psk 永远相等的第二真相。
+ * (d) **落盘关掉**（`pairStoreFile: 'off'`）时的旧路径：主机重启后主机手里没有密钥，
+ *     必须观察到 `unknown_session` 或 `peer-left` 之一（复核 R1，docs/DESIGN-REVIEW.md:508），
+ *     也就是"不许静默"。它是 (c) 的**对照**—— 没有它，就会有人以为落盘顺手修好了 R1，
+ *     而实际上关掉落盘那条路仍会把用户逼到 needs-pair，只是那现在是明确的选择而不是默认行为。
  *
  * 三个真实：真中继（dsh-remote-server 产物，(b) 里真的 SIGTERM 再起重启）、真插件运行时
  * （`apply()` 真入口，(c) 里真的停机再重挂）、真 `dsh-remote-mp/miniprogram/core/client.js`；
@@ -52,12 +57,12 @@ mkdirSync(workDir, { recursive: true })
  * 所以新建手机前必须把 storage 与 recorder 清空——否则上一个用例留下的配对
  * 会让这次的 `hydrate()` 直接"恢复"到旧 convId 上，测试之间互相污染。
  */
-async function boot({ port, hostId, relayEnv = {} } = {}) {
+async function boot({ port, hostId, relayEnv = {}, pairStoreFile = '' } = {}) {
   const rig = installPhoneRig()
   rig.shim.storage.clear()
   rig.recorder.frames.length = 0
   const relay = await startRelay({ port, env: { DRC_SWEEP_MS: '1000', ...relayEnv }, label: `本地中继（${hostId}）` })
-  const host = await bootHost({ relayUrl: relay.url, hostId, statusDir: workDir, pairTtlMs: 60_000, approvalTimeoutSec: 20 })
+  const host = await bootHost({ relayUrl: relay.url, hostId, statusDir: workDir, pairTtlMs: 60_000, approvalTimeoutSec: 20, pairStoreFile })
   const phone = newPhone(`手机（${hostId}）`)
   return {
     relay,
@@ -83,10 +88,16 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
   test('(a) 客户端断连重连：同一条 convId 仍然可用（D3，会话不因手机下线而消失）', async () => {
     const scene = await boot({ hostId: 'e2e_resume_client' })
     try {
+      // tap 是进程级累积的，所以"配对几次"一律记基线比增量（判据红时先怀疑判据：
+      // 写成 `=== 1` 时，用例顺序一变就会误报——它恰好排第一才没炸）。
+      const pairCountBefore = controlFrames('phone', 'received', ['paired']).length
       const convId = await scene.pair()
       const listBefore = scene.phone.count('ev.session_changed')
-      const pairedFrames = controlFrames('phone', 'received', ['paired'])
-      assert.equal(pairedFrames.length, 1, '只该有一次 paired；重挂不许走重新配对')
+      assert.equal(
+        controlFrames('phone', 'received', ['paired']).length,
+        pairCountBefore + 1,
+        '本用例那次配对没发生：后面"重挂不许走重新配对"的断言全部失去意义',
+      )
       assert.match(convId, /^c_/)
       await untilAsync(() => scene.relay.health().then((h) => h.conversations === 1 && h.clients === 1), {
         label: '中继侧 1 条会话 1 个客户端',
@@ -127,7 +138,11 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
       // 用 run.mjs 里那份**真**断言，而不是以前这个丢检查的副本：续用之后推回来的列表
       // 与首连时是同一份契约（state 枚举、updatedAt 不许是数字串、标题渲染得出来）。
       assertSessionShape(changed.sessions, { label: '重启续用后的 ev.session_changed.sessions' })
-      assert.equal(controlFrames('phone', 'received', ['paired']).length, 1, '恢复路径绝不能重新走一次配对')
+      assert.equal(
+        controlFrames('phone', 'received', ['paired']).length,
+        pairCountBefore + 1,
+        '断连重连又走了一次配对：那手机每次回前台都要人扫码，D3 白做',
+      )
       const decryptErrors = scene.phone.events.filter((e) => e.kind === 'error' && String(e.message).includes('无法解密'))
       assert.deepEqual(decryptErrors.map((e) => e.message), [], '续用期间一帧都不许解不开')
       // 续用之后还能正常发指令：会话不是"留着壳子"。
@@ -200,13 +215,112 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
     }
   })
 
-  test('(c) 主机侧重启：不许静默黑洞——必须观察到 unknown_session 或 peer-left 之一（复核 R1）', async () => {
+  test('(c) 主机侧重启 + 落盘开启：同一条 convId 必须免扫码续用，不许退化成 needs-pair', async () => {
     const scene = await boot({ hostId: 'e2e_resume_host' })
+    let second = null
+    try {
+      // `controlFrames` 走的是**进程级**累积的 tap（`run.mjs` 的 tappedFrames），
+      // 所以"配对发生过几次"必须记基线再比增量 —— 写死 1 会把 (a)(b) 那两次算进来。
+      // 判据红时先怀疑判据：这条曾经以 3 !== 1 报过，而落盘其实完全生效。
+      const pairCountBefore = controlFrames('phone', 'received', ['paired']).length
+      const convId = await scene.pair()
+      await untilAsync(() => scene.relay.health().then((h) => h.conversations === 1), { label: '中继侧有 1 条会话', trail: scene.phone.trail })
+      assert.equal(scene.host.state().conversations, 1, '重启前主机手里必须有这条会话的密钥')
+      assert.equal(
+        controlFrames('phone', 'received', ['paired']).length,
+        pairCountBefore + 1,
+        '本用例自己那次配对没发生：后面"不许重新配对"的断言全部失去意义',
+      )
+      // 落盘必须真的发生：新配对是结构性变化，主机就该立刻写盘。
+      // 判据落在 status.json 的 pairStore.restored/文件存在上，而不是"等重启后看能不能续用" ——
+      // 后者无法区分"落盘生效"与"resync 恰好声明了它"。
+      const pairStore = scene.host.state().pairStore
+      assert.equal(pairStore?.enabled, true, `落盘没有默认开启：${JSON.stringify(pairStore)}`)
+      assert.ok(pairStore.file, 'status.json 必须报出落点：排障时第一件事就是确认这份文件在不在')
+      assert.ok(pairStore.lastSavedAt, '新配对之后没有 lastSavedAt：结构性变化没有立刻落盘，全靠下一次 tick 兜')
+
+      const framesAtRestart = tap.frames.length
+      scene.host.stop()
+      await untilAsync(() => scene.relay.health().then((h) => h.hosts === 0), {
+        label: '中继看到主机离开',
+        trail: scene.phone.trail,
+      })
+      // 同一 hostId、同一 statusDir 下的第二次 boot —— 密钥只能来自盘上。
+      second = await bootHost({
+        relayUrl: scene.relay.url,
+        hostId: 'e2e_resume_host',
+        statusDir: workDir,
+        pairTtlMs: 60_000,
+        approvalTimeoutSec: 20,
+      })
+      await untilAsync(() => scene.relay.health().then((h) => h.hosts === 1), {
+        label: '主机（重启后）重新挂上中继',
+        trail: scene.phone.trail,
+        timeoutMs: 20_000,
+      })
+      assert.equal(second.state().pairStore.restored, 1, '重启后的主机一份会话都没恢复：盘上那份没被读回来（落盘整条路是死的）')
+      assert.equal(second.state().conversations, 1, '恢复出来的会话没进密钥簿：resync 会声明空列表，中继把这条通道删掉')
+
+      const resync = await untilAsync(
+        async () => controlFrames('host', 'sent', ['resync']).find((f) => Array.isArray(f.sessionIds) && f.sessionIds.includes(convId)) ?? null,
+        { label: '重启后的主机在 resync 里声明了它仍然持有密钥的会话', trail: scene.phone.trail, timeoutMs: 10_000 },
+      )
+      assert.ok(resync, `resync 没声明 ${convId}：中继据此删除它，手机下次发帧就撞 unknown_session`)
+
+      // 手机此刻还以为一切正常（status=online）。现在它不该掉进 needs-pair。
+      assert.equal(scene.phone.client.status, 'online')
+      const cmdId = scene.phone.client.newCmdId()
+      scene.phone.client.sendCmd({ t: 'cmd.list_sessions', cmdId })
+      const listAfterRestart = await scene.phone.waitForPayload('ev.session_changed', '主机重启后手机仍能拿到会话列表', {
+        timeoutMs: 25_000,
+        where: (p) => Array.isArray(p.sessions) && p.sessions.length > 0,
+      })
+      assertSessionShape(listAfterRestart.sessions, { label: '主机重启后续用拿到的 ev.session_changed.sessions' })
+      assert.equal(scene.phone.client.convId, convId, '免扫码续连换了 convId：那还是要用户重新配对，只是绕了一圈')
+
+      const later = tap.frames.slice(framesAtRestart).filter((f) => f.side === 'phone' && f.dir === 'received').map((f) => safeJson(f.raw))
+      const unknown = later.find((f) => f?.t === 'error' && f.code === 'unknown_session')
+      assert.equal(unknown, undefined, `主机重启后撞上 unknown_session：${JSON.stringify(unknown)}（落盘没生效，或 resync 没带上它）`)
+      assert.notEqual(scene.phone.client.status, 'needs-pair', '主机重启就把配对清了：用户必须拿手机回到机器前 —— 自举迭代每轮都要人守着')
+      assert.equal(
+        controlFrames('phone', 'received', ['paired']).length,
+        pairCountBefore + 1,
+        '断连重连又走了一次配对：那手机每次回前台都要人扫码，D3 白做',
+      )
+      const decryptErrors = scene.phone.events.filter((e) => e.kind === 'error' && String(e.message).includes('无法解密'))
+      assert.deepEqual(decryptErrors.map((e) => e.message), [], '续用期间一帧都不许解不开')
+
+      // 续用之后还能正常发指令：会话不是"留着壳子"。
+      const deltaBefore = scene.phone.count('ev.message_delta')
+      const permissionBefore = scene.phone.count('ev.permission_request')
+      scene.phone.client.sendPrompt(MOCK_SESSION_ID, '主机重启之后这条也要能跑')
+      const request = await scene.phone.waitForPayload('ev.permission_request', '重启后的审批卡', { after: permissionBefore, timeoutMs: 15_000 })
+      scene.phone.client.resolvePermission(request.sessionId, request.requestId, 'approve')
+      await scene.phone.waitForPayload('ev.message_delta', '重启后的回合收尾（done:true）', {
+        after: deltaBefore,
+        where: (p) => p.done === true,
+        timeoutMs: 15_000,
+      })
+    } finally {
+      scene.phone.close()
+      if (second) second.stop()
+      scene.host.stop()
+      const exit = await scene.relay.stop('SIGTERM')
+      assert.equal(exit.code, 0, `中继 SIGTERM 必须退出 0，实际 ${JSON.stringify(exit)}`)
+    }
+  })
+
+  test('(d) 落盘关掉（pairStoreFile: off）时主机重启仍走旧路径：不许静默黑洞——必须观察到 unknown_session 或 peer-left 之一（复核 R1）', async () => {
+    // 这条是 (c) 的对照：落盘既然默认开着，就必须同时钉住"关掉它时行为**没变**"。
+    // 没有这条，就会有人以为"落盘顺手修好了 R1 静默黑洞"，而实际上关掉落盘那条路
+    // 仍然会把用户逼到 needs-pair —— 只是那现在是**明确的选择**而不是默认行为。
+    const scene = await boot({ hostId: 'e2e_resume_host_off', pairStoreFile: 'off' })
     let second = null
     try {
       const convId = await scene.pair()
       await untilAsync(() => scene.relay.health().then((h) => h.conversations === 1), { label: '中继侧有 1 条会话', trail: scene.phone.trail })
       assert.equal(scene.host.state().conversations, 1, '重启前主机手里必须有这条会话的密钥')
+      assert.equal(scene.host.state().pairStore?.enabled, false, `pairStoreFile: 'off' 没有关掉落盘：${JSON.stringify(scene.host.state().pairStore)}`)
 
       // 主机进程重启：同一 hostId、全新的 PairingSlots（旧 conv 的 PSK 随进程没了）。
       const framesAtRestart = tap.frames.length
@@ -215,13 +329,20 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
         label: '中继看到主机离开',
         trail: scene.phone.trail,
       })
-      second = await bootHost({ relayUrl: scene.relay.url, hostId: 'e2e_resume_host', statusDir: workDir, pairTtlMs: 60_000, approvalTimeoutSec: 20 })
+      second = await bootHost({
+        relayUrl: scene.relay.url,
+        hostId: 'e2e_resume_host_off',
+        statusDir: workDir,
+        pairTtlMs: 60_000,
+        approvalTimeoutSec: 20,
+        pairStoreFile: 'off',
+      })
       await untilAsync(() => scene.relay.health().then((h) => h.hosts === 1), {
         label: '主机（重启后）重新挂上中继',
         trail: scene.phone.trail,
         timeoutMs: 20_000,
       })
-      assert.equal(second.state().conversations, 0, '重启后的主机手里不该还留着旧会话的密钥')
+      assert.equal(second.state().conversations, 0, '关掉落盘时重启后的主机手里不该还留着旧会话的密钥')
       const resync = await untilAsync(
         async () => controlFrames('host', 'sent', ['resync']).find((f) => Array.isArray(f.sessionIds)) ?? null,
         { label: '重启后的主机发出 resync', trail: scene.phone.trail, timeoutMs: 10_000 },

@@ -356,6 +356,15 @@ export async function bootHost({
   statusDir,
   pairTtlMs = 60_000,
   approvalTimeoutSec = 30,
+  /**
+   * 密钥簿落盘路径。默认 `''` = 跟着 statusFile 走（真机行为，见 src/shell/pair-store.ts）。
+   * 传 `'off'` 关掉，用于对照"重启后必须重新扫码"的旧行为。
+   *
+   * **这个入参存在的理由**：默认开启落盘之后，"主机重启"这一族用例的判据整个翻了个面
+   * （不再 needs-pair，而是同一条 convId 继续用）。不提供关掉的开关，就再也钉不住
+   * 落盘关闭时那条路**仍然**是干净的 —— 那正是有人会误以为"落盘顺手修好了静默黑洞"的场景。
+   */
+  pairStoreFile = '',
 } = {}) {
   installFrameTap()
   await installKernelCapture()
@@ -422,6 +431,9 @@ export async function bootHost({
     takeOverQuestions: false,
     approvalTimeoutSec,
     unarchiveOnPrompt: true,
+    // 落盘路径必须显式传下去（含 `''` 与 `'off'` 两个值）：不传就用 apply() 的默认，
+    // 那这条用例就分不清"落盘生效了"与"参数根本没送到"。
+    pairStoreFile,
   })
 
   const service = provided.dshRemoteControl
