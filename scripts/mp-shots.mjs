@@ -347,6 +347,25 @@ const SHOTS = {
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
     {
+      // 用户 2026-10-04 真机截图：markdown 的 list 与 table 宽度不对、缩进不对。
+      // 走真实路径（_applyDelta 到 _applyText 到 _withMd 到 markdown.render），
+      // 不 setData 摆 nodes——摆进去只能证明 wxml 忠实，证不了这条链排对了。
+      name: 'chat-md-width',
+      url: '/pages/chat/chat',
+      data: {
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '18:20' },
+          { key: 'u1', kind: 'user', text: '验证修复', confirmed: true },
+        ],
+      },
+      calls: [
+        ['_applyDelta', 'm-md', ['**① 宿主确实跑的是修好的代码**', '', '- 部署产物与仓内构建产物 **sha256 逐字节相同**（`f77e969d…`）', '- 宿主进程 **18:20:30** 加载（晚于 18:12 的部署）——`applyCount` 为证，不是“文件换了但进程没换”',
+    '- 外层条目\n- 内层条目（应当缩进更深、也是满宽）', '', '**② 用刚部署的映射跑本会话最新真实事件（140 条）**', '', '| 检查项 | 结果 |', '|---|---|', '| assistant 正文里的 XML 块 | 17 条 delta 中 **0 条**（提到 function= 这个词，不是块） |', '| tool 步骤标题 | 16 条调用里 **0 条** JSON 标题——全是人话 |', '| 结果预览 | 首行就是真实输出（EXIT=1、TEST=0） |'].join('\n'), true, 'assistant'],
+        ['flush'],
+      ],
+    },
+    {
       // 运行中的默认态：过程**要显示**（收起时一行摘要、展开看细节），
       // 「思考中…」在输入区上方那条，顶栏只留连接状态。
       // 这张是用户实际会看到的那一屏 —— 后面那些带更多字段的场景是"排版对照"，
