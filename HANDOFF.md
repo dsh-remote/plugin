@@ -1291,3 +1291,33 @@ node scripts/approval-probe.mjs --session <同一条> --interrupt-after 6 --prom
 
 **顺手撞见的现成演示**：答完卡后 `pairedClients` 与中继 `clients` 都归 0（小程序退后台），
 而 `conversations=1`、`pairStore.restored=1`——**重新打开小程序就应当免扫码回到同一条会话**。
+
+### 9.19 手机聊天框三连修：XML 不再裸露、title 取 description、结果预览不再乱码（2026-10-04 晚，接 9.18）
+
+用户拿三张真机截图点三件事：① 聊天框里出现原始 tool_call XML；② run_code 看不懂，要结构化；
+③ 结果文本里是字面量的反斜杠n与反斜杠引号（markdown 乱码）。三者的根因**都在插件侧的形状映射**，
+mp 一行未动（真实形状全部从本机 session log ~/.dsh/sessions/**/session.v4.jsonl.zstd 逐字取证）。
+
+| 截图上的事 | 根因（真机形状） | 修法（control c10f7b3） |
+|---|---|---|
+| XML 裸露 | assistant/message 的 content 里，工具调用被写进**两个** part：结构化 tool-call part
+  （textOf 本来就跳过）+ 一个 text part 的 XML 序列化。旧实现把 text part 原样透出 | 新增
+  stripToolCallXml：只剥完整块与尾部未闭合块（开标签后须紧跟 function=——正文里反引号提到
+  的标签不受影响，真机上助手解释手机上有原始 XML 时自己写过那个标签）；剥完是空串仍发
+  空正文帧（mp 的 _applyText 对空正文不建块，messageId 必须带着） |
+| title 看不懂 | tool/call 的 arguments 是 JSON **串**，旧实现整串当 title（run_code 每条 455 字符） |
+  新增 argsTitle：优先 description，其次 command/prompt/path…；argsPreview 可解析时美化
+  （真换行、缩进） |
+| 结果乱码 | tool/result 正文是 data.message.content，一个 **part 数组**；旧实现对非字符串一律
+  JSON.stringify，于是手机上每个结果都是 part 数组的壳 + 内部被转义的换行与引号 | previewOf 改走
+  readableText：数组取文本 part、对象按 content/text/output/stdout/message/result/error
+  递归取人话，非文本 part 跳过，取不到才 stringify |
+
+**闸门**：plugin test **334 pass / 0 fail**（+6 条 carrier-vocabulary 用例，形状全部抄自本机 log）、
+typecheck 0、format:check 0；伞仓 e2e **135 / 0**、run.mjs 17 步 0 失败。
+**已部署**：build + 替换 profile 扁平目录（18:12），**要用户重启 Harness 才生效**；mp 无需重传
+（修复全在插件侧，且历史回放走同一个映射函数，旧会话翻上去也不会再见到 XML）。
+
+**两条判据自己错过一次**（形状比修法值钱）：① 未闭合块用例最初期望剥完不含换行，实际夹具里
+块前就有一个换行——剥块不动其他字节，错的是期望值；② 没有字面量反斜杠n最初写成 TS 的单反斜杠
+ escape（那是真换行），要两个字面量得写双反斜杠。**判据红时先逐条查是判据错还是实现错。**
