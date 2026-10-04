@@ -849,13 +849,25 @@ test('历史：还没配对 / 还没连上时不发请求，等状态变化再�
   assert.equal(p.data.historyState, 'ok')
 })
 
-test('历史：第一页读到了但不许自动跟底（用户在读旧内容，不该被甩走）', async () => {
+// ⚠️ 2026-10-04 改判：旧断言写的是「历史加载不该动滚动锚点」，理由「首屏进来时
+// 本来就该停在最新的位置」——**那个前提是假的**。第一页历史也走了 noScroll，而
+// onReady 之后没有任何东西把视口推到底：automator 实测打开会话 scrollTop=0，
+// 用户每次都要自己滚一遍（真机报「自动滚动有点问题」的一半）。现在：第一页
+// 必须翻锚点（= 落底），往前插更早内容才不许翻。
+test('历史：第一页落底，往前插更早内容静默（不该被甩走）', async () => {
   const p = makePage()
-  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE }))
+  p.onReady()
+  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: 4 }))
   p._maybeLoadHistory()
   await flush()
-  // 首屏进来时本来就该停在最新的位置，所以这里只证明它没有额外翻转锚点
-  assert.equal(p.data.toView, 'anchor-a', '历史加载不该动滚动锚点')
+  assert.equal(p.data.toView, 'anchor-b', '第一页带的就是最新内容：必须翻一次锚点 = 落底')
+  // 往前插更早内容：**不许翻锚点**（翻了就是跟底），但要把原来第一块滚回视口——
+  // 那是另一套机制（toView 指到内容锚点 b<key>，不是 anchor-a/b 那两个尾锚点）。
+  const beforeFlip = p._flip
+  p._loadHistory(4)
+  await flush()
+  assert.equal(p._flip, beforeFlip, '往前插更早内容不许翻尾锚点——那会把用户从刚读的位置甩走')
+  assert.match(p.data.toView, /^b/, '翻页拼完要把原来第一块滚回视口（内容锚点）')
 })
 
 test('历史头的文案不许自相矛盾（这类缺陷只有截图看得见，所以用断言补一道闸）', () => {
@@ -1216,3 +1228,69 @@ test('多块正文各自一份 nodes，按块 key 分开（wxml 靠 key 取，�
   assert.ok(mdText({ data: { blocks: [b0], mdBodies: p.data.mdBodies } }) === '第一段。', 'm1 的 nodes 不对')
   assert.ok(mdText({ data: { blocks: [b1], mdBodies: p.data.mdBodies } }) === '第二段。', 'm2 的 nodes 不对')
 })
+
+/* ── 滚动：贴底跟滚 / 回看停跟 / 回到最新之后照跟 ─────────────────────
+   2026-10-04 用户报：点位在最新时要自动跟滚，回到最新之后也要。
+   踩过两个坑：① 第一页历史也走 noScroll，打开会话停在最旧处；
+   ② onScroll 拿 deltaY<0 一刀切，iOS 落底回弹的尾帧把刚接上的跟随关掉。 */
+
+/** 让页面以为自己贴在最底部：onReady 里那个 SelectorQuery 的假实现给 600。 */
+function readyAtBottom() {
+  const p = makePage()
+  p.onReady()
+  return p
+}
+
+/** 一次真实的贴底滚动帧：内容 2000 高、视口 600，scrollTop 停在 1376 就是贴底。 */
+function bottomFrame() {
+  return { detail: { scrollLeft: 0, scrollTop: 1376, scrollHeight: 2000, deltaY: 10 } }
+}
+
+test('滚动：贴底时新内容要跟滚（toView 每提交翻一次面）', () => {
+  const p = readyAtBottom()
+  assert.equal(p._autoScroll, true, '初始就该是跟随态')
+  assert.equal(p.data.toView, 'anchor-a', '夹具自检：起始锚点')
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r1', delta: '新内容。', role: 'assistant', done: true })
+  p._flushDelta()
+  assert.equal(p.data.toView, 'anchor-b', '贴底时的提交必须翻锚点 = 要求滚到底')
+  // 再一条继续翻：sc-into-view 只在值变化时生效，不翻面就是静默不滚
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r2', delta: '再一条。', role: 'assistant', done: true })
+  p._flushDelta()
+  assert.equal(p.data.toView, 'anchor-a', '第二次提交要翻回另一颗锚点')
+})
+
+test('滚动：往上回看立即停跟随，之后的 delta 不许把人拽回去', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r1', delta: '第一条。', role: 'assistant', done: true })
+  p._flushDelta()
+  // 用户在底部附近开始往上拖：位置还在 24px 容差里，但 deltaY 是负的
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1340, scrollHeight: 2000, deltaY: -36 } })
+  assert.equal(p._autoScroll, false, '往上拖就要停：容差内下一帧内容会把他拽回去')
+  assert.equal(p.data.atBottom, false, '停了跟随，按钮要浮出来')
+  const before = p.data.toView
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r2', delta: '回看期间到达。', role: 'assistant', done: true })
+  p._flushDelta()
+  assert.equal(p.data.toView, before, '不跟随时提交不许翻锚点')
+})
+
+test('滚动：回到最新之后，落底回弹的负帧不许把跟随关掉（用户报的点）', () => {
+  const p = readyAtBottom()
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1340, scrollHeight: 2000, deltaY: -36 } })
+  assert.equal(p._autoScroll, false, '夹具自检：先处于回看态')
+  p.onJumpLatest()
+  assert.equal(p._autoScroll, true, '点了回到最新就该接上跟随')
+  // iOS 上 scroll-into-view 落底有回弹：尾帧 deltaY 为负、位置在底部
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1379, scrollHeight: 2000, deltaY: -3 } })
+  assert.equal(p._autoScroll, true, '回弹帧不是拖动：关掉它，后续 delta 就再也不跟了')
+  assert.equal(p.data.atBottom, true, '位置本来就在底部，按钮不该重新浮出来')
+  // 窗口（600ms）过后，真实的往上拖照旧停跟随
+  return new Promise((resolve) =>
+    setTimeout(() => {
+      p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1200, scrollHeight: 2000, deltaY: -60 } })
+      assert.equal(p._autoScroll, false, '窗口过期后负 delta 恢复本义：停跟随')
+      resolve()
+    }, 650),
+  )
+})
+
+

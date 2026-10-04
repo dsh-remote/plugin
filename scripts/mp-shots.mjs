@@ -366,6 +366,25 @@ const SHOTS = {
       ],
     },
     {
+      // 「回到最新」那颗钮（2026-10-04 用户要求换时兴样式）：右下角品牌色悬浮圆钮 +
+      // CSS 箭头，不占一行、不挡正文，贴底即隐。判据落在渲染层：这一张要能看出
+      // 它是**圆的、在右下角、品牌色实心、里头一个向下箭头**。
+      name: 'chat-jump-fab',
+      url: '/pages/chat/chat',
+      data: {
+        barText: '已连接',
+        barTheme: 'success',
+        // atBottom=false 才浮出（与真实一致：用户往上回看过才需要它）
+        atBottom: false,
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:00' },
+          { key: 'u1', kind: 'user', text: '把滚动改好', confirmed: true },
+          { key: 'm1', kind: 'text', text: '已经改好了，贴底会跟随、回到最新之后也会。', done: true },
+        ],
+      },
+    },
+    {
       // 运行中的默认态：过程**要显示**（收起时一行摘要、展开看细节），
       // 「思考中…」在输入区上方那条，顶栏只留连接状态。
       // 这张是用户实际会看到的那一屏 —— 后面那些带更多字段的场景是"排版对照"，
