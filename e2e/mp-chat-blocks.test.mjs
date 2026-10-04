@@ -1418,3 +1418,56 @@ test('图片附件：移除单张与上限 4 张（协议层同一个数，两�
   assert.equal(sent[0].text, '')
   assert.equal(sent[0].images.length, 3)
 })
+
+/* ── 进会话即执行中：正文要立刻有"正在执行"那一组（2026-10-05 用户实测）────── */
+
+test('进执行中的会话：list_sessions 回执翻牌时必须开出实时组，不等内核事件', async () => {
+  const p = makePage()
+  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: null }))
+  p._maybeLoadHistory()
+  await flush()
+  // 历史回放之后最后一个块是封口的步骤组/正文，此刻还没有实时组
+  const before = stepGroups(p).length
+  // 列表回执说这条会话在跑（进入时 ev.run_state 不会补发，这是唯一信号）
+  p._onSessions({ sessions: [{ id: 's1', running: true }] })
+  assert.equal(p.data.running, true)
+  assert.equal(stepGroups(p).length, before + 1, '翻牌的同时要开出一个新的步骤组')
+  const live = stepGroups(p)[stepGroups(p).length - 1]
+  assert.equal(live.closed, false, '实时组不许封口（它还在跑）')
+  assert.equal(live.items[live.items.length - 1].type, 'think')
+  assert.equal(live.items[live.items.length - 1].done !== true, true, '思考项不能是完成态')
+})
+
+test('进空历史的执行中会话：列表回执先到时也要等历史落地后开组（空流不补）', async () => {
+  const p = makePage()
+  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: [], nextBeforeSeq: null }))
+  p._maybeLoadHistory()
+  await flush()
+  // 列表回执先到：blocks 还是空的 → 空流不补，一组都不该有
+  p._onSessions({ sessions: [{ id: 's1', running: true }] })
+  assert.equal(stepGroups(p).length, 0, '空流时不该凭空冒一组')
+  // 历史（空的）随后落地：仍然没有块，还是不补（无历史可挂）
+  await flush()
+  assert.equal(stepGroups(p).length, 0)
+  // 用户在列表回执之后发指令：这会儿会话在跑，指令进队列
+  p.setData({ sessionId: 's1', inputText: '继续' })
+  p.onSend()
+  assert.equal(stepGroups(p).length, 0, '排队中的指令也不该凭空开组')
+  // 当前这轮结束 → running 翻假 → 队列排空，本地回显落地
+  p._onSessions({ sessions: [{ id: 's1', running: false }] })
+  assert.equal(stepGroups(p).length, 0, '回显落地时仍然没有步骤组')
+})
+
+test('进执行中的会话：历史最后是封口组时开新组，不往旧组里塞', async () => {
+  const p = makePage()
+  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: null }))
+  p._maybeLoadHistory()
+  await flush()
+  const closedGroups = stepGroups(p).length
+  p._onSessions({ sessions: [{ id: 's1', running: true }] })
+  assert.equal(stepGroups(p).length, closedGroups + 1)
+  const last = p.data.blocks[p.data.blocks.length - 1]
+  assert.equal(last.kind, 'steps')
+  assert.equal(last.closed, false)
+  assert.equal(p.data.blocks[p.data.blocks.length - 2].kind !== 'steps', true, '新组必须是追加在最后，不是在中间')
+})
