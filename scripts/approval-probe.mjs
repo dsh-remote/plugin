@@ -125,7 +125,15 @@ if (TARGET_SESSION === 'list' || TARGET_SESSION === 'first') {
   }
 }
 if (TARGET_SESSION && PROMPT && TARGET_SESSION !== 'list') {
-  const sessionId = TARGET_SESSION === 'first' ? (client.sessions ?? [])[0]?.id : TARGET_SESSION
+  let sessionId = TARGET_SESSION === 'first' ? (client.sessions ?? [])[0]?.id : TARGET_SESSION
+  if (TARGET_SESSION === 'new') {
+    // 为什么要自己建一条：**旧的 API 建的会话里根本没有执行/写文件工具**
+    // （模型回报 `unknown tool "run_code"`，于是永远走不到审批），
+    // 而用户自己那些正在干活的会话不能拿来当实验台。新建的那条走当前的工具面。
+    const created = await client.newSession()
+    sessionId = created?.ok ? created.sessionId : undefined
+    console.log(`  🆕 cmd.new_session → ${sessionId ?? `失败：${created?.message}`}`)
+  }
   if (!check('发指令前拿到了目标会话', !!sessionId, `session=${sessionId}`)) {
     client.disconnect()
     process.exit(1)
