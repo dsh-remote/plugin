@@ -14,14 +14,27 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+// 主题与系统栏调用：存的是深色，导航栏/回弹区的每次调用都记账（onShow 要重设）。
+const barCalls = []
 globalThis.wx = {
-  getStorageSync: () => '',
+  getStorageSync: (k) => (k === 'drc.theme.v1' ? 'dark' : ''),
   setStorageSync: () => {},
   removeStorageSync: () => {},
   showToast: () => {},
   navigateTo: () => {},
   stopPullDownRefresh: () => {},
+  setNavigationBarColor: (o) => barCalls.push({ kind: "nav", front: o.frontColor, bg: o.backgroundColor }),
+  setBackgroundColor: (o) => barCalls.push({ kind: "bg", bg: o.backgroundColor, top: o.backgroundColorTop }),
+  createSelectorQuery: () => ({
+    select: () => ({
+      boundingClientRect: (cb) => {
+        if (cb) cb({ height: 600 })
+      },
+      exec: () => {},
+    }),
+  }),
 }
+
 
 let captured = null
 globalThis.Page = (cfg) => {
@@ -124,4 +137,19 @@ test('wxml：标题行带工作区 chip，空目录不渲染', () => {
   const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
   assert.match(wxml, /class="sess-title-row"/, '标题与 chip 要在一行（chip 不动、标题先省略）')
   assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, 'chip 只在有工作区时渲染')
+})
+
+test('系统栏每次 onShow 都要重设：从 chat 返回时微信会用静态白把顶栏冲掉（用户实测）', () => {
+  const p = makePage()
+  p.onLoad()
+  assert.equal(barCalls.length > 0, true, 'onLoad 至少要设一次（首屏上色）')
+  const lastNav = barCalls.filter((c) => c.kind === 'nav').pop()
+  assert.deepEqual(lastNav, { kind: 'nav', front: '#ffffff', bg: '#242424' }, '深色下导航栏要深底白字')
+  const afterLoad = barCalls.length
+  // 从别的页返回：onLoad 不再跑（页面实例活着），微信把静态配色（app.json 的 #ffffff）盖回来
+  p.onShow()
+  assert.ok(barCalls.length > afterLoad, 'onShow 必须再设一次系统栏，否则返回这一页头顶是白的')
+  const navAfterShow = barCalls.filter((c) => c.kind === 'nav').pop()
+  assert.deepEqual(navAfterShow, { kind: 'nav', front: '#ffffff', bg: '#242424' }, '返回这一页也要是深底白字')
+  assert.equal(p.data.themeClass, 'theme-dark', 'class 也要在（页面本体跟着深色）')
 })
