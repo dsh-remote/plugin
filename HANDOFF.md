@@ -286,6 +286,20 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
     → 按 `requestId` 对上号就把卡收掉（老版本收到不认识的 `t` 会静默忽略，所以顺序可以是
     先 wire、再插件、最后小程序）。
 
+11. **跨端关弹窗（§9.15）这一版还差一次真机点头**，而且今天**造不出那一幕**：
+    这台宿主现在的旧会话里**没有任何执行/写文件工具**——探针发指令后模型回报
+    `Error: unknown tool "run_code"`（`bash` / `python` / `write` 同样 unknown），
+    于是永远走不到审批那一步（`approvalAsked=0`，四条会话轮询都是空手而归）。
+    对照证据：另一个会话 `session-842179a6`（12:05）里 `run_code` 是通的（有 `tool/ptc-dispatch`）。
+    所以这是**按会话而异的工具面/PTC 装载问题**，与这一版改动无关，但它把审批这条链的
+    真机取证挡住了。下次要验就两步：
+    ① 在用户自己**正常干活的那个会话**里让 DSH 问一次审批（不用探针造场景）；
+    ② 手机上点掉 → 看桌面 composer 那张卡**有没有当场消失**，同时读
+    `~/.dsh/dsh-remote-control/status.json` 的 `kernel.approvalSignalHandoff`（应为 `fused`）
+    与 `kernel.approvalDesktopVoided`（应比点之前 +1）。
+    读数解释：两个都动了而卡还在 ⇒ 断在渲染端（宿主的代码），不在插件；
+    `handoff=failed|ignored` ⇒ `request.signal` 换不出去，桌面那张卡只能等它自己的工具调用生命周期。
+
 ## 4. 环境坑（每条都是踩过的，新版）
 
 1. **`env -u NODE_OPTIONS` 必须带**。Qoder CLI 会往子 shell 注入 `NODE_OPTIONS=--require .../cjs-js-proxy-registry.js`，
