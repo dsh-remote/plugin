@@ -287,13 +287,15 @@ test('解除配对被取消：什么都不做', () => {
 
 // ── 静态护栏：wxml 层面的接线 ─────────────────────────────────────────
 
-test('wxml：未配对态有扫描按钮，底部有重新配对与解除配对', () => {
+test('wxml：未配对态有扫描按钮；已配对态没有重新配对，解除配对在主机卡里', () => {
   const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
   const unpaired = wxml.split('wx:if="{{paired}}"')[0]
   assert.match(unpaired, /bindtap="onScan"/, '未配对时首要动作就是扫码')
   const paired = wxml.split('wx:if="{{paired}}"')[1]
-  assert.match(paired, /bindtap="onScan"/, '已配对时也要能重新配对')
-  assert.match(paired, /bindtap="onUnpair"/, 'pair 页删了之后，解除配对只剩这里')
+  // 2026-10-04 用户拍板：**不需要「重新配对」**——先解除再扫码就是重新配对，
+  // 多一颗按钮只多一次误触。解除配对同时挪进主机卡（那张卡写的就是这台主机）。
+  assert.equal(/重新配对/.test(paired), false, '重新配对入口已按用户要求删除')
+  assert.match(paired, /host-danger[^>]*bindtap="onUnpair"/, '解除配对收在主机卡里，不再沉底')
   assert.match(paired, /bindtap="onToggleTheme"/, '主题切换还在')
 })
 
