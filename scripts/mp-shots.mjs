@@ -182,6 +182,36 @@ const SHOTS = {
    */
   dark: [
     {
+      // 待办条的深色面（2026-10-05）：新表面=新风险。这一张要验的是
+      // secondarycontainer 底上的三态点与两种文字色（主文字/placeholder）
+      // 在深色下都还认得出来——对比度体检 310 组是底线，布局看得见才算数。
+      name: 'dark-chat-todo',
+      url: '/pages/chat/chat',
+      theme: 'dark',
+      data: {
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        modelName: 'deepseek-chat',
+        turn: 1,
+        todos: [
+          { content: '复现用户报的顶栏变白', status: 'completed' },
+          { content: '系统栏每次 onShow 重设', status: 'completed' },
+          { content: '补回归：返回这一页也要是深底白字', status: 'in_progress' },
+          { content: '跑 mp check 与伞仓全量', status: 'pending' },
+        ],
+        todosOpen: true,
+        todoDone: 2,
+        todoRunning: 1,
+        todoRunningText: '进行中 补回归：返回这一页也要是深底白字',
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '23:20' },
+          { key: 'u1', kind: 'user', text: '把待办做在聊天页顶部', confirmed: true },
+          { key: 'm1', kind: 'text', text: '好，先看协议侧的形状。', done: true },
+        ],
+      },
+    },
+    {
       name: 'dark-sessions',
       url: '/pages/sessions/sessions',
       theme: 'dark',
@@ -361,6 +391,61 @@ const SHOTS = {
   ],
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
+    {
+      // 待办条（2026-10-05 用户要的 todo list）：做在顶部、默认收起。
+      // 这一张演"展开态"——收起态只有一行，展开才能看见三种状态的记号
+      // （灰圈 / 品牌色半满 / 品牌色实点 + 删除线）与深色下的对比度。
+      name: 'chat-todo',
+      url: '/pages/chat/chat',
+      data: {
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        modelName: 'deepseek-chat',
+        turn: 1,
+        todos: [
+          { content: '复现用户报的顶栏变白', status: 'completed' },
+          { content: '系统栏每次 onShow 重设', status: 'completed' },
+          { content: '补回归：返回这一页也要是深底白字', status: 'in_progress' },
+          { content: '跑 mp check 与伞仓全量', status: 'pending' },
+        ],
+        todosOpen: true,
+        todoDone: 2,
+        todoRunning: 1,
+        todoRunningText: '进行中 补回归：返回这一页也要是深底白字',
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '23:20' },
+          { key: 'u1', kind: 'user', text: '把待办做在聊天页顶部', confirmed: true },
+          { key: 'm1', kind: 'text', text: '好，先看协议侧的形状。', done: true },
+        ],
+      },
+    },
+    {
+      // 待办收起态 + 排队同屏：用户点名的两条边界——待办在顶部、排队在底部，
+      // 中间是消息区。这一张要能一眼看出两块各就各位、没有互相挤占。
+      name: 'chat-todo-queue',
+      url: '/pages/chat/chat',
+      data: {
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        turn: 1,
+        todos: [
+          { content: '复现问题', status: 'completed' },
+          { content: '改完跑全链路', status: 'in_progress' },
+        ],
+        todosOpen: false,
+        todoDone: 1,
+        todoRunning: 1,
+        todoRunningText: '进行中 改完跑全链路',
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '23:30' },
+          { key: 'u1', kind: 'user', text: '排队和待办别打架', confirmed: true },
+        ],
+        queue: [{ key: 'q1', text: '这条排在下面，不跟待办抢地方', images: [] }],
+        queueOpen: true,
+      },
+    },
     {
       // 排队 + 附件 + 加号（2026-10-04 两个新特性的同一屏）：
       // 队列贴在输入区上方（超长文本截断一行、可收起、可删），

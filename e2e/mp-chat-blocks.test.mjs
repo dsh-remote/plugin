@@ -1471,3 +1471,98 @@ test('进执行中的会话：历史最后是封口组时开新组，不往旧�
   assert.equal(last.closed, false)
   assert.equal(p.data.blocks[p.data.blocks.length - 2].kind !== 'steps', true, '新组必须是追加在最后，不是在中间')
 })
+
+/* ── 待办条（2026-10-05：用户要的 todo list）────────────────────────────────── */
+
+const TODO_FRAME = {
+  t: 'ev.todo',
+  todos: [
+    { content: '复现问题', status: 'completed' },
+    { content: '改完跑全链路', status: 'in_progress' },
+    { content: '写判据', status: 'pending' },
+  ],
+}
+
+test('待办帧：落在顶部那颗条上，默认收起只报进度', () => {
+  const p = makePage()
+  send(p, TODO_FRAME)
+  assert.deepEqual(
+    p.data.todos.map((x) => x.status),
+    ['completed', 'in_progress', 'pending'],
+    '三条状态原样落，一个都不许改',
+  )
+  assert.equal(p.data.todosOpen, false, '默认收起——常驻展开会把消息区顶掉')
+  assert.equal(p.data.todoDone, 1, '完成数：1/3')
+  assert.equal(p.data.todoRunning, 1, '有一条在进行中')
+  assert.equal(p.data.todoRunningText, '进行中 改完跑全链路')
+})
+
+test('待办条：点条子展开、点消息区收回', () => {
+  const p = makePage()
+  send(p, TODO_FRAME)
+  p.onToggleTodos()
+  assert.equal(p.data.todosOpen, true, '点一下要展开')
+  p.onToggleTodos()
+  assert.equal(p.data.todosOpen, false, '再点一下收回')
+  // 展开态下点消息区（scroll-view 的 catchtap）→ 收回
+  p.onToggleTodos()
+  p.onCollapseTodos()
+  assert.equal(p.data.todosOpen, false, '失去焦点要自动收缩')
+  // 收起态再点消息区：不该抖（没有状态变化就没有 setData）
+  p.onCollapseTodos()
+  assert.equal(p.data.todosOpen, false)
+})
+
+test('待办帧去重：同一份清单到两次不重排', () => {
+  const p = makePage()
+  send(p, TODO_FRAME)
+  const first = p.data.todos
+  send(p, TODO_FRAME)
+  assert.equal(p.data.todos, first, '同一份快照第二次到必须原样不动（引用相等即没 setData）')
+  // 状态真变了要落：completed → in_progress
+  send(p, {
+    t: 'ev.todo',
+    todos: [
+      { content: '复现问题', status: 'completed' },
+      { content: '改完跑全链路', status: 'completed' },
+      { content: '写判据', status: 'in_progress' },
+    ],
+  })
+  assert.equal(p.data.todoDone, 2, '完成后完成数要跟着涨')
+  assert.equal(p.data.todoRunningText, '进行中 写判据')
+})
+
+test('待办被内核清空：清单空了，展开态也要收回', () => {
+  const p = makePage()
+  send(p, TODO_FRAME)
+  p.onToggleTodos()
+  assert.equal(p.data.todosOpen, true)
+  send(p, { t: 'ev.todo', todos: [] })
+  assert.deepEqual(p.data.todos, [], '空快照要清空（不许留着上一轮的清单）')
+  assert.equal(p.data.todosOpen, false, '清单没了就不该留一个展开的空面板')
+})
+
+test('待办与排队消息不打架：两个状态各管各的', () => {
+  const p = makePage()
+  send(p, TODO_FRAME)
+  // 排队（会话在跑时打指令）不该碰待办
+  p.setData({ running: true, inputText: '顺便看看这个' })
+  p.onSend()
+  assert.equal(p.data.queue.length, 1, '指令进了排队队列')
+  assert.equal(p.data.todos.length, 3, '排队不影响待办')
+  // 待办帧也不该碰队列
+  send(p, { t: 'ev.todo', todos: [{ content: '新的一条', status: 'pending' }] })
+  assert.equal(p.data.queue.length, 1, '待办不影响排队')
+  assert.equal(p.data.todos.length, 1)
+})
+
+test('wxml：待办条在顶部（scroll 之前），默认收起可点开', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const barAt = wxml.indexOf('todo-bar')
+  const scrollAt = wxml.indexOf('class="scroll"')
+  assert.ok(barAt > 0 && scrollAt > barAt, '待办条必须在消息区之前（做在顶部）')
+  assert.ok(wxml.includes('bindtap="onToggleTodos"'), '点条子展开')
+  assert.ok(wxml.includes('catchtap="onCollapseTodos"'), '点消息区收回')
+  assert.ok(wxml.includes('todosOpen'), '张开合由 todosOpen 驱动')
+})
