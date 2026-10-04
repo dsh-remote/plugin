@@ -271,18 +271,20 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    （权限都是 0600，一共约 20K）。清不清、清哪些等用户点头——**这是删用户文件，不动手**。
    要清的话建议一次清全部 `.bak-*`：profile 现在跑的是仓里装的包，这些备份只是历次
    改 patch 时脚本自己留的退路。
-10. **待接：把 `ev.permission_resolved` 真的发出去**（桌面先答之后收回手机上那张审批卡）。
+10. **待接：把 `ev.permission_resolved` 真的发出去**（按 `requestId` 精确收手机上那一张卡）。
     协议那半**已经落好**（wire `66e9a63`：schema + `PAYLOAD_TYPES` + `permissionResolved()` + 测试），
-    插件这一侧只差一行 `replyTo(...)`——但 control 装的 `dsh-remote-wire` 是 **npm 上的 1.1.0**，
-    那份里没有这一帧，`tsc` 直接报 `has no exported member 'permissionResolved'`。
-    **步骤**：① 发一个带这帧的 wire 版本（发布是改共享状态，等用户点头）；
-    ② control 升依赖；③ 把 `runtime.ts` 里 `onApprovalRequest` 末尾那段注释换成真发送
-    （`by: info.signal?.aborted && info.signal.reason === 'desktop' ? 'desktop' : 'cancelled'`，
-    `participate()` 已经把原因带下来了）；④ 小程序那半加 `if (p.t === 'ev.permission_resolved')`
+    但 control 装的 `dsh-remote-wire` 是 **npm 上的 1.1.0**，那份里没有这一帧，
+    `tsc` 直接报 `has no exported member 'permissionResolved'`。
+
+    **2026-10-04 这一半已经不堵了**：作废改走现有一帧 `ev.run_state`（结算点 `runtime.settle()`
+    在"不是手机点的"那三种收场时补发一次，见 §9.15）。这条**用的是手机现在装的这一版小程序就认的信号**，
+    所以不用等 wire 发布、也不用重新上传小程序。精确那一帧剩下的价值只有两点：
+    ①按 `requestId` 只收这一张（`run_state` 是"这一会话的卡片全收"）；②不顺手把"思考中"拨一次。
+    **步骤**不变：① 发一个带这帧的 wire 版本（发布是改共享状态，等用户点头）；② control 升依赖；
+    ③ `runtime.ts` 的 `voidStaleCard()` 旁边再加这一帧（`by: 'desktop' | 'cancelled'` 由
+    `participate()` 带下来的 reason 决定）；④ 小程序那半加 `if (p.t === 'ev.permission_resolved')`
     → 按 `requestId` 对上号就把卡收掉（老版本收到不认识的 `t` 会静默忽略，所以顺序可以是
     先 wire、再插件、最后小程序）。
-    在那之前的行为是可接受的降级：桌面先答时手机上那张卡留到自己的倒计时走完，
-    点下去是空操作（`pending` 条目已经作废），**不会误批**。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
@@ -1051,3 +1053,77 @@ waterfall 最外层之后**在那儿等手机**，而 waterfall 的规矩是"外
 一直挂在 `conversations` 里）。这一版把"主机白发"止住了，但那条记录本身还在，
 `/healthz` 的 `conversations` 仍然会虚高。要不要收（比如"最后一个客户端走光后 N 分钟回收，
 N 远小于 7 天"）是**中继的产品决定**，摆着等用户拍——它和 D3"手机回前台不该重新扫码"是有张力的。
+
+### 9.15 跨端关弹窗：任一端答完，其他端那张卡要当场作废（2026-10-04 中午）
+
+用户提的形状是「任意一端点了同意，其他端**识别到 flow 继续**的时候要关掉弹窗」。
+两端各欠一半，而且**这两半用的不是同一个机制**——先说清为什么必须分开。
+
+**手机上那一半：`ev.run_state` 就是这套协议里的"卡片作废"信号**（不是我们临场找的）。
+`dsh-remote-mp/pages/chat/chat.js` 的 `_onRunState` 原文注释写着
+「这条帧是'挂着的审批/提问已经作废'的唯一信号（只有 running/idle 会发）」，
+它同时清 `pendingPermission` 与 `pendingQuestion` 并停掉那条本地倒数。
+**根因**：内核不会为"审批被别人答掉了"发状态跳变——这一回合自始至终是 `running`，
+所以手机上那张卡要等到回合真正结束（或它自己倒计时走完）才消失。
+**修法**：`runtime.settle(id, value, voidAs?)` 多一个"这一场是谁收的场"
+（`'desktop'` / `'withdrawn'` / `'timeout'`；手机自己点的传 `undefined`），
+非手机收场时补一帧 `ev.run_state`。补的是**内核真相**（`kernel.runState(sessionId)`），
+读不到才退缓存快照、再退 `idle`——手机上那个"思考中"跟着这帧走，硬发 `running` 会凭空多一个转圈。
+提问那条也一起管住了（同一处结算点），并且**超时路径不再各自 `pending.delete`+`resolve`**，
+三条收场共用一个结算点，作废与释放挂锁不会再分叉。
+选它而不是新帧的**决定性的理由**：手机现在装的这一版小程序就认它——
+不用等 wire 发布，也不用让用户重新上传小程序（§3.10 那条精确帧因此降级成"锦上添花"）。
+
+**桌面上那一半：句柄只有一个，`request.signal`。**
+读码读到三处才把这条链对上（都在 `app.asar` 里，取证路径记在下面）：
+
+1. `@deepseek-ai/cordis` 的 `EventsService.waterfall`：
+   `const next = () => (cbs.shift() ?? inner)(...args)` —— **`next()` 的实参被整个忽略**，
+   所以参与者**没法用返回值换掉下游收到的请求对象**；能动的只有那个对象自己的字段。
+2. `@deepseek-ai/dsh-user-approval` 的 `ApprovalService.decide`：`const signal = req.signal`
+   是在**派发之前**读的，之后没人再读原件——所以我们换掉 `req.signal` 不会影响宿主自己的
+   `cancelled` 判定，只影响下游应答者。
+3. `@deepseek-ai/dsh-api-gateway`：宿主侧 `startRemoteEvent()` 把 `projected.signal`
+   放进 `signals`，它一断就 `cancelRemoteEvent()` → `finishRemoteEvent()` 向**每一个**渲染端
+   推 `{type:'cancel', eventId}`；客户端 `pumpEvents()` 收到那句就
+   `controller.abort(new Error('Remote event was cancelled by the Host'))`，
+   `dispatchWaterfall()` 递给 UI 的 `request.signal` 正是这条 delivery signal 的派生，
+   于是 `dsh-client-ui-approval` 的 `PendingApproval.abort()` → `answerApproval` 的
+   `finally { remove() }` → **卡片由宿主自己的代码收掉**。
+   `projectRemoteEventRequest()` 还顺手确认了两件事：`signal` 必须是 `instanceof AbortSignal`
+   （我们给并算后的那条，合法），而 `agent`/`signal` 两个键被排除在 JSON 投影之外
+   （所以我们塞进去的 signal 不会被当成"非 JSON 字段"抛）。
+
+**结论**：`participate()` 里把交给下游的那份 signal 换成 `AbortSignal.any([平台的, 我们这条])`，
+手机先答时撤销我们这条。语义是**宣告"这次请求结束了"**，不是替桌面决定结果——
+结果早就由先答的那一端给出了；而 DSH 自己在多窗口场景本来就是这么做的
+（第一个客户端给出结果时 `finishRemoteEvent` 向其余客户端发 cancel），我们只是把同一条规则
+延伸到"第二个应答者"。**顺序很要紧**：先抓 `platform = request?.signal` 原件、再接上去，
+反过来的话我们自己那一下撤销会顺着并算回到 `controller`，runtime 会把手机刚点掉的应答
+当成"被撤回"再作废一遍（这条有测试盯着）。
+
+顺带修掉一个**没有手机时的挂死**：桌面上没人点、链子末端也没有人答时，
+`next()` 那条分支原本永远悬着；现在结算点一律 `finish()`，并算信号断掉 → 网关 cancel → 交还。
+
+**取证路径**（下次别重新发明）：宿主代码在
+`/Applications/DeepSeek Harness.app/Contents/Resources/app.asar`，
+`npx @electron/asar` 不在依赖里，用一个 30 行的 node 脚本读 header（`headerLen = buf.readUInt32LE(12)`，
+数据基址 = `16 + headerLen` 再 4 字节对齐，`offset` 是**字符串**、`unpacked:true` 的条目没有 offset）
+就够把 `dsh/node_modules/@deepseek-ai/**.js` 抽到 /tmp 再 grep。
+
+**可观测**：`status.json` 的 kernel 块多两个字段——`approvalSignalHandoff`
+（`fused` / `ignored` / `failed: <原因>`，严格模式给不可写的 `signal` 赋值会**抛**，
+那里必须包 try：一抛会顺着 waterfall 把宿主的这次审批判死）与 `approvalDesktopVoided`
+（**只在换成功时**计数）。屏幕上看不见那张卡收没收，就看这个数加没加：
+加了而卡还在 → 问题在渲染端；没加 → 我们这一侧没换成功。
+
+**闸门**：control **319 pass / 0 fail**、`typecheck` 绿、`format:check` 绿；
+`e2e/run.mjs` 17 步 0 失败。六次变异各自都被抓住，且**只**抓住对应那条：
+不换下游 signal / 手机先答时不撤销 / 撤销时连 runtime 那侧一起带倒 → 各 1 红；
+结算点不补帧 → 5 红；reason 不区分桌面先答 → 1 红；作废帧硬发 `running` → 1 红。
+
+**还没取证的那一半（要人眼）**：整套机制在**宿主真实的渲染端**是否表现为"桌面那张卡当场消失"，
+我这台机器上没法自证——Computer Use 看不到这个 app 的界面（AX 树只给菜单栏，
+capture policy 是 AX_ONLY 所以坐标点击直接报错）。所以这一条只能等用户按屏幕：
+**手机先答一次 → 看桌面 composer 上那张审批卡有没有当场不见**；
+反方向（桌面先答 → 手机卡当场收）这一版是自动的，`/status` 的 `waiting` 归零同时卡片也被作废帧收掉。
