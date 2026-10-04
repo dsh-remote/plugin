@@ -49,7 +49,8 @@ test('归档会话被过滤掉，数量与说明都对得上', () => {
     { id: 'c', title: '运行中', state: 'running', running: true },
     { id: 'd', title: '归档会话 2', state: 'archived' },
   ])
-  assert.deepEqual(ids(p), ['a', 'c'], '归档的不能出现在列表里')
+  // 2026-10-04 起列表按四级排序：都在空目录组、c 在跑 → c 在前
+  assert.deepEqual(ids(p), ['c', 'a'], '归档的不能出现在列表里；剩下的按运行中优先排')
   assert.equal(p.data.hiddenArchived, 2)
   assert.equal(p.data.hiddenText, '已隐藏 2 个归档会话', '不能悄无声息地少掉，要留一句话')
 })
@@ -72,4 +73,55 @@ test('空列表与非归档状态不报错', () => {
     p.data.sessions.map((s) => s.badgeText),
     ['待审批', '未加载'],
   )
+})
+
+/* ── 工作区 tag + 四级排序（2026-10-04 用户要的）────────────────────────── */
+
+test('排序：工作区 → 运行中优先 → 时间新的在前 → 名称；空目录排最后', () => {
+  const p = makePage()
+  p._renderSessions([
+    // 故意乱序：同工作区内跨状态、跨时间；再加一个空目录的插在中段
+    { id: 'b1', title: '乙项目旧会话', workspace: '/w/b', state: 'idle', updatedAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'a2', title: '甲项目运行时', workspace: '/w/a', state: 'running', running: true, updatedAt: '2026-10-03T09:00:00.000Z' },
+    { id: 'none', title: '没目录的', workspace: '', state: 'running', running: true, updatedAt: '2026-10-04T09:00:00.000Z' },
+    { id: 'a1', title: '甲项目新会话', workspace: '/w/a', state: 'idle', updatedAt: '2026-10-04T08:00:00.000Z' },
+    { id: 'a3', title: '甲项目 B', workspace: '/w/a', state: 'idle', updatedAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'b2', title: '乙项目新会话', workspace: '/w/b', state: 'idle', updatedAt: '2026-10-04T07:00:00.000Z' },
+    { id: 'b3', title: '乙项目运行中', workspace: '/w/b', state: 'running', running: true, updatedAt: '2026-10-01T06:00:00.000Z' },
+    { id: 'a4', title: '甲项目 A', workspace: '/w/a', state: 'idle', updatedAt: '2026-10-01T10:00:00.000Z' },
+  ])
+  assert.deepEqual(
+    ids(p),
+    // 甲项目：运行中第一，然后新的在前，同一秒的两个按名称定序（A/B 结尾，不赌 collation 对中文的口径）
+    ['a2', 'a1', 'a4', 'a3',
+     // 乙项目：同样先运行中，再新的在前
+     'b3', 'b2', 'b1',
+     // 空目录最后（哪怕它更新最新、还在运行）
+     'none'],
+    '四级排序：工作区 → 状态 → 时间 → 名称',
+  )
+})
+
+test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortAt 不进渲染数据', () => {
+  const p = makePage()
+  p._renderSessions([
+    { id: 'a', title: '一', workspace: '/Users/linbin/dsh-remote-control', state: 'idle' },
+    { id: 'b', title: '二', workspace: '/Users/linbin/proj/', state: 'idle' },
+    { id: 'c', title: '三', workspace: '', state: 'idle' },
+  ])
+  const byId = Object.fromEntries(p.data.sessions.map((s) => [s.id, s]))
+  assert.equal(byId.a.workspaceTag, 'dsh-remote-control')
+  assert.equal(byId.b.workspaceTag, 'proj', '目录末尾的斜杠要能容忍')
+  assert.equal(byId.c.workspaceTag, '', '没挂目录的会话不出 chip')
+  assert.equal(byId.a.workspace, '/Users/linbin/dsh-remote-control', '完整路径还在，只是弱化显示')
+  for (const s of p.data.sessions) {
+    assert.ok(!('sortAt' in s), '排序用的原始时间戳不该进渲染层（两处口径会分叉）')
+  }
+})
+
+test('wxml：标题行带工作区 chip，空目录不渲染', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
+  assert.match(wxml, /class="sess-title-row"/, '标题与 chip 要在一行（chip 不动、标题先省略）')
+  assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, 'chip 只在有工作区时渲染')
 })
