@@ -1524,3 +1524,55 @@ sessions-list 截图走渲染层验收（chip 在卡里、底部只剩主题切�
 
 闸门：mp check 32/32（对比度 286 组）、伞仓 146/0、run.mjs 17 步；
 sessions-list 截图验收。**用户侧**：选 mp 1.1.2 为体验版。
+
+### 9.28 P2 收口 + 深色/P2 队列表九连（2026-10-05 01:30）
+
+**发布状态**：wire 1.4.0（ev.todo）、control 2.0.2（待办上屏 + cwd 修复 + pill 文案）、
+relay 1.0.4 **已部署生产**（healthz 报 1.0.4；重启断开过手机通道，用户重扫一次即可）、
+mp 1.1.3 已上传（等用户在公众平台选为体验版）。19 条 Dependabot 全部 update-branch
+转绿后合掉（协议 5 / 控制 6 / 中继 6 / mp 2）——它们的红**全是**分支旧导致
+Multiple versions of pnpm specified（工作流里的 version 与 packageManager 打架），
+update-branch 带进修好的工作流即绿，不是依赖本身的锅。控制仓 PR 4 有真实冲突，
+解法：checkout PR 分支 + merge main + 重生成 lockfile + 推回分支。
+TypeScript 7.0.2（Go 版）在四个仓都过了 typecheck。
+
+P2 收口三条：④⑤ relay 空会话回收（30 分钟，最后一个客户端走才起表，
+socket close 不起表——护 D3 免扫码）随 1.0.4 上生产；⑥ takeOverQuestions 死键
+全清（control 16ff1df，伞仓 run.mjs 的传参残留本轮才清掉）；⑦ 19 条 Dependabot 见上。
+⑧ 运维小尾巴仍未动：6 份含 hostToken 的 .bak 在 ~/.dsh/profiles/desktop/（删用户文件，
+待用户点头），旧 npm token 与回滚路径按之前拍的板不动。
+
+队列表九连，按提交：
+
+1. **深色 chat 回复色块**（f449272）：steps-card 描边 + reply 用 secondarycontainer；
+   markdown 的 codeBg/quoteBg 深色提到 #333/#262626（原 #242424 与卡同色=代码块隐身）。
+2. **配对码 TTL 分叉**（536bc83）：发码回答取 service 权威 expiresAt + 本地过期守卫；
+   回归先用**旧 dist** 跑红再重建跑绿。
+3. **DSH 列表看不到 mp 新建的会话**（d90ddb6）：三重取证——create 不传 cwd 时宿主用
+   process.cwd() 兜底，真机 lsof 一看就是 /，会话挂在不属于任何用户项目的目录。
+   三级取值：配置 newSessionCwd > 最近一条会话的目录 > 退回旧行为（日志留痕）。
+4. **深色 sessions 顶栏变白**（bcbffa6）：wx.setNavigationBarColor 每页实例一次性，
+   从 chat 返回时微信用静态白盖回来；chat 页的 onShow 一直在重设所以它正常。
+   sessions 的 onShow 补 theme.applyTo 即可（配对首页同一页，一起覆盖）。
+5. **微信扫码直达**：调研后**用户说先不改**。结论存档——URL Link 是正解（支持
+   env_version=trial、query 装得下整条 URI）；小程序码只能线上版本且 scene 32 字符
+   装不下 server+PSK+token。要 appid+secret，一天工作量。
+6. **进执行中会话看不到正在执行**（aa333c2）：ev.run_state 只在跳变时发，进入时唯一
+   信号是 list_sessions 回执；_onSessions 翻牌时同步开实时组，历史第一页落地后补一次
+   （空流不补的守卫在 ensureThinkOpen 里，幂等）。
+7. **pill 文案口径**（55f68dd）：未配对改为远程未连接、已配对改为已连接、弹窗状态行改为已就绪；
+   qrNote/待处理行去掉间隔号与书名号；二维码页加一行新人引导（drc-guide，短、不带符号，
+   正则判据钉住不含括号书名号顿号冒号）。
+8. **todo list 上屏**（协议 25c5e38 / 控制 6234ffe / mp b91b0fb）：ev.todo 全量快照帧
+   + todo/write 映射（status 三元白名单 / content 不超过 200 / 整份不超过 50，空清单也发）
+   + 聊天页顶部待办条（默认收起、点开、点消息区自动收回，排队在底部不打架）。
+   渲染层三张真人截图（浅展开/收起+排队/深展开）。
+   **v1 边界**：只上实时帧，不进历史回放（要扩 historyItem 联合）。
+   wire 1.4.0 发布前控制仓用按协议本地构造帧顶着（注释写明换回时机），发版后已换回。
+
+踩到并修掉的一处颜色问题（老规矩：品牌色在深色表里不能想当然）：
+todo-running 用 --td-brand-color 在深色容器上 2.94:1（对比度体检抓的），
+改主文字色，品牌色只留给非文字的状态点。
+
+**用户侧还剩三步**：① 重启 Harness（吃 2.0.2：待办、cwd 修复、pill 新文案）；
+② 公众平台把 mp 1.1.3 选为体验版；③ 手机重新扫一次码（relay 重启断开过通道）。

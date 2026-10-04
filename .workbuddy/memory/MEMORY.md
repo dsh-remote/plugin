@@ -2,201 +2,159 @@
 
 细节不在这里：mp 界面坑位清单见 skill `dsh-mp-ui-dev`；逐轮过程见 `.workbuddy/memory/YYYY-MM-DD.md`。
 
-## 仓库布局（2026-10-03 起）
+## 仓库布局
 
-小程序已独立成仓 **`dsh-remote-mp/`**（自己的 git 仓，`git status` 在它目录里跑），
-自带 `npm run check` = `verify`（只查"能确定对错"的静态项，**样式/交互明确不覆盖**）
-+ `theme:check` + `contrast`。
-伞仓根 `scripts/` 保留探针与截图（`mp:probe` / `mp:shots` / `check:mp-ui`），已改指向
-`dsh-remote-mp/miniprogram`。**页面逻辑测试仍在伞仓** `e2e/mp-chat-blocks.test.mjs`，
-用 `require` 跨仓载入 `dsh-remote-mp/miniprogram/pages/chat/chat.js` —— 改 chat 页两处都要动。
+伞仓 `dsh-remote-control/` 保留 e2e/探针/文档；下面三个已独立成仓（各自 `git status`）：
 
-协议仓 `dsh-remote-protocol/` 也已独立，走**打标签触发 GitHub Release** 发 npm
-（OIDC/Trusted Publishing，不要 token）。plugin 一律以 `"dsh-remote-wire": "^x.y.z"`
-消费 npm 版本，**不要改回 `file:` 本地引用**。改版本后必须 `pnpm clean --lockfile` 再
-`pnpm install`（`minimumReleaseAge` 会拦刚发布的版本）；pnpm 会自动往
-`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 加一条，**那条别手删**。
+| 仓 | 位置 | 备注 |
+|---|---|---|
+| plugin | `dsh-remote-control/packages/plugin` | 装进 `~/.dsh/profiles/desktop/node_modules/dsh-remote-control` |
+| mp | `dsh-remote-mp/` | 原生小程序，**永不点「构建 npm」** |
+| protocol | `dsh-remote-protocol/` | 打标签触发 GitHub Release 发 npm（OIDC，不要 token） |
 
-## 删 mp 代码前必读（2026-10-03 清理教训）
-
-伞仓 e2e 会 `require` mp 的模块并**直接摸它的内部**。「grep 不到引用 = 死代码」在这三类上
-会咬人，每一条都栽过：① 被测试当**对拍 oracle** 的导出（`codec.nacl` ——
-`protocol.test.mjs` 拿它跟 npm tweetnacl + node:crypto 比哈希）；② 被测试**断言透传**的参数
-（`loadHistory` 的 `opts.limit`）；③ **算进 oracle sha256 的注释** ——
-`protocol.test.mjs` 比对 `codec.js` 整个文件的哈希，**加一行注释也必须重跑
-`node e2e/tools/gen-vectors.mjs`**，重生成后要确认「只有 `_meta` 变了、向量逐字节相同」。
-结论：清理时先跑一遍基线，删一条跑一次 e2e，别攒到最后一起验。
-
-TDesign 已按依赖闭包裁到只剩 `button`/`empty`/`switch`（+ common），`miniprogram_npm`
-1.5M → 492K。**裁剪后必须亲眼看组件渲染截图**（依赖链最长的 `t-empty`→icon+image），
-「编译没报错」证明不了渲染对了。清单与闭包算法见 skill `dsh-mp-ui-dev`。
+- plugin 单跑：`pnpm -C packages/plugin test`（根包与 plugin **包名相同**，名字 filter 会命中两个）。
+  它会先 `build`。页面逻辑测试**仍在伞仓** `e2e/mp-chat-blocks.test.mjs`，用 `require` 跨仓载入
+  `dsh-remote-mp/miniprogram/pages/chat/chat.js` —— 改 chat 页两处都要动。
+- plugin 一律以 `"dsh-remote-wire": "^x.y.z"` 消费 npm 版本，**不要改回 `file:`**。
+  改版本后 `pnpm clean --lockfile` 再 `pnpm install`（`minimumReleaseAge` 会拦刚发布的版本）；
+  pnpm 会自动往 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 加一条，**别手删**。
 
 ## 排错第一动作
 
 `cat ~/.dsh/dsh-remote-control/status.json`：`carrier`（`services`=真内核 / `mock`=假会话）、
 `relay`、`relayProblem`、`kernel.historyFace`（`readSession`=能读历史 / `absent`=不能）、
+`kernel.approvalFace`（停在 `not-attached` = `attachInteractionSink` 从没被调用）、
 `injectedUserMessages`（被丢弃的宿主注入消息计数，有值=该修复在生效）。
+
+**⚠️ 缺字段 = 跑的是旧代码，不是"该功能坏了"。** `status.json` 里某个可观测字段整个消失，
+唯一解释是当前进程加载的不是这份 bundle（2026-10-04 用户报"落盘没生效"即此：字段从不在，
+而磁盘 bundle 里有）。比对两个时刻即可定案：插件自报 `probe.applyCount`（`1@<ms>`，
+换算成时间 = 进程加载时刻）vs `index.js` 的 mtime（= 部署时刻）。
+**先看字段在不在，再谈逻辑对不对。**
+
+**四个数语义必须分开**，混了会得出相反结论：
+`pairedClients`（手机台数）、`conversations`（**会话数，按 D3 长存，手机解配也不删，恒不清**）、
+`pendingPairs`（还没被用掉的配对码）、`pairStore.{enabled,file,restored,lastSavedAt}`。
+- 「解配 → 重配」会开**新会话**，所以拿会话数回答"几台手机"会得到"解完配对数字反而变大"。
+- **凡是要回答"现在有几台手机/连着没有"，一律 `clientCount()`**（粗判据非精确在线数）。
+- `restored > 0 && conversations === 0` 才是异常；`conversations > 0 && restored === 0` 是正常的本次新配对。
 
 线上 `wss://drc.provid.cc`（ECS `47.100.82.15`）。token 两处**必须一致**：
 服务器 `/etc/dsh-remote-control.env`(600) 与 `~/.dsh/profiles/desktop/cordis.patch.yml`。
-改插件后**必须重启 Harness**（HMR 只重载配置，替换 `dist` 不重载）；
-重新部署用 `./scripts/install-to-profile.sh`，不能只 `pnpm -r build`。
 
-status.json 里**三个数语义必须分开**，混了就会得出相反结论：
-`pairedClients`（手机台数，去重 clientId）、`conversations`（会话数，重配会涨）、
-`pendingPairs`（还没被用掉的配对码）。「解配 → 重配」会开**新会话**，
-所以拿会话数回答"几台手机"会得到"解完配对数字反而变大"。
-⚠️ 更狠的一条：**会话数按 D3 长存，手机解配也不删**（手机回前台要用同一个 convId 回来），
-所以拿它当"有没有手机连着"**恒不清**。2026-10-03 用户报"解配后电脑没反应"，
-真根因就是 pill 的 `paired` 读了它（`index.ts` `pillStatus()`），而新加的
-`pairedClients` **一个消费者都没有**。**凡是要回答"现在有几台手机/连着没有"，
-一律 `clientCount()`**（它是粗判据不是精确在线数，见 `keys.ts` 注释）。
-**改 `status.json` 的字段时必须同时问「谁读它」—— 改了账本没人看等于没改。**
+### 部署：改完必须重启 Harness
+
+HMR 只重载配置，替换 bundle **不重载**。部署 = `pnpm -C packages/plugin build` + 替换
+`~/.dsh/profiles/desktop/node_modules/dsh-remote-control/`，然后**完全退出重开 Harness**。
+⚠️ 已部署包是**扁平结构**（`index.js` 在该目录顶层，**没有 `dist/`**）——
+按 `dist/` 去 grep 会全空，误判成"代码没部署"。`scripts/install-to-profile.sh` **已不存在**
+（伞仓 `scripts/` 只剩探针与截图）。
+
+## 免扫码重连（落盘，自举迭代的前提）
+
+`~/.dsh/dsh-remote-control/conversations-<hostId>.json`（`shell/pair-store.ts`：
+0600 + 临时文件 rename + hostId 校验；读不出/写不进一律降级**绝不抛**，插件起不来比丢配对更糟）。
+落 **psk** 不落派生密钥（`derivePskKey` 是纯函数，存派生结果等于多一份必须永远相等的第二真相）。
+**mp 侧零改动** —— 它的 installId/convId 本来就持久化在 wx storage。
+
+四条容易重犯的：
+- **`hello-ok` 不许清会话**。原来的 `closeBefore(generation)` 把"主机自己重启"当成"中继重启"
+  （`generation` 只是进程内自增计数器），于是**每次重启都自毁全部配对**。
+  它现在只喂 `PairingWindow`（中继重启后 pending-pair 表空了，挂着的那张码是死码）。
+- **恢复必须在 `connect()` 之前**，否则第一帧 `resync` 声明的是空列表，中继据此删通道。
+- **有恢复出来的会话就立刻 `runtime.start()`**，不等 `onPeerJoined` —— 恢复不是重配，
+  手机不发 `pair-begin-client`，等它就等于主机不订阅任何内核事件（症状与配对丢失一模一样，
+  但 status.json 里 conversations=1、carrier 也正常）。
+- 恢复出来的会话走**另一条 TTL**（`restoredIdleTtlSec`，默认 7 天对齐中继），
+  不按 24 小时那条剪 —— 否则长假后主机一启动就把唯一通道清了。剪枝只在 host 侧。
 
 ## 协议不一定要改：先查服务端有没有现成的路
 
 帧名是冻结的（F1），但**中继里往往已经有那条路**。2026-10-03 查「解配要通知主机」时，
-`dsh-remote-server/src/server.ts` 的 `session-leave` **客户端分支早就实现了**
-（转 `peer-left` 给主机），缺的只是小程序没发。加协议帧之前先 grep 服务端。
+`dsh-remote-server/src/server.ts` 的 `session-leave` **客户端分支早就实现了**（转 `peer-left`），
+缺的只是小程序没发。加协议帧之前先 grep 服务端。
+
+## 删 mp 代码前必读
+
+伞仓 e2e 会 `require` mp 的模块并**直接摸它的内部**。「grep 不到引用 = 死代码」在这三类上会咬人：
+① 被测试当**对拍 oracle** 的导出（`codec.nacl`，`protocol.test.mjs` 拿它跟 npm tweetnacl +
+node:crypto 比哈希）；② 被测试**断言透传**的参数（`loadHistory` 的 `opts.limit`）；
+③ **算进 oracle sha256 的注释** —— 比对 `codec.js` 整个文件的哈希，**加一行注释也必须重跑
+`node e2e/tools/gen-vectors.mjs`**，且确认「只有 `_meta` 变了、向量逐字节相同」。
+清理时先跑基线，删一条跑一次 e2e，别攒到最后一起验。
 
 ## 构建纪律
 
 `env -u NODE_OPTIONS pnpm -r build` / `-r test`；`node e2e/run.mjs`；`pnpm -C e2e test`。
 **`env -u NODE_OPTIONS` 不能省**（WorkBuddy 的 FS 钩子拦 pnpm 符号链接，报 `CODEBUDDY_BROKER_DENY`）。
 各包测试引 `dist/`，跑 mp 测试前必须先 build，否则报 `does not provide an export named …`（假红）。
-plugin 单跑用 `pnpm -C packages/plugin test`（根包与 plugin **包名相同**，名字 filter 会命中两个）。
-**有并行 agent 在提交**：开工与交付前各 `git log --oneline -3`；同一文件几分钟内可能被改，
-判断代码对不对之前先看 mtime。
+**有并行 agent 在同仓提交**：开工与交付前各 `git log --oneline -3`；判断代码对不对之前先看 mtime ——
+测试跑不过可能是**别人没写完的 fixture**，不是自己改坏了。
 
-## 反复出现的八个教训
+## 判据纪律（mp 专属细节见 skill `dsh-mp-ui-dev`，那边有完整版）
 
-1. **静态断言写完必须反证，反证样例要「构造」最小错误形态** —— 在真实文件上做替换来反证靠不住
-   （前置条件常不成立，断言不响会被误判成"断言无效"）。自检里匹配文本前**先剥注释**。
-2. **CSS 自定义属性在"声明它的元素上"解析，继承下来的是「计算值」** —— 后代重定义变量**不会**让
-   祖先算出的 `color` 重算。深色变量挂在根容器的 class 上，所以 `page { color: var(--td-…) }`
-   取到浅色值，近黑字压在深底上（真机踩过：底色/class/页面 data 全对，只有字全黑）。
-   **凡是挂了主题 class 的节点，都必须自己声明 `color`。**
-3. **判据必须落在渲染层，且要挑对节点** —— 验「底色变深了」推不出「字色变亮了」。
-   `mp-probe` 用 `el.style(...)` 读计算样式（不是 `el.property(...)`）；截图只证明长得对、
-   页面单测只证明逻辑算得对。**没有回读手段的判据等于没测。**
-   ⚠️ **2026-10-03 第三轮踩死过一次**：解配那条判据只读 `status.json` 的 `pairedClients`，
-   修完主机侧就收工，用户重启后报"还是没反应" —— 真根因是**界面上那句话读的是另一个字段**
-   （`pillStatus().paired` 接的是会话数，而会话按 D3 长存、恒不清）。
-   **「账本对了」不等于「界面变了」，两者取的是不同字段，必须各有一条判据。**
-   反证时这条尤其有说服力：换回旧字段后新判据红，**旧那条仍全绿**（它天生看不见界面）。
-   宿主侧对应的手法是打**真路由**：`host.callPill('/plugins/dsh-remote-control/status')`。
-   ⚠️ e2e 的 `until` 与 `untilAsync` 是两个函数 —— 异步 predicate 用 `until` 会把
-   Promise 当真值**立刻假绿**；`trail` 是数组，不接受函数。
-4. **判据里不许 `setData` 它本该验证的那个开关** —— 那等于自己按住开关再检查它（真踩过：验
-   "过程默认显示"的探针自己写了 `showSteps: true`，把开关改回去它仍全绿）。
+跨仓的四条，任何自动判据都适用：
+
+1. **判据红时先怀疑判据，不是先怀疑实现。** 读不存在的字段 → `undefined` → 比较变 `NaN`
+   → 恒红。判据与实现不一致时**先假设判据错**（它更容易错，且错了不会误导产品）。
+2. **判据里不许 `setData`/桩掉它本该验证的开关** —— 那等于自己按住开关再检查它。
    **每条新判据要单独反证一次，一个不落**（我曾反证了位置却漏了开关）。
-   automator 的 Element **没有 `boundingClientRect`**，只有 `offset()` + `size()`（值是字符串）；
-   读不存在的字段 → `undefined` → 比较变 `NaN` → 判据恒红。**判据红时先怀疑判据。**
-   automator 另有两处会咬人：Element **没有 `class()` 方法**（读 class 只能用
-   `attribute('class')`）；**`style()` 只吃单个属性名**，传数组抛 "name must be a string"。
-   派生字段（如步骤组的 `live`/`label`）**不经 `setData` 算得出来** —— `setData` 不走
-   `decorateSteps`，写死 `live: true` 是自己按住开关。要造派生状态就调页面自己的入口
-   （`_onEvent` / `onSend`），而 **`onSend` 第一道门是 `sessionId`，缺了静默 return**。
-   **判据里不许写死绝对像素下限**（我拍的 88px 换机型就假红）—— 改成相对关系
-   （"按钮比文字宽出内边距"）。
-5. **反证后必须确认「破坏真的生效了」** —— 判据没红**最常见的原因是替换没匹配上**
-   （`perl -0pi` 多行替换静默不生效；`grep -c` 一下就知道）。
-   **破坏要最小**：只去掉要验的那一样。破坏太狠会让测试**挂死**而不是变红
-   （把整行变注释 → 那个 `if` 分支什么都不做 → socket 永不关 → e2e 跑满 5 分钟）。
-   多行替换用 Python 显式 `assert old in s`，别赌正则。
-   **恢复后核对文件身份**（`head -2` 看文件头），别只看 `cp` 成功 ——
-   我手滑把 socket 的备份拷到了 client.js 头上，靠核对头发现。
-   ⚠️ **方向也要核**：我把 `b.done` 改成 `b.done && !b.done`（恒 false → 反而**打开**了
-   被测的开关），129 条全绿，差点断言"判据无效"。**破坏之后先确认它真的改变了那一行的行为**。
-6. **⚠️ 一条判据"曾经红过"不等于它抓得住问题**（2026-10-04 踩到）——
-   我先写「流式渲染时内容字单调增长」，反证（关掉尾部缓冲）时**它没红**。
-   查下去：出问题的两帧**内容字完全相同**（都是 `a粗体`），真正跳变的是**中间那个星号**
-   消失了 —— 判据只盯"字有没有变少/变多"，压根看不见"符号消失"。
-   **判据盯的量必须与坏掉的那个量一致**，否则它测的是别的东西。
-   后来补了一条盯符号的判据，再反证才真红。**反证要盯的是"破坏处真的变了吗"，
-   而不只是"有没有变红"。**
-7. **判据自身红时，先逐条查清是判据错还是实现错** —— 同一个提交里我改了**三处判据**：
-   ① `shown()` 忘了算 `split.tables` 里的表格 → 得出"分隔行一闭合整张表消失"的假结论；
-   ②「缓冲区长度 ≤ N 字符」用**绝对阈值** → 换个样例长度就假红/假绿；
-   ③ 两条判据对同一个输入（纯空白）提出相反要求（既要 ≥1 节点又要 0 节点），自己打架。
-   **判据与实现不一致时，先假设判据是错的**（它更容易错，而且错了不会误导产品）。
-   ⚠️ **最隐蔽的一种：判据依赖的「全局状态」没归一**（2026-10-04 踩死）。
-   主题在 `wx` 本地存储里、**跨探针共享**：`md-dark` 跑完留下深色，
-   紧随其后的 `theme` 那组（假设"默认浅色"）**13 条红了 11 条**，每条都在喊"不是浅色"，
-   而代码是好的 —— 我差点当成"刚改坏了"。**判据一次红一片，先问"是不是我自己的状态没归一"。**
-   规矩：涉及全局状态（主题/配对码/存储）的判据**开头归一到已知起点 + 结尾还原**，
-   两头都做（只做开头防别人的残留，只做结尾防自己的残留）。
-   另：`mini.reLaunch` 会**作废所有旧 page 句柄**（报 "page is not on top of page stack"）；
-   `navigateBack` 后探针**不会替你调 `onShow`** —— 要验挂在 onShow 里的逻辑得自己调。
-8. **⚠️ 所有自动判据全绿 ≠ 渲染对了**（2026-10-04 markdown 那次，价值最高的一条）——
-   单测 30 / e2e 129 / 对比度 260 全绿，而**界面上正文整段是空的**
-   （`rich-text` 的 `nodes` 绑了 `wx:for` 循环项 → 渲染成高度 0 的空块，
-   `.reply` 只剩 36px 纯 padding）。**唯一抓住它的是 `el.size()` 读到的 0。**
-   - **截图要亲自看**（`miniProgram.screenshot`；`page.screenshot` 不存在）。
-     看到"卡片在、内容空"就立刻怀疑子组件没渲染，别去调样式。
-   - `el.text()` 对 `rich-text` **返回空串**（不是没内容）；`page.evaluate` / `mini.evaluate`
-     **都不存在**，没有"在渲染层跑 JS"的退路。
-   - **元素存在 ≠ 渲染出内容**：数节点数只证"没被删掉"，证不了"有内容"。
-   - 排错要**逐档对照**（同一位置换一种绑定再量一次），一次只改一个变量。
+3. **⚠️ 判据依赖的「全局状态」必须归一**（最隐蔽的一种）—— 主题/配对码/存储跨判据共享。
+   `md-dark` 跑完留下深色，紧随其后的 `theme` 组 13 条红了 11 条，每条都在喊"不是浅色"，
+   而代码是好的 —— 差点当成"刚改坏了"。**一次红一片，先问"是不是我的状态没归一"。**
+   规矩：开头归一到已知起点 + 结尾还原，**两头都做**。
+4. **⚠️ 所有自动判据全绿 ≠ 渲染对了** —— 单测 30 / e2e 129 / 对比度 260 全绿，
+   而**界面上正文整段是空的**。**唯一抓住它的是 `el.size()` 读到的 0。**
+   **截图要亲自看**；「元素存在」只证没被删掉，证不了有内容；排错要**逐档对照**。
+
+**「账本对了」≠「界面变了」** —— 两者取的是**不同字段**，必须各有一条判据。
+2026-10-03 解配即此：判据只读 `pairedClients`，界面读的是恒不清的会话数，
+修完主机侧就收工，用户重启后报"还是没反应"。宿主侧对应手法：打**真路由**
+`host.callPill('/plugins/dsh-remote-control/status')`。
+**改 `status.json` 字段时必须同时问「谁读它」—— 改了账本没人看等于没改。**
 
 ## 打包约束
 
 插件装进外部 pnpm 工程 `~/.dsh/profiles/desktop`，**不能有 `workspace:*`**。
-`@dsh-rc/protocol` 只是 devDependency，`scripts/bundle-protocol.mjs` 在 build 后内联进
-`dist/protocol/`。**改了 protocol 必须重新 build plugin**，否则内联的是旧的。
+`@dsh-rc/protocol` 只是 devDependency，`scripts/bundle-protocol.mjs` 在 build 后内联。
+**改了 protocol 必须重新 build plugin**，否则内联的是旧的。
 
 ## 设计与协议上不可省的约定
 
-- mp：`dsh-remote-mp/miniprogram/core/` + `vendor/`（nacl-fast 已打补丁）；
-  `miniprogram_npm/tdesign-miniprogram/` 是裁剪版，**永远不要点「构建 npm」**；无 Buffer/CSPRNG。
-  **绝不用 `t-input`（真机塌陷）、`t-icon`（CDN 拉不到）**；滚动锚点必须两个静态 id；
-  限高内部滚动只能用 `scroll-view`。
-- 主题：`core/theme.js` 是唯一入口，切换必改三处（根容器 class + `setNavigationBarColor`
-  + `setBackgroundColor`）。两份 wxss 是**生成物**。一个颜色变量别同时当前景和背景
-  （`--td-brand-color-on-tint` 就是为拆这个而存在）。改配色先跑 `check:mp-ui`。
-- chat：**「记不记」是数据层，「显不显示」是渲染层，必须分开** —— 隐藏过程只关 wxml 渲染，
-  绝不删落块逻辑（审批、回执收尾、历史回放都依赖）。
-  隐藏一个分支只能用**独立 `wx:if`**，带条件的 `wx:elif` 会落到末尾 `wx:else`。
-  运行态只认 `ev.run_state`；思考正文永远拿不到（M28 红线）。
-  **顶栏那一行的语义是「当前处于什么状态」**：连接状态（颜色有语义、不可点，排障唯一线索）
-  → 弱化的模型名 → 中断。**模型名必须弱化**：无底色/无边框/无 hover，
-  胶囊 + 手势这套语言等于说"这里能点"，而内核 `modelFace = no-list+no-set` 换不了。
-  **没有独立的运行条**（`runText` / `.runbar` / `.jump-up` 已删）：运行态由最新那条
-  live 步骤组的标签承担，正文空时落点是顶栏的中断按钮。
-  **顶栏没有「展开过程」**（`expanded`/`foldable`/`onToggleAll`/`.bar-btn` 全删）：
-  折叠只有组标题一行这一个入口 —— 全局一键全收会顺手把正在跑的那组也收起来。
-  **纯思考组（`plain`，组内只有 think、一个工具都没调）不是可展开的东西**：
-  无箭头/无 hover/不绑手势/卡片 `wx:if="{{item.open && !item.plain}}"`，
-  耗时并进标题成一行「思考中 4.0s」。**长得能点却展开不出内容，比一个纯标签更像坏了。**
-  think 条目数据层照落（审批要知道主机在干什么）；还在跑的那条**没有 `ms`**，
-  耗时要现算 `Date.now() - startedAt`，否则标题会停在 0 直到收尾才跳一下。
-- **chat 正文走 markdown**（`core/markdown.js` + `marked` 只调 `lexer()`）。
-  **`rich-text` 的 `nodes` 只能绑「顶层字段」或「顶层 map + 一层 `item.key` 索引」**：
-  `{{map[key][i]}}`（两层）与 `{{wx:for 循环项}}` 都渲染成**高度 0 的空块** ——
-  正文整段消失，而 data / 单测 / e2e 全绿（官方文档与社区都查不到，只能实测；
-  已排除自闭合 / `wx:key` / `wx:else` / wxss）。
-  故：**每块只挂一份 nodes、只用一个 `rich-text`**，结果收进页面顶层
-  `mdBodies[块key]`（`_commit` 每次整份重建，块上留 `_md` 中间量）。
-  **代价：表格不能摘出去包 `scroll-view` 横滚**（必然要两层索引），
-  改为列宽按容器**百分比**平分、留在正文里一次渲染。
-  markdown **颜色是烘焙进 nodes 的具体色值**（`rich-text` 不认 `var()`），
-  所以切主题必须重排 —— `_retheme()` 挂在 `onShow`（按钮在 sessions 页）。
-  表格那条限制原写作「rich-text 内部不能滚动」并用 `COL_W`，**已作废**。
+**mp 界面约定（chat 页结构、顶栏语义、主题、组件预算、markdown/rich-text 限制、
+TDesign 裁剪清单与验证）全部见 skill `dsh-mp-ui-dev`**，那里是唯一权威版本。
+只记一条跨仓的、通用的数据层原则：
+
+> **「记不记」是数据层，「显不显示」是渲染层，必须分开。**
+> 隐藏过程只关 wxml 渲染，**绝不删落块逻辑** —— 审批、回执收尾、历史回放都依赖它。
+> 隐藏一个分支只能用**独立 `wx:if`**，带条件的 `wx:elif` 会落到末尾 `wx:else`。
+
+跨仓的协议与宿主侧约定：
+
 - 审批：真实通道是 waterfall `approval/request`，**只有参与它才能到达手机**
   （`approval/asked|decided` 是审计事件，不能应答）。guard 里
   `WATERFALL_PARTICIPANTS = ['approval/request']` 是显式极窄名单。
   没有手机在线时 `participate()` 调 `next()` 交还桌面 UI。
-  **`status.json` 的 `kernel.approvalFace` 停在 `not-attached` = `attachInteractionSink`
-  从未被调用**，先查 profile 里的包是不是旧副本（`install-to-profile.sh`）、
-  Harness 重启了没有，别急着改代码。
+  **`approvalFace` 停在 `not-attached` 先查 profile 里的包是不是旧副本、Harness 重启了没有，
+  别急着改代码。**
 - 协议：所有回执统一走 `_cmdWaiters` 按 `cmdId` 结算，**结算点只有一个**。
   `ev.session_history` 是回执不是广播。**只有游标 `nextBeforeSeq`、没有 `hasMore`**。
   回放时**去重集合不许登记自己**。插件缺 `readSession` 时**明确拒绝、不返回空页**。
 - 事件语义：**事件类型相同 ≠ 语义相同**。宿主把注入内容也写成 `user/message`，
   判据只能是 `source.kind`（实测 14 种，只有 `user` 是真人）。
+- 运行态只认 `ev.run_state`；思考正文永远拿不到（M28 红线）。
 - 一次性定时器 **unref 与"停机集中撤销"必须成对**（`core/clock.ts`）。
 
 ## 尚未验证
 
 真机上的审批/提问卡：本机 preset 都是 `approval/policy: never`，永不弹审批（环境问题，
 非代码问题）。代码路径有单测与 mock e2e 覆盖。
+
+## 当前发布状态（2026-10-05 01:30 更新）
+
+- npm：dsh-remote-wire 1.4.0（ev.todo）、dsh-remote-control 2.0.2（待办/cwd/pill 文案）。
+- relay 1.0.4 已部署生产（47.100.82.15，healthz 报 1.0.4；部署重启断过手机通道）。
+- mp 1.1.3 已上传，等用户选体验版。19 条 Dependabot 全合（红因=分支旧 + pnpm 双版本声明，
+  update-branch 即绿；控制仓 PR 4 有真冲突，本地 merge main + 重生成 lockfile 推回）。
+- 用户侧三步：重启 Harness / mp 选体验版 / 手机重扫。
+- todo v1 只上实时帧（不进历史回放）；微信扫码直达用户说先不改（URL Link 方案已存档）。

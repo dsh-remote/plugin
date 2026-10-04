@@ -428,7 +428,6 @@ export async function bootHost({
     keepAwake: { enabled: false, idleReleaseSec: 300, keepDisplay: false },
     listingRefreshSec: 15,
     carrierGraceMs: 1000,
-    takeOverQuestions: false,
     approvalTimeoutSec,
     unarchiveOnPrompt: true,
     // 落盘路径必须显式传下去（含 `''` 与 `'off'` 两个值）：不传就用 apply() 的默认，
