@@ -899,14 +899,14 @@ export async function main() {
         '四条路由都要挂上（假 webServer 在场）',
       )
 
-      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。字段集合就那六个（全是非凭据；本机名 2026-10-03 撤了）。
+      // 1) 抬头那句：在线、没配过手机、此刻还没有效码。字段集合就那七个（全是非凭据；本机名 2026-10-03 撤了）。
       const before = await host.callPill(STATUS)
       assert.equal(before.status, 200)
       assert.equal(before.body.relay, 'online', `pill 要说实话：${JSON.stringify(before.body)}`)
       assert.deepEqual(
         Object.keys(before.body).sort(),
-        ['paired', 'relay', 'serverUrl', 'version', 'waiting', 'waitingOldestSec'],
-        '状态路由多一个字段就要重新审一遍（这六个全是非凭据；waiting 是抬头那句"等 N 件事"的来源）',
+        ['paired', 'pairings', 'relay', 'serverUrl', 'version', 'waiting', 'waitingOldestSec'],
+        '状态路由多一个字段就要重新审一遍（这七个全是非凭据；waiting 是抬头那句"等 N 件事"的来源，pairings 是"手机离线 / 未配对"的分界）',
       )
       assert.equal(before.body.waiting, 0, '一次交互都没发生过，抬头不该凭空报"有事在等"')
 

@@ -1346,3 +1346,42 @@ typecheck 0、format:check 0；伞仓 e2e **135 / 0**、run.mjs 17 步 0 失败�
 **方法论沉淀**：rich-text 的渲染问题，截图复现装置（mp-shots + automator）比读代码猜快——
 本轮三条假设（换标签/换 CSS/摊平）全部是先改后截、截完再定。⚠️ mp-shots 连上 IDE 后
 第一张 shot 有一次渲染成空状态的偶然（后续复跑全对），**截图前先确认画面非空**。
+
+### 9.21 发布双响：control 2.0.0 上 npm、中继 v1.0.2 上线（2026-10-04 21:12–21:33）
+
+**control 2.0.0**（npm `dsh-remote-control@2.0.0` + provenance + GitHub Release）：
+npm 停在 1.2.0，仓里压了 21 个提交（3 个 `!feat`：pill 面板反转 ×2、questions 链接通；
+跨端作废、审批双端同弹、免扫码重连、聊天三连修）。流程：CHANGELOG 的 `未发布` 翻版本号
+（顺手补了两条漏账：免扫码重连、聊天三连修）→ `c1364ed` → push main → tag `v2.0.0` →
+Release 工作流（14 步）自动跑。
+
+⚠️ **假红教训（第三回）**：Publish 绿、npm 上 2.0.0 在、attestation 几分钟后 curl 也在，
+但 `Verify provenance landed` 的轮询（200s）在它落地之前放弃 → 这一步红 → 
+`Create GitHub Release` 整个没跑。**捞回来的前提是 Publish 幂等**（版本在注册表就跳过）——
+`gh run rerun <id> --failed` 只重跑红的那几步，verify 绿、Release 补建（37s）。
+已把窗口放到 80×5s=400s（control `6b7f00c`）：注册表侧的落地延迟是它的事，不该由我们判红。
+
+**中继 v1.0.2**（`d23944c` counters 按周期进日志，`6bb8941` + tag + Release 挂单文件产物
+`dsh-remote-relay.mjs` + `SHA256SUMS`）：下载后 `shasum -c` 过 → scp → restart → 服务器侧
+sha256 与产物逐字节相同（`d43c0d86…`）→ `/healthz` 报 1.0.2。部署前后 hosts:1→(重启)→回 1。
+droppedFrames 从此有历史可查（journalctl 差值），不再只有当前进程内有值。
+
+### 9.22 pill 不再把"手机离线"说成"未配对"（2026-10-04 21:33，control `b4b7625`）
+
+用户报：小程序离线的状态下 pill 显示"未配对"，会误解——其实配对着，回前台会重连。
+根因是 pair-store 之后的语义漂移：配对按 D3 长存、落盘，而"配没配上"读的是
+clientCount（此刻几台手机连着）——手机退后台 socket 一断就翻成未配对，点开头一颗按钮
+还会去烧一张不需要的新码。
+
+修法（三态 + 一个字段）：`/status` 新增 `pairings`（会话簿里几条会话 = 配对还在不在），
+与 `paired` 分开报；抬头三态 **已配对（绿）/ 手机离线（黄）/ 未配对（灰）**；
+离线那一屏多一行"配对还在：小程序回前台会自动重连，不用重新扫码"。
+四处"配没配上"的判定（按钮身份、点开发不发码、配好翻不翻面、退出配对的乐观翻面）
+改读密钥簿；退出配对时乐观状态**连簿一起清零**——只清零 paired 会掉进新的"手机离线"，
+而那一刻真正的事实是"没配上了"。
+
+判据：client-bundle 新增"手机离线"用例（含按钮身份、不放码、解释行三件事）；
+pill-routes / pill-isolation / 伞仓 run.mjs 的字段集合判据**六改七**。
+plugin 335/0、typecheck/format 过、伞仓 e2e 135/0、run.mjs 17 步。已装进 profile，
+**待重启 host**——"手机离线"这一屏要在真屏幕上验一次才算完（its 判据：手机退后台时
+抬头变黄字、点开没有二维码、按钮还是"退出配对"）。
