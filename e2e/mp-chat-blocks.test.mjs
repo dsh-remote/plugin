@@ -33,7 +33,19 @@ globalThis.wx = {
   setNavigationBarTitle: () => {},
   showToast: () => {},
   vibrateLong: () => {},
+  vibrateShort: () => {},
   hideKeyboard: () => {},
+  // ── 图片附件那一链的四个能力（附件功能的判据要走真路径，所以给真返回值）───
+  // 选中"图片"（tapIndex 0）后 chooseMedia 回一张"已压缩"的临时文件。
+  showActionSheet: (opts) => opts.success({ tapIndex: 0 }),
+  chooseMedia: (opts) =>
+    opts.success({
+      tempFiles: [{ path: 'tmp-picked.jpg', size: 12345, width: 1600, height: 1200 }],
+    }),
+  compressImage: (opts) => opts.success({ tempFilePath: `tmp-compressed-${++attachSeq}.jpg` }),
+  getFileSystemManager: () => ({
+    readFile: (opts) => opts.success({ data: Buffer.from('JPEGBYTES').toString('base64') }),
+  }),
   createSelectorQuery: () => {
     const q = {
       select: () => q,
@@ -46,6 +58,9 @@ globalThis.wx = {
     return q
   },
 }
+
+// 每张压出来的图给一个不同的临时路径：真实世界里 compressImage 也不会两张都叫同一个名。
+let attachSeq = 0
 
 // ── 载入真实的页面代码 ───────────────────────────────────────────────
 let captured = null
@@ -61,6 +76,14 @@ assert.ok(captured, 'Page() 没被调用 —— 页面代码没加载起来')
  *   blocks[3].items[2].open         （组内某一步的开合 / 计时刷新）
  */
 function setByPath(obj, p, value) {
+  // 整块替换：blocks[1] = {...}（思考计时器整组重派生走的就是它）。
+  // 没有这一条，跑得稍慢的机器上计时器的 tick 会落进隔壁用例，报一个
+  // 「路径没处理」的假失败——页面发的形状合法，是夹具跟不上。
+  const whole = p.match(/^([A-Za-z_$][\w$]*)\[(\d+)\]$/)
+  if (whole) {
+    obj[whole[1]][Number(whole[2])] = value
+    return
+  }
   const m = p.match(/^([A-Za-z_$][\w$]*)\[(\d+)\]\.(?:items\[(\d+)\]\.)?([\w$]+)$/)
   if (m) {
     const node =
@@ -246,6 +269,10 @@ test('工具还在跑的时候不补思考（那会儿在跑的是工具，不�
 
   p.data.inputText = '跑一下测试'
   p.onSend()
+  // 2026-10-04 起：会话在跑时打的内容进**队列**（排队特性），不再直接落块；
+  // 空闲那一刻才按序发出、落块。所以这里先看见队列，再等一次 idle。
+  assert.equal(p.data.queue.length, 1, '在跑时打的内容进队列，不直接落块')
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.deepEqual(kinds(p), ['turn', 'user', 'steps[think(live)]'])
 
@@ -1294,3 +1321,100 @@ test('滚动：回到最新之后，落底回弹的负帧不许把跟随关掉�
 })
 
 
+
+/* ── 排队消息 + 图片附件（2026-10-04 两个新特性）──────────────────────────
+   排队：会话在跑时用户继续打的内容进队列（贴在输入区上方、可收起、可删），
+   空闲按序发出。附件：加号 → 相册 → 压缩 → base64，随消息发出，
+   **只映射协议要的字段**（本地 path 不上线）。 */
+
+/** 抓页面经 client 发出去的指令（把 sendCmd 换掉，映射逻辑照原样跑）。 */
+function captureSends(p) {
+  const sent = []
+  p.client.sendCmd = (cmd) => {
+    sent.push(cmd)
+    return true
+  }
+  return sent
+}
+
+test('排队：在跑时发送进队列且不发主机；空闲后按序发出', async () => {
+  const p = makePage()
+  const sent = captureSends(p)
+  p.setData({ running: true })
+  p.setData({ inputText: '第一条' })
+  p.onSend()
+  p.setData({ inputText: '第二条' })
+  p.onSend()
+  assert.equal(sent.length, 0, '在跑时不许发给主机——内核正忙着，发了也是拒')
+  assert.equal(p.data.queue.length, 2, '两条都要进队列')
+  assert.deepEqual(
+    p.data.queue.map((q) => q.text),
+    ['第一条', '第二条'],
+    '先进先出',
+  )
+  assert.equal(p.data.inputText, '', '进了队列输入框就清空')
+
+  // 从队列里撤回一条（还没发出去，撤就是真撤）
+  p.onDequeue({ currentTarget: { dataset: { key: p.data.queue[0].key } } })
+  assert.equal(p.data.queue.length, 1)
+
+  // 会话闲下来：按序发，两条之间留一拍（排水有节流）
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.equal(sent.length, 1, '闲下来当场发第一条')
+  assert.equal(sent[0].t, 'cmd.send_prompt')
+  assert.equal(sent[0].text, '第二条')
+  assert.equal(p.data.queue.length, 0, '发出去的从队列里消失')
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  assert.equal(sent.length, 1, '队列空了就不该再发（节流定时器尾巴不许多发）')
+})
+
+test('排队：空会话不许发出幽灵 prompt（text 与附件都空）', () => {
+  const p = makePage()
+  const sent = captureSends(p)
+  p.setData({ running: true, inputText: '   ' })
+  p.onSend()
+  assert.equal(p.data.queue.length, 0, '纯空白不入队')
+  assert.equal(sent.length, 0)
+})
+
+test('图片附件：加号 → 相册 → 压缩 → base64；发送只映射协议字段（path 不上线）', () => {
+  const p = makePage()
+  const sent = captureSends(p)
+  p.onAttach()
+  assert.equal(p.data.attachments.length, 1, '假 wx 那一链走完要落一条附件')
+  const att = p.data.attachments[0]
+  assert.match(att.path, /^tmp-compressed-/, '本机路径只留着自己显示用')
+  assert.equal(att.data, Buffer.from('JPEGBYTES').toString('base64'))
+  assert.equal(att.width, 1600)
+
+  p.setData({ inputText: '看这张报错' })
+  p.onSend()
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].text, '看这张报错')
+  assert.deepEqual(
+    sent[0].images,
+    [{ name: att.name, mediaType: 'image/jpeg', data: att.data, width: 1600, height: 1200 }],
+    '上线的只有协议要的五个字段：path 之类的本机信息不许出去',
+  )
+  assert.equal(p.data.attachments.length, 0, '发完附件条清空')
+  // 用户回显里带着图（会话里看得见）
+  const userBlock = p.data.blocks.find((b) => b.kind === 'user')
+  assert.ok(userBlock, '本地回显要出现在块流里')
+  assert.equal(userBlock.images.length, 1)
+  assert.equal(userBlock.text, '看这张报错')
+})
+
+test('图片附件：移除单张与上限 4 张（协议层同一个数，两边不许分叉）', () => {
+  const p = makePage()
+  const sent = captureSends(p)
+  for (let i = 0; i < 6; i++) p.onAttach()
+  assert.equal(p.data.attachments.length, 4, '第四次之后 chooseMedia 的 count=0，假 wx 仍回一张——但页面侧要截到 4')
+  p.onRemoveAttachment({ currentTarget: { dataset: { path: p.data.attachments[1].path } } })
+  assert.equal(p.data.attachments.length, 3)
+  // 只发图不带字：text 为空串照发（协议层 text 允许空串）
+  p.setData({ inputText: '' })
+  p.onSend()
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].text, '')
+  assert.equal(sent[0].images.length, 3)
+})

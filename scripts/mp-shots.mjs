@@ -347,6 +347,32 @@ const SHOTS = {
   chat: [
     { name: 'chat', url: '/pages/chat/chat' },
     {
+      // 排队 + 附件 + 加号（2026-10-04 两个新特性的同一屏）：
+      // 队列贴在输入区上方（超长文本截断一行、可收起、可删），
+      // 附件是缩略图条，加号在输入框左边。
+      name: 'chat-composer',
+      url: '/pages/chat/chat',
+      data: {
+        running: true,
+        barText: '已连接',
+        barTheme: 'success',
+        turn: 1,
+        blocks: [
+          { key: 'r1', kind: 'turn', label: '第 1 轮', time: '22:40' },
+          { key: 'u1', kind: 'user', text: '把排队和图片附件做出来', confirmed: true },
+          { key: 'm1', kind: 'text', text: '好，两件一起做。', done: true },
+        ],
+        // 缩略图用 1x1 png 的 data URI（mp 仓里没有图片资产；
+        // 这一张只看排版：缩略图在位、大小、移除角标）
+        attachments: [{ name: 'img-2.jpg', path: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', data: 'QUJD', width: 1600, height: 1200 }],
+        queue: [
+          { key: 'q1', text: '一条排队中的消息——这句话故意说得很长很长，用来验证超长文本会被截断成一行而不是把输入区顶开', images: [] },
+          { key: 'q2', text: '第二条排队，带一张图', images: [{ name: 'img-1.jpg', path: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', width: 1600, height: 1200 }] },
+        ],
+        queueOpen: true,
+      },
+    },
+    {
       // 用户 2026-10-04 真机截图：markdown 的 list 与 table 宽度不对、缩进不对。
       // 走真实路径（_applyDelta 到 _applyText 到 _withMd 到 markdown.render），
       // 不 setData 摆 nodes——摆进去只能证明 wxml 忠实，证不了这条链排对了。
