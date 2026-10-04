@@ -271,42 +271,33 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    （权限都是 0600，一共约 20K）。清不清、清哪些等用户点头——**这是删用户文件，不动手**。
    要清的话建议一次清全部 `.bak-*`：profile 现在跑的是仓里装的包，这些备份只是历次
    改 patch 时脚本自己留的退路。
-10. **待接：把 `ev.permission_resolved` 真的发出去**（按 `requestId` 精确收手机上那一张卡）。
-    协议那半**已经落好**（wire `66e9a63`：schema + `PAYLOAD_TYPES` + `permissionResolved()` + 测试），
-    但 control 装的 `dsh-remote-wire` 是 **npm 上的 1.1.0**，那份里没有这一帧，
-    `tsc` 直接报 `has no exported member 'permissionResolved'`。
+10. ~~**待接：把 `ev.permission_resolved` 真的发出去**~~ → **2026-10-04 已接上并发版**：
+    `dsh-remote-wire@1.2.0`（带 provenance）里是 `ev.permission_resolved` + `ev.question_resolved` +
+    提问的 `expiresAt`；control 已升依赖并在结算点真的发出去了（取证见 §9.16）。
+    `ev.run_state` 那一条**仍然照发**——用户手机上装的还是旧版小程序，只认它。
+    剩下唯一一步是**重新上传一次小程序**，让精确帧与提问倒计时生效；不做也不影响收卡（粗收单在）。
 
-    **2026-10-04 这一半已经不堵了**：作废改走现有一帧 `ev.run_state`（结算点 `runtime.settle()`
-    在"不是手机点的"那三种收场时补发一次，见 §9.15）。这条**用的是手机现在装的这一版小程序就认的信号**，
-    所以不用等 wire 发布、也不用重新上传小程序。精确那一帧剩下的价值只有两点：
-    ①按 `requestId` 只收这一张（`run_state` 是"这一会话的卡片全收"）；②不顺手把"思考中"拨一次。
-    **步骤**不变：① 发一个带这帧的 wire 版本（发布是改共享状态，等用户点头）；② control 升依赖；
-    ③ `runtime.ts` 的 `voidStaleCard()` 旁边再加这一帧（`by: 'desktop' | 'cancelled'` 由
-    `participate()` 带下来的 reason 决定）；④ 小程序那半加 `if (p.t === 'ev.permission_resolved')`
-    → 按 `requestId` 对上号就把卡收掉（老版本收到不认识的 `t` 会静默忽略，所以顺序可以是
-    先 wire、再插件、最后小程序）。
-
-11. **跨端关弹窗（§9.15）这一版还差一次真机点头**，而且今天**造不出那一幕**：
-    这台宿主现在的旧会话里**没有任何执行/写文件工具**——探针发指令后模型回报
+11. **审批那一次真机点头还欠着**（提问那两个方向都已经自动取证过了，见 §9.16）：
+    这台宿主的旧会话里**没有任何执行/写文件工具**——探针发指令后模型回报
     `Error: unknown tool "run_code"`（`bash` / `python` / `write` 同样 unknown），
-    于是永远走不到审批那一步（`approvalAsked=0`，四条会话轮询都是空手而归）。
-    对照证据：另一个会话 `session-842179a6`（12:05）里 `run_code` 是通的（有 `tool/ptc-dispatch`）。
-    所以这是**按会话而异的工具面/PTC 装载问题**，与这一版改动无关，但它把审批这条链的
-    真机取证挡住了。下次要验就两步：
-    ① 在用户自己**正常干活的那个会话**里让 DSH 问一次审批（不用探针造场景）；
-    ② 手机上点掉 → 看桌面 composer 那张卡**有没有当场消失**，同时读
-    `~/.dsh/dsh-remote-control/status.json` 的 `kernel.approvalSignalHandoff`（应为 `fused`）
+    于是走不到审批（`approvalAsked=0`；`--session new` 新建的那条也一样，所以不是会话新旧的问题）。
+    **对照证据**：`session-842179a6`（12:05）里 `run_code` 是通的（有 `tool/ptc-dispatch`），
+    所以这是按会话/按工具面装载的问题，与这一版改动无关。要验就一句：
+    用户自己那条正常干活的会话里让 DSH 问一次审批 → 手机先点掉 → 看桌面 composer 那张卡有没有当场消失，
+    同时读 `~/.dsh/dsh-remote-control/status.json` 的 `kernel.approvalSignalHandoff`（应为 `fused`）
     与 `kernel.approvalDesktopVoided`（应比点之前 +1）。
-    读数解释：两个都动了而卡还在 ⇒ 断在渲染端（宿主的代码），不在插件；
-    `handoff=failed|ignored` ⇒ `request.signal` 换不出去，桌面那张卡只能等它自己的工具调用生命周期。
-    **探针这边还有两道墙**（今天各撞了一次）：①`POST /pairing/new` 之后 `status.json` 的 `pairing`
-    要等一次快照刷新才出现，而**配对成功那一刻 `active.pairing` 被清掉**——这时再 POST 会回
-    `state:ready` + 同一个 `token`，可 `status.json` 里已经**没有 `qr`** 了，探针就报
-    「配对码无效或已过期」。要稳就得给探针加一条 `--qr-file`（`GET /pairing.png?e=<epoch>`
-    拿图 → 用 `~/.workbuddy/binaries/python/envs/default/bin/python` 那个 zxing venv 解回文本，
-    见 §9.11 那条"不改配置取码"的路子）；②**别对 `--session first` 那些 API 建的空壳会话发指令**，
-    它们没有执行/写文件工具（今天整轮都是 `unknown tool "run_code"`），
-    已给探针加 `--session new` 自己建一条当实验台。
+
+12. **`takeOverQuestions` 这个配置键已经不生效，但还留在 `shell/config.ts` 里**：
+    删它要同时动 `src/index.ts`，而这两棵树此刻正被并行会话的 pair-store 改动占着
+    （不能顺手提交别人在飞的改动）。现在的事实是：carrier 不再读它，
+    `describe()` 里 `takeOverQuestionsInert` 与 `questionsFace=registered` 会说真话，
+    README 那一行标了删除线。**等那半提交之后删键 + 删它那条 warn + 删它的两条测试。**
+
+13. **control 的 npm 还停在 1.2.0**：main 上压着 `c5935bf`（跨端关弹窗）、`ee1f8e3`（文档）、
+    `7f1180b`（提问接进 waterfall）三个未发布提交，其中两个是装到 npm 上就能看见的能力修复。
+    CHANGELOG 自己写着"发布时该走主版本号"（配对收敛是破坏性变更）——
+    **发一个公开主版本这一步等用户点头**，命令就一条：`package.json` 升 2.0.0 → 打标签 →
+    推标签（CI 会 verify+publish，见 §1 与 [[reference-npm-publishing]] 的坑）。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
@@ -427,6 +418,19 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
     **判据换成**：版本号（`node_modules/<pkg>/package.json` 的 `version`）+ 解出来的文案
     （挑一个只有新版才有的中文串，注意 esbuild 把非 ASCII 转成 `\uXXXX`，要 `String.fromCharCode`
     解码后再 grep）。`shasum` 只能用来判"同一台机器、同一条命令产出的两份是不是同一份文件"。
+
+21. **`pnpm` 11 的 `minimumReleaseAgeExclude` 只认裸包名，不认 `包名@版本`**（2026-10-04 实测）。
+    `pnpm add` 自己往 `pnpm-workspace.yaml` 里写的是 `dsh-remote-wire@1.2.0` 这种精确版本，
+    而 `pnpm install --frozen-lockfile` 走的**lockfile 复核**那条路径只按名字匹配，于是照样报
+    `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`——表现是"装好了、CI 却要红"，而且报错信息会
+    建议你去 `pnpm clean --lockfile`（那是把在飞依赖清掉，别照做）。
+    改成裸 `- dsh-remote-wire` 才过。范围说清楚：这只对**本家那一个包名**关掉发布年龄闸门，
+    真伪仍由 provenance/OIDC 把关；协议升版**不需要**再回来加行。
+22. **`kill -TERM` 之后紧跟 `open -a` 会静默不起**（同一条 shell 里连着做更明显）：
+    macOS 看到"正在退出"的同名应用就直接把这次 open 吃掉，rc 仍是 0。
+    于是后面所有"重启后读数"其实都读的是**旧进程**写的 status.json——
+    这一次就差点把"字段没出现"当成"改动没生效"去查代码。
+    正确顺序：`kill` → **轮询到 pgrep 空** → `open -a` → **轮询到新 pid 且它的 pid 落进 status.json** → 再读字段。
 
 ## 5. 命令速查
 
@@ -1149,3 +1153,67 @@ N 远小于 7 天"）是**中继的产品决定**，摆着等用户拍——它�
 capture policy 是 AX_ONLY 所以坐标点击直接报错）。所以这一条只能等用户按屏幕：
 **手机先答一次 → 看桌面 composer 上那张审批卡有没有当场不见**；
 反方向（桌面先答 → 手机卡当场收）这一版是自动的，`/status` 的 `waiting` 归零同时卡片也被作废帧收掉。
+
+### 9.16 提问这条链：它以前根本到不了手机，现在两端同弹（2026-10-04 午后）
+
+用户问"提问卡也有这个问题吗"。查下来的答案比"有"更难看一层：**提问卡从来没有到过手机**。
+
+**根因不是"没关"，是"没接上"。** 我们原来那条路是 `ctx.userQuestions.registerProvider(...)`，
+两个问题叠在一起：
+
+1. **这一代宿主没有那个成员**。把 `@deepseek-ai/dsh-user-questions/lib/index.js` 整个扒出来看，
+   `provider` 这个词**零命中**，服务成员只有 `ask / askTimed / answer / continued / releaseReply / assertLiveRoot`。
+   所以 `takeOverQuestions` 打开也只会得到 `questionsFace = no registerProvider (keys=…)`。
+   现网读数当时是 `takeOverQuestions: false / questionsFace: not-taken-over`——**默认关**，
+   于是这条链在真机上从来没有第二端。
+2. **就算它存在，"注册一个提供者"是单提供者语义**：接管 = 桌面问不了问题，
+   而那条正是 §9.13 用户当场划的红线（插件不许改变宿主自己的行为）。config 里那条 warn
+   写的就是这件事——所以那个键的存在本身就说明这条路是错的。
+
+**正确形状与审批完全同一条**：宿主自己的 `UserQuestionService.ask()` 末端就是
+`ctx.waterfall(scopeTarget(agent, agent), 'user-questions/request', {...request, agent}, noAnswerer)`，
+而桌面 UI 是网关转发的 `$on("user-questions/request", function(request, next) …)`
+（`dsh-client-ui-user-questions/lib/client.js:1927`，`answerQuestion` 里那句
+`AbortSignal.any([claimLifetime.signal, request.signal])` 也确认了**同一套撤销句柄**）。
+所以 `participate()` 参数化成两条共用一份实现：一进函数就 `next()`、手机并行问、谁先给真答案谁算、
+手机先答时撤销交给下游那份 signal。guard 的 `WATERFALL_PARTICIPANTS` 从一条变两条。
+
+**两条 waterfall 唯一的实质差别是"没人答"怎么表达**：审批那条链末端 resolve `'unavailable'`，
+提问那条是 `noAnswerer()` **抛** `NO_PROVIDER`。所以提问的最后一条分支必须把原始 rejection
+复述回去——把它吞成 `undefined` 就是 §9.10 里那条"每个 turn 都崩"的形状。
+
+**手机端同时挂两张卡是真事，不是理论**：审批与提问共用一条本地倒数
+（原来那条只读 `pendingPermission`，所以提问卡即使有 `expiresAt` 也没人替它走数）。
+到点停表但不清卡；清卡只由 `ev.permission_resolved` / `ev.question_resolved`（按 `requestId` 收一张）
+或 `ev.run_state`（这一会话两张一起收）来做，且这两条精确帧**不动 `running`**——
+回合在不在跑归 `ev.run_state` 说，两处各改一半迟早打架。
+
+**真机取证（这一次不用等人点桌面，两条判据都是自动跑出来的）**：
+`ask_user_question` 不依赖执行/写文件工具，所以在那台"所有旧会话 `run_code` 都 unknown tool"
+的宿主上，它是**唯一还能造出来的第二端**。
+
+```sh
+# ① 手机先答 → 桌面那句柄被撤销
+node scripts/approval-probe.mjs --session new --prompt '请用 ask_user_question 工具问我一个单选题…'
+#   ev.question_request(带 expiresAt) → cmd.answer →
+#   questionsCalls=1 questionsLast=answered-by-phone(1 项) handoff=fused desktopVoided=1
+
+# ② 主机收场 → 手机那张卡当场作废
+node scripts/approval-probe.mjs --session <同一条> --interrupt-after 6 --prompt '请再用 ask_user_question…'
+#   收到 {"t":"ev.question_resolved","requestId":"q_6e5ac9c9","by":"cancelled"} + 一帧 ev.run_state
+#   questionsLast=no-answer（链子的 rejection 被原样复述，没吞掉）
+```
+
+**这里踩到一个判据自己骗自己的坑，值得记住**：`--interrupt-after` 那一跑，⑦ 那条
+"收到作废帧"先返回了一条 `ev.run_state{state:'running'}`——那是**回合刚开始时内核自己发的**，
+不是我们补的那一帧。凡是"某端收场"的判据，都不能拿 `run_state` 当证据（它有两种来源），
+要么等**精确帧**、要么等 `pending` 归零再读。改完 ⑦ 之后优先看 `resolvedFrames`。
+
+**还留着的两件事**（都不是"忘了"，是有人要点头或有人在飞）：
+- `takeOverQuestions` 这个键**已经不生效**（carrier 不再读它，`describe()` 里
+  `takeOverQuestionsInert` 会把这点说出来），删键本体要动 `shell/config.ts` 与 `src/index.ts`——
+  这两棵树此刻正被并行会话的 pair-store 改动占着，**不能顺手提交别人的在飞改动**，留作单独一轮。
+  README 配置表那一行已经标了删除线。
+- control 的 npm 版本还停在 **1.2.0**，main 上压着 `c5935bf / ee1f8e3 / 7f1180b` 三个未发布提交
+  （其中两个是用户看得见的能力修复）。发不发是"公开一个破坏性主版本"这一步，等用户点头；
+  协议那侧的 `dsh-remote-wire@1.2.0` 已经发了并带 provenance（这一轮编译必需，所以先发）。

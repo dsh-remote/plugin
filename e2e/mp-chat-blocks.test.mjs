@@ -84,7 +84,11 @@ function setByPath(obj, p, value) {
 /** 页面里的思考计时器是 setInterval，不清掉 node 不会退出 */
 const live = []
 after(() => {
-  for (const pg of live) pg._stopThinkTick()
+  for (const pg of live) {
+    pg._stopThinkTick()
+    // 卡片倒数（审批与提问共用一条表）也是 setTimeout，不清掉 node 不会退出。
+    if (pg._stopCardTick) pg._stopCardTick()
+  }
 })
 
 function makePage() {
@@ -111,6 +115,79 @@ const kinds = (ctx) =>
 
 const stepGroups = (ctx) => ctx.data.blocks.filter((b) => b.kind === 'steps')
 const send = (ctx, payload) => ctx._onEvent({ kind: 'payload', payload })
+
+/**
+ * 跨端关弹窗在**手机端**的那三条判据。
+ *
+ * 为什么值得单独测：主机把"这张卡不用答了"发成了两条帧——
+ * 精确的 `ev.permission_resolved` / `ev.question_resolved`（按 requestId 收一张）
+ * 与粗收单的 `ev.run_state`（这一会话两张一起收）。两条都发是因为老版本手机只认后者。
+ * 于是"收错张"与"两条互相打架"都是真会出现的形状，而不是理论风险。
+ */
+test('ev.permission_resolved 只收对得上 requestId 的那张审批卡，也不去动运行态', () => {
+  const ctx = makePage()
+  send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_1', action: 'bash', options: [{ id: 'approve', label: '允许' }] })
+  assert.ok(ctx.data.pendingPermission, '夹具自检：审批卡没挂上')
+  ctx.data.running = true
+  // 另一张挂着的是提问卡，它不该被审批那条帧波及。
+  send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_9', questions: [{ id: 'x', question: '要哪个' }] })
+
+  send(ctx, { t: 'ev.permission_resolved', sessionId: 's1', requestId: 'ap_other', by: 'desktop' })
+  assert.ok(ctx.data.pendingPermission, 'requestId 对不上却收了卡：那会把用户正在看的那张误杀')
+
+  // 卡片挂上时那两个 `_onPermission`/`_onQuestion` 会把 running 拨成 false；这里显式摆回 true，
+  // 这样下面那句"作废帧不许顺手改运行态"测的才是那条帧本身，而不是收卡时的副作用。
+  ctx.data.running = true
+  send(ctx, { t: 'ev.permission_resolved', sessionId: 's1', requestId: 'ap_1', by: 'desktop' })
+  assert.equal(ctx.data.pendingPermission, null, '桌面先答之后手机这张审批卡还挂着')
+  assert.equal(ctx.data.pendingQuestion && ctx.data.pendingQuestion.requestId, 'q_9', '审批的作废帧不该收提问那张卡')
+  assert.equal(ctx.data.running, true, '作废帧不该顺手改运行态：回合在不在跑由 ev.run_state 说')
+})
+
+test('ev.question_resolved 收提问卡；主机没发这一帧时（老宿主）什么都不动', () => {
+  const ctx = makePage()
+  send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_1', questions: [{ id: 'x', question: '要哪个' }] })
+  send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_5', action: 'bash' })
+  send(ctx, { t: 'ev.question_resolved', sessionId: 's1', requestId: 'q_1', by: 'cancelled' })
+  assert.equal(ctx.data.pendingQuestion, null, '桌面答完了而手机这张提问卡还挂着')
+  assert.ok(ctx.data.pendingPermission, '提问的作废帧不该收审批那张卡')
+
+  // 少了 requestId：只能按"当前这张"收，不能当成没发。
+  send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_2', questions: [{ id: 'x', question: '要哪个' }] })
+  send(ctx, { t: 'ev.question_resolved' })
+  assert.equal(ctx.data.pendingQuestion, null, '没有 requestId 的作废帧必须收当前那张')
+})
+
+test('提问卡带 expiresAt 就走表；老宿主不发时不显示也不报错', () => {
+  const withExpiry = makePage()
+  const deadline = new Date(Date.now() + 90_000).toISOString()
+  send(withExpiry, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_t', expiresAt: deadline, questions: [{ id: 'x', question: '要哪个' }] })
+  // tick 在 setData 之后**立刻算一次**，所以不用等一秒就能读到数字。
+  assert.equal(withExpiry.data.pendingQuestion.remainSec, 90, '提问卡上有到期时刻却不走数')
+
+  const legacy = makePage()
+  send(legacy, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_old', questions: [{ id: 'x', question: '要哪个' }] })
+  assert.equal(legacy.data.pendingQuestion.remainSec, 0, '老宿主不发 expiresAt 时不该凭空显示一个倒计时')
+  assert.equal(legacy.data.pendingQuestion.deadlineAt, 0, '没有到期时刻就不该排表')
+
+  // 两张卡同时挂着时一条表管两张：审批那张走完不该把提问那张也带停。
+  const both = makePage()
+  send(both, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_b', action: 'bash', expiresAt: new Date(Date.now() + 30_000).toISOString() })
+  send(both, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_b', expiresAt: new Date(Date.now() + 120_000).toISOString(), questions: [{ id: 'x', question: '要哪个' }] })
+  assert.equal(both.data.pendingPermission.remainSec, 30)
+  assert.equal(both.data.pendingQuestion.remainSec, 120, '两张卡共用一条表时，后挂上的那张也要有自己的数字')
+})
+
+test('ev.run_state 仍然是粗收单：两张卡一起收，并把还在走的表停掉', () => {
+  const ctx = makePage()
+  send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_c', action: 'bash', expiresAt: new Date(Date.now() + 60_000).toISOString() })
+  send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_c', questions: [{ id: 'x', question: '要哪个' }] })
+  assert.ok(ctx.data.pendingPermission && ctx.data.pendingQuestion, '夹具自检：两张卡没同时挂上')
+  send(ctx, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  assert.equal(ctx.data.pendingPermission, null, '粗收单那一帧失效了：老版本手机上两张卡会一直挂着')
+  assert.equal(ctx.data.pendingQuestion, null)
+  assert.equal(ctx._cardTimer, null, '卡片都收了而那条表还在走：它会一直 setData 到天荒地老')
+})
 
 test('一轮：思考随内容出现而收尾，工具进同一个步骤组，按 callId 原地更新', () => {
   const p = makePage()
@@ -923,7 +1000,7 @@ test('审批：expiresAt 换算成剩余秒数并逐秒往下走', () => {
   // _onPermission 已经起过表；剩余应立刻可见（不能等一秒才显示）
   assert.ok(perm.remainSec > 0 && perm.remainSec <= 180, `剩余秒数不对: ${perm.remainSec}`)
 
-  p._stopPermTick()
+  p._stopCardTick()
   p._stopThinkTick()
 })
 
@@ -958,7 +1035,7 @@ test('审批：点了按钮就回传逐字的 option id，并停掉那个还在�
   assert.equal(p.data.pendingPermission, null, '回了就该把卡撤掉')
   assert.equal(sent.length, 1)
   assert.deepEqual(sent[0], ['s1', 'rq1', 'approve'], 'requestId 与 option id 必须逐字回传')
-  assert.equal(p._permTimer, null, '表必须停，否则它会一直 setData')
+  assert.equal(p._cardTimer, null, '表必须停，否则它会一直 setData')
 
   p._stopThinkTick()
 })
@@ -976,7 +1053,7 @@ test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停'
 
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.equal(p.data.pendingPermission, null, '运行态一恢复，挂着的审批就作废')
-  assert.equal(p._permTimer, null, '作废的卡不该还留着一个在走的表')
+  assert.equal(p._cardTimer, null, '作废的卡不该还留着一个在走的表')
 
   p._stopThinkTick()
 })
@@ -991,7 +1068,7 @@ test('审批：页面隐藏时倒计时停表（定时器必须与撤销成对�
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
   })
   p.onHide()
-  assert.equal(p._permTimer, null)
+  assert.equal(p._cardTimer, null)
 
   p._stopThinkTick()
 })
