@@ -243,11 +243,12 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
    ⚠️ 复现这条要用 `npx -y **-p** typescript@7.0.2 tsc …`：写成 `npx typescript@7.0.2 tsc …`
    会把那个 `tsc` 当成**源文件**传给默认 bin，于是得到一句毫不相干的
    `TS5042: Option 'project' cannot be mixed with source files`——我第一遍就被它骗过。
-6. **✅ 审批卡已真机闭环（2026-10-04 凌晨，见 §9.10）**；**还欠一条：提问卡**。
+6. **✅ 审批卡已真机闭环（2026-10-04 凌晨，见 §9.10）**；**✅ 提问卡也已闭环（§9.16）**。
     审批那条以前"没弹"不是策略问题也不是手机问题，是我们登记 `approval/request` 的方式
     （要 `{global:true, prepend:true}`），修法与读数都在 §9.10。
-    提问卡仍未取证的原因是**宿主版本**：这一代 `ctx.userQuestions` 不带 `registerProvider`，
-    而且 `takeOverQuestions` 默认关（开了会剥夺桌面 UI 的提问能力）。两条都有本地闭环测试。
+    提问卡以前"没到手机"的根因是**没接上**：这一代 `ctx.userQuestions` 没有
+    `registerProvider`（单提供者语义还会剥夺桌面 UI），正确形状是像审批那样参与
+    `user-questions/request` 那条 waterfall——§9.16。两条都有本地闭环测试 + 真机读数。
     ⚠️ 别把审批策略改回 `never` 来"排除干扰"——用户已表态，**别再问第二遍**。
 7. **✅ `dsh-remote-control@1.2.0` 已发布**（2026-10-03 深夜，pill 收敛 + §9.6 那轮清理 + §9.8 文案都在里面）。
     发布运行 14 步全绿、带 provenance（注册表 curl 复核过），GitHub Release `v1.2.0` 已建。
@@ -1247,3 +1248,46 @@ node scripts/approval-probe.mjs --session <同一条> --interrupt-after 6 --prom
 与「已配对点开一次码都不发」，加一条「退完配对就地回到二维码页、那颗按钮当场翻成 `刷新`」。
 四次变异各自只抓自己那条：不自动发码 → 7 红；已配对也发 → 1 红；退完补一次立即轮询（把乐观
 翻面盖回去）→ 1 红；二维码屏藏正文 → 4 红。
+
+### 9.18 pair-store 落库 + 审批链真机闭环（2026-10-04 傍晚，接 §9.17）
+
+两件事：一件是收尾，一件是取证。都发生在用户把审批策略改成 `ask`（文件策略 `read-only`）之后。
+
+**① pair-store 终于进 git。** 代码 11:05 起就在工作树里、15:42 部署的 bundle 在跑、
+16:00 重启后 `pairStore.restored=1` 且手机免扫码回连——但仓里一直是未跟踪/未提交。
+提交前补齐闸门：control `pnpm -C packages/plugin test` **328 pass / 0 fail**、
+伞仓 `node --test e2e/*.test.mjs` **135 / 0**、`node e2e/run.mjs` **17 步 0 失败**。两个提交：
+
+- control `c762fcc`（`feat(host)`，9 文件 +940/−70）：`shell/pair-store.ts` 新文件 +
+  config/keys/relay/index 四棵树 + `.gitignore` 的 `conversations-*.json` + 三个测试文件。
+  **git 与现实从此对齐**（生产进程跑的已经是这份代码）。
+- 伞仓 `d72a7d0`（`test(e2e)+docs`，3 文件 +207/−14）：`run.mjs` 的 `pairStoreFile` 入参、
+  `restart-resume` 的 (c) 判据翻面（"必须能续用"）+ (d) `'off'` 对照、
+  `BOOTSTRAP-ASSESSMENT.md` 补落地记录。`.workbuddy/**` 记忆文件按惯例仍未提交。
+
+**② 审批链真机闭环——答卡的是真手机，不是探针。** 原计划用 `scripts/approval-probe.mjs`
+（假手机，会按"只允许一台"把真手机踢下线），实际没必要：`read-only` 下 `git add` 被拒
+（`.git/index.lock: Operation not permitted`），按升级路径带 `sandbox_permissions` 重试的
+**两次提权审批本身就是真机用例**。宿主 `status.json` 的 kernel 读数：
+
+| 字段 | 值 |
+|---|---|
+| `approvalCalls` | 0 → **4**（请求真的派发到了插件监听器，`global`+`prepend` 生效） |
+| `approvalAsked` | 4 |
+| `approvalLast` / `approvalDecided` | 先 **answered-by-phone(allowed-once)**×2，后 **answered-by-desktop(allowed-once)** |
+| `approvalSignalHandoff` | **fused**（交给桌面那份 signal 换成功） |
+| `approvalDesktopVoided` | **2**（手机先答 → 桌面卡片关闭句柄被按下） |
+
+读法：派发到了 → 手机与桌面同时问 → 先答的那端赢 → 手机先答时桌面那份 signal 被撤销
+（网关据此向渲染端推 cancel，桌面卡片由宿主自己收掉）。§9.13 的"两边同时问、谁先答谁算"
+与 §9.15 的"换 signal"在真机上第一次同时成立，且**两个方向都验到了**（手机答两次、
+桌面答一次）。
+
+如实记一条没说清的：派发次数 vs 提权调用次数。被 `read-only` 直接拒的那次尝试
+大概率也进了 waterfall（fail closed），也可能是按文件操作粒度计的——**无法回溯，标为推断**。
+
+**还欠的人眼**：桌面那张审批卡是否真的在屏幕上"弹出来 → 另一端一答就消失"。
+`approvalDesktopVoided` 证明请求到了桌面且句柄被按下，但视觉只有用户能确认。
+
+**顺手撞见的现成演示**：答完卡后 `pairedClients` 与中继 `clients` 都归 0（小程序退后台），
+而 `conversations=1`、`pairStore.restored=1`——**重新打开小程序就应当免扫码回到同一条会话**。
