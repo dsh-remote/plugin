@@ -396,10 +396,22 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     assert.ok(Array.isArray(page.items) && page.items.length > 0, `历史页必须带条目，收到 ${JSON.stringify(page).slice(0, 200)}`)
     for (const item of page.items) {
       assert.ok(
-        ['ev.message_delta', 'ev.tool_event'].includes(item.t),
-        `历史条目只允许实时流那两种（小程序用同一条落块路径回放），收到 ${JSON.stringify(item.t)}`,
+        ['ev.message_delta', 'ev.tool_event', 'ev.todo'].includes(item.t),
+        `历史条目只允许实时流那三种叶子载荷（小程序用同一条落块路径回放），收到 ${JSON.stringify(item.t)}`,
       )
     }
+    // mock 历史的最后一条是待办快照（2026-10-05 加）：它必须逐字节过网——
+    // 这条判据红，说明插件发出的形状与 wire 1.5.0 的 schema 对不上。
+    const todoSnapshots = page.items.filter((item) => item.t === 'ev.todo')
+    assert.equal(todoSnapshots.length, 1, `第一页必须带一条待办快照，实得 ${todoSnapshots.length} 条`)
+    assert.deepEqual(
+      todoSnapshots[0].todos,
+      [
+        { content: '复现用户报的问题', status: 'completed' },
+        { content: '改完跑一遍本地全链路', status: 'in_progress' },
+      ],
+      '快照内容必须逐字节过网（全量语义，不折叠）',
+    )
     const sent = phone.cmds.filter((c) => c.cmd.t === 'cmd.session_history').pop()
     assert.ok(sent, '手机没发出 cmd.session_history')
     assert.equal(sent.cmd.sessionId, MOCK_SESSION_ID, '载荷 sessionId 必须是 DSH 会话 id')
