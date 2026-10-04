@@ -1576,3 +1576,22 @@ todo-running 用 --td-brand-color 在深色容器上 2.94:1（对比度体检抓
 
 **用户侧还剩三步**：① 重启 Harness（吃 2.0.2：待办、cwd 修复、pill 新文案）；
 ② 公众平台把 mp 1.1.3 选为体验版；③ 手机重新扫一次码（relay 重启断开过通道）。
+
+### 9.29 overall review + four-repo optimization (2026-10-05 01:55)
+
+After the wrap-up I ran an overall review of the four repos; findings fall into two classes.
+
+**Doc/config drift from code (all fixed)**:
+
+1. the shipped cordis.patch.yml still carried the dead takeOverQuestions key (item 6 removed the schema but not the distributed copy);
+2. the control README config table still said takeOverQuestions was not deleted yet and lacked uploadDir / maxImageBytes / newSessionCwd;
+3. the relay README said healthz has eight fields; it returns twelve;
+4. the relay SELF-HOSTING still said the frame limit is 256 KiB (1 MiB since 1.0.3), had no DRC_CONV_EMPTY_TTL_MS row, said the sweep does four things (five since 1.0.4), and had no empty-dropped log row;
+5. the relay CHANGELOG kept the 1.0.2 counters entry in the unreleased section and was missing the 1.0.3 / 1.0.4 entries.
+
+**todo in history replay (closes the v1 gap 9.28 recorded)**: wire 1.5.0 (historyItem widened to three leaf payloads) -> control 2.0.3 (historyWireItem no longer drops todo) -> mp 1.1.4 (_replayPage records the last snapshot of the page, _loadHistory applies it only on the first page, _todoLive lets live frames win). Three rules: the last snapshot in a page is that page-final list; older pages are stale and must not overwrite; a live frame that already arrived wins.
+
+**Chain coverage added**: the mock default history gains a todo/write and run.mjs asserts the first page must carry that snapshot byte-for-byte over the wire -- previously the history-with-todo path was empty in the full chain, and unit tests framing their own payloads cannot catch a shape mismatch between what the plugin emits and the protocol schema.
+
+Gates: protocol 88/0, plugin 346/0, mp check 32/32 + contrast 310, umbrella 160/0 + run.mjs 17 steps.
+Released: wire 1.5.0 / control 2.0.3 / mp 1.1.4 (uploaded) -- **no relay code change** (docs only), production still runs 1.0.4.

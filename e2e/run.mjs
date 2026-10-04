@@ -1102,10 +1102,23 @@ export async function main() {
       )
       for (const item of first.items) {
         assert.ok(
-          ['ev.message_delta', 'ev.tool_event'].includes(item.t),
-          `历史条目只允许实时流那两种（小程序用同一条分发路径回放），收到 ${JSON.stringify(item.t)}`,
+          ['ev.message_delta', 'ev.tool_event', 'ev.todo'].includes(item.t),
+          `历史条目只允许实时流那三种叶子载荷（小程序用同一条分发路径回放），收到 ${JSON.stringify(item.t)}`,
         )
       }
+      // 待办快照：本地全链路要真的走到它（mock 历史的最后一条）。这条过不了，
+      // 说明 wire 1.5.0 的 historyItem 扩员与插件实际发出的形状对不上——
+      // 单测各摆各的帧，发现不了这种跨仓分叉。
+      const todoSnapshots = first.items.filter((item) => item.t === 'ev.todo')
+      assert.equal(todoSnapshots.length, 1, `第一页必须带一条待办快照，实得 ${todoSnapshots.length} 条`)
+      assert.deepEqual(
+        todoSnapshots[0].todos,
+        [
+          { content: '复现用户报的问题', status: 'completed' },
+          { content: '改完跑一遍本地全链路', status: 'in_progress' },
+        ],
+        '快照内容必须逐字节过网（全量语义，不折叠）',
+      )
       // 翻页：游标**由主机给、手机原样回传**。第二页必须存在、内容不同、且游标严格前移。
       assert.equal(typeof first.nextBeforeSeq, 'number', 'mock 历史比一页长，第一页必须给出更早的游标')
       const second = await phone.client.loadHistory(MOCK_SESSION_ID, { beforeSeq: first.nextBeforeSeq, limit: 3 })

@@ -1566,3 +1566,75 @@ test('wxml：待办条在顶部（scroll 之前），默认收起可点开', () 
   assert.ok(wxml.includes('catchtap="onCollapseTodos"'), '点消息区收回')
   assert.ok(wxml.includes('todosOpen'), '张开合由 todosOpen 驱动')
 })
+
+/* ── 待办进历史回放（2026-10-05：补 1.4.0 留下的 v1 边界）────────────────────── */
+
+test('历史回放：第一页里的待办快照落到顶部条上（进跑过的会话不用等下一帧）', async () => {
+  const p = makePage()
+  stubClient(p, () =>
+    Promise.resolve({
+      sessionId: 's1',
+      cmdId: 'c1',
+      items: [
+        { t: 'ev.message_delta', messageId: 'h1', delta: '把待办补进历史', role: 'user', done: true },
+        { t: 'ev.todo', todos: [{ content: '改完跑全链路', status: 'in_progress' }] },
+        { t: 'ev.todo', todos: [{ content: '改完跑全链路', status: 'completed' }] },
+      ],
+      nextBeforeSeq: 12,
+    }),
+  )
+  p._maybeLoadHistory()
+  await flush()
+  assert.equal(p.data.todos.length, 1, '第一页的快照要落地')
+  assert.equal(p.data.todos[0].status, 'completed', '一页里最后一条才是那一页截止时的清单')
+  assert.equal(p.data.todoDone, 1)
+  assert.equal(p.data.todosOpen, false, '默认仍旧收起')
+})
+
+test('历史回放：更早页的待办是过期快照，不许把清单往回拨', async () => {
+  const p = makePage()
+  let call = 0
+  stubClient(p, () => {
+    call += 1
+    return Promise.resolve({
+      sessionId: 's1',
+      cmdId: 'c' + call,
+      items:
+        call === 1
+          ? [{ t: 'ev.todo', todos: [{ content: '最新清单', status: 'in_progress' }] }]
+          : [{ t: 'ev.todo', todos: [{ content: '更早的清单', status: 'pending' }] }],
+      nextBeforeSeq: call === 1 ? 20 : null,
+    })
+  })
+  p._maybeLoadHistory()
+  await flush()
+  assert.equal(p.data.todos[0].content, '最新清单')
+  // 用户点了「加载更早」：第二页（更早）落地
+  await p.onLoadEarlier()
+  assert.equal(p.data.todos[0].content, '最新清单', '更早页的待办是过期快照，不许覆盖')
+})
+
+test('历史回放：实时帧已经到过，历史快照不许盖它（后到者胜）', async () => {
+  const p = makePage()
+  // 实时帧先到（会话正在跑，todo/write 已经来了）
+  send(p, { t: 'ev.todo', todos: [{ content: '实时清单', status: 'in_progress' }] })
+  stubClient(p, () =>
+    Promise.resolve({
+      sessionId: 's1',
+      cmdId: 'c1',
+      items: [{ t: 'ev.todo', todos: [{ content: '历史里的旧清单', status: 'pending' }] }],
+      nextBeforeSeq: null,
+    }),
+  )
+  p._maybeLoadHistory()
+  await flush()
+  assert.equal(p.data.todos[0].content, '实时清单', '实时帧后到，历史不许盖它')
+})
+
+test('历史回放：没有待办的历史页不碰顶部条', async () => {
+  const p = makePage()
+  stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: null }))
+  p._maybeLoadHistory()
+  await flush()
+  assert.deepEqual(p.data.todos, [], '没有待办快照就不该凭空出现一条')
+})
