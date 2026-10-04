@@ -1321,3 +1321,28 @@ typecheck 0、format:check 0；伞仓 e2e **135 / 0**、run.mjs 17 步 0 失败�
 **两条判据自己错过一次**（形状比修法值钱）：① 未闭合块用例最初期望剥完不含换行，实际夹具里
 块前就有一个换行——剥块不动其他字节，错的是期望值；② 没有字面量反斜杠n最初写成 TS 的单反斜杠
  escape（那是真换行），要两个字面量得写双反斜杠。**判据红时先逐条查是判据错还是实现错。**
+
+### 9.20 手机 markdown 窄排修复：list/table 宽度与缩进（2026-10-04 晚，接 §9.19）
+
+用户真机截图：markdown 的 list 与 table 宽度不对、缩进不对。根因两条，都在 rich-text
+的布局（截图复现装置：mp-shots 新增 `chat-md-width` 一张，走 `_applyDelta` 真实路径）：
+
+| 截图上的事 | 根因 | 修法（mp `09b2fd2`） |
+|---|---|---|
+| bullet 每行只排五六个字 | **p 嵌 p 会 shrink-to-fit**：blockNodes 的 default 分支把
+  text token 当容器递归，每个行内 token（文本/加粗/行内码）各自变成一个 p，列表项于是 p 嵌 p |
+  blockNodes 增加 `text` 分支：一个 p 包着行内节点 |
+| 表格两列都窄 | `tr/td/thead/tbody` 上的 `display:block` 在 rich-text 里同样坍缩 |
+  去掉这些 display:block + 表格加 `table-layout:fixed`（td 的 `min-width:120rpx` 保留——
+  那是过去"窄列被中文长词撑破"的闸门；3 列以内不影响已验证渲染） |
+| 列表缩进不对 | ul/li 标签本身坍缩 | listNode 重写：每条目一个**顶层 p**（满宽），
+  嵌套列表**摊平**成同层后续条目、缩进逐层加深 28→56rpx（不嵌套 p——那正是要修的东西） |
+
+**判据**：check-markdown 4 处形状随实现更新、意图不变（列表要渲染 / marker 独立成节点 /
+缩进用 padding / td 有 min-width）；`npm run check` **32/32**、伞仓 e2e **135/0**、
+`run.mjs` 17 步 0 失败。**已上传开发版 1.0.1**（mp-upload），要用户在公众平台
+「选为体验版」后重开小程序生效。
+
+**方法论沉淀**：rich-text 的渲染问题，截图复现装置（mp-shots + automator）比读代码猜快——
+本轮三条假设（换标签/换 CSS/摊平）全部是先改后截、截完再定。⚠️ mp-shots 连上 IDE 后
+第一张 shot 有一次渲染成空状态的偶然（后续复跑全对），**截图前先确认画面非空**。
