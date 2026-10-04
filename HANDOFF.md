@@ -1595,3 +1595,11 @@ After the wrap-up I ran an overall review of the four repos; findings fall into 
 
 Gates: protocol 88/0, plugin 346/0, mp check 32/32 + contrast 310, umbrella 160/0 + run.mjs 17 steps.
 Released: wire 1.5.0 / control 2.0.3 / mp 1.1.4 (uploaded) -- **no relay code change** (docs only), production still runs 1.0.4.
+
+#### 9.29.1 continuation: a half-open connection found in production -> host-side liveness probe (control 2.0.4)
+
+A real problem found while re-verifying /healthz after the release: the relay restarted at 17:26 and the host reconnected fine (host online), then 28 minutes later the connection went half-open -- the relay has reported hosts:0 with no host since 17:54, while the Harness process still shows that TCP as ESTABLISHED and the plugin status.json says relay: online the whole time; nothing reconnects until process restart. On the phone it looks like paired but unreachable.
+
+Cause: with a half-open socket no FIN/RST ever arrives locally, so close never fires. The relay has its own heartbeat (it pings the host, kills it after 2x60s); the host side of that pair was missing. Fix: the host asks a ping every 20s (an application frame pair the protocol already has; the relay answers unconditionally, no wire change) and terminates when no pong arrives within 10s -- only a forced teardown can coax a close event out of a half-open socket, which then walks the existing reconnect.
+
+Judgment relay-client +3 (349/0). Released: control 2.0.4. The relay needs no change.
