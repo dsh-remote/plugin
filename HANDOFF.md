@@ -299,6 +299,14 @@ pnpm 见了它就会在 OIDC 失败时静默回落成 token 发布）。
     与 `kernel.approvalDesktopVoided`（应比点之前 +1）。
     读数解释：两个都动了而卡还在 ⇒ 断在渲染端（宿主的代码），不在插件；
     `handoff=failed|ignored` ⇒ `request.signal` 换不出去，桌面那张卡只能等它自己的工具调用生命周期。
+    **探针这边还有两道墙**（今天各撞了一次）：①`POST /pairing/new` 之后 `status.json` 的 `pairing`
+    要等一次快照刷新才出现，而**配对成功那一刻 `active.pairing` 被清掉**——这时再 POST 会回
+    `state:ready` + 同一个 `token`，可 `status.json` 里已经**没有 `qr`** 了，探针就报
+    「配对码无效或已过期」。要稳就得给探针加一条 `--qr-file`（`GET /pairing.png?e=<epoch>`
+    拿图 → 用 `~/.workbuddy/binaries/python/envs/default/bin/python` 那个 zxing venv 解回文本，
+    见 §9.11 那条"不改配置取码"的路子）；②**别对 `--session first` 那些 API 建的空壳会话发指令**，
+    它们没有执行/写文件工具（今天整轮都是 `unknown tool "run_code"`），
+    已给探针加 `--session new` 自己建一条当实验台。
 
 ## 4. 环境坑（每条都是踩过的，新版）
 
