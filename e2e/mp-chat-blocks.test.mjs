@@ -49,6 +49,9 @@ globalThis.wx = {
     opts.success && opts.success({ tapIndex: tap })
   },
   showToast: () => {},
+  // 取消在跑的那条要先问一句（2026-10-05 傍晚重做）。夹具记下弹了什么，
+  // 判据据此断言确认框写明这是中断、以及没点确认就不发给主机。
+  showModal: function (o) { globalThis.__drcModal = o },
   vibrateLong: () => {},
   vibrateShort: () => {},
   hideKeyboard: () => {},
@@ -115,6 +118,9 @@ globalThis.wx = {
     return opts.success({ tempFilePath: `tmp-shrunk-${++attachSeq}.jpg` })
   },
   showToast: () => {},
+  // 取消在跑的那条要先问一句（2026-10-05 傍晚重做）。夹具记下弹了什么，
+  // 判据据此断言确认框写明这是中断、以及没点确认就不发给主机。
+  showModal: function (o) { globalThis.__drcModal = o },
 }
 
 /** 假 canvas 节点：createImage / getContext / drawImage 的形状与真 API 对齐。 */
@@ -1760,7 +1766,7 @@ test('待办与排队消息不打架：两个状态各管各的', async () => {
 
 test('wxml：待办条在顶部（scroll 之前），默认收起可点开', () => {
   const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
   const barAt = wxml.indexOf('todo-bar')
   const scrollAt = wxml.indexOf('class="scroll"')
   assert.ok(barAt > 0 && scrollAt > barAt, '待办条必须在消息区之前（做在顶部）')
@@ -1918,7 +1924,7 @@ test('文件附件：超预算被挡下并说清该减哪一个（不静默丢�
 
 test('wxml：加号一个入口管两样，没有旁边的第二个按钮', () => {
   const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(
+  const wxml = fs.readFileSync(
     path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
     'utf8',
   )
@@ -1960,7 +1966,7 @@ test('长按复制：空文本不动作（不许用空串覆盖用户已复制�
 
 test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
   const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(
+  const wxml = fs.readFileSync(
     path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
     'utf8',
   )
@@ -2000,7 +2006,7 @@ test('长按复制：空文本不动作（不许用空串覆盖用户已复制�
 
 test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
   const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(
+  const wxml = fs.readFileSync(
     path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
     'utf8',
   )
@@ -2124,15 +2130,6 @@ test('删除：主机说删不掉（已经跑起来了）就照实说，不假�
   assert.equal(p.data.pending[0].key, 'q-2')
 })
 
-test('删除：sent 的本地就回绝，不麻烦主机', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  p.setData({ pending: [{ key: 'q-3', queueId: 'q-3', text: '在跑了', state: 'sent' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-3' } } })
-  assert.deepEqual(globalThis.__drcDropped, [], 'sent 的发过去也删不掉，别浪费一次往返')
-  assert.equal(p.data.pending.length, 1)
-})
 
 test('删除：failed 的本机就能删（主机从没发出去过）', () => {
   const p = makePage()
@@ -2150,10 +2147,59 @@ test('删除：failed 的本机就能删（主机从没发出去过）', () => {
   assert.equal(p.data.pending[0].key, 'q-4', '只删点那一条')
 })
 
-test('wxml：删除按钮只给非 sent 的；只有附件的消息说“附件 N 项”', () => {
-  const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
-  assert.match(wxml, /wx:if="\{\{item.state !== 'sent'\}\}"[^>]*catchtap="onDropQueued"/)
-  assert.match(wxml, /item.text \|\| \('附件 ' \+ \(item\.images \+ item\.files\) \+ ' 项'\)/)
+test('删除：sent 的先问一句，确认后问主机中断（不是静默回绝）', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  globalThis.__drcModal = null
+  p.setData({ pending: [{ key: 'q-3', queueId: 'q-3', text: '在跑了', state: 'sent' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-3' } } })
+  // 必须先问：嘴上说"取消"其实是中断整轮，不问就发出去比无法取消更吓人
+  assert.ok(globalThis.__drcModal, 'sent 的取消必须先弹确认')
+  assert.match(String(globalThis.__drcModal.content), /中断/, '确认框要写明这是中断，不是删除')
+  assert.equal(String(globalThis.__drcModal.confirmText), '中断', '确认按钮就叫中断')
+  // 没点确认就不该发给主机
+  assert.deepEqual(globalThis.__drcDropped, [], '没确认就不许发给主机')
+
+  // 点了确认：真的发出去（主机那头是中断）
+  globalThis.__drcModal.success({ confirm: true })
+  assert.deepEqual(globalThis.__drcDropped, ['q-3'], '确认后要真的去问主机')
 })
 
+test('删除：held 的不问，直接问主机拿掉', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  globalThis.__drcModal = null
+  p.setData({ pending: [{ key: 'q-9', queueId: 'q-9', text: '还扣着', state: 'held' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-9' } } })
+  assert.equal(globalThis.__drcModal, null, 'held 还没有副作用，不问')
+  assert.deepEqual(globalThis.__drcDropped, ['q-9'], 'held 直接问主机删')
+})
+
+test('删除：failed 的本机就删，不问主机也不弹确认', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  globalThis.__drcModal = null
+  p.setData({ pending: [{ key: 'q-7', queueId: 'q-7', text: '没发出去', state: 'failed' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-7' } } })
+  assert.equal(globalThis.__drcModal, null, 'failed 不需要确认')
+  assert.deepEqual(globalThis.__drcDropped, [], 'failed 主机从没收过，别浪费往返')
+  assert.equal(p.data.pending.length, 0, 'failed 本机就删掉')
+})
+
+test('wxml：删除按钮三种状态都给，不再只给非 sent 的', () => {
+  const wxml = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  // 旧版是 wx:if="{{item.state !== 'sent'}}"——用户看到的就是 "mp 端无法取消"
+  assert.ok(!wxml.includes("item.state !== 'sent'"), 'sent 也要给删除按钮')
+  assert.match(wxml, /class="queue-del"[^>]*catchtap="onDropQueued"/, '删除按钮要一直在')
+  // 在跑的那一条要有可见标记，否则用户分不出谁在跑
+  assert.ok(wxml.includes('queue-state'), 'sent 那条要有在跑标记')
+  assert.ok(wxml.includes('在跑'), '标记文案要直接说在跑')
+  // 主机侧发起的回合也要能显示（dsh 为准）
+  assert.ok(wxml.includes('item.text'), '排队条目要显示文字（主机侧回合靠它露出）')
+})
