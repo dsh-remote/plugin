@@ -2203,3 +2203,59 @@ test('wxml：删除按钮三种状态都给，不再只给非 sent 的', () => {
   // 主机侧发起的回合也要能显示（dsh 为准）
   assert.ok(wxml.includes('item.text'), '排队条目要显示文字（主机侧回合靠它露出）')
 })
+
+test('mp 端进入会话会主动问主机要排队，不靠被动推送（2026-10-05 用户实测第三点）', () => {
+  const chat = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
+    'utf8',
+  )
+  // ev.queue 只在主机状态变化时推。进会话 / 切回前台 / 刚重连这三个时刻
+  // 主机什么都没发生，于是没有任何一帧会来——不是同步慢，是没有触发点。
+  assert.match(chat, /_pullQueue/, '必须有主动拉取的方法')
+  // 拉取必须挂在 onShow 上：这三个时刻都只触发 onShow
+  const onShow = chat.slice(chat.indexOf('onShow: function'), chat.indexOf('onLoadEarlier:'))
+  assert.match(onShow, /_pullQueue\(\)/, 'onShow 必须拉一次排队')
+
+  const client = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/core/client.js'),
+    'utf8',
+  )
+  assert.match(client, /getQueue\s*\(/, 'client 必须有 getQueue')
+  assert.match(client, /cmd\.get_queue/, '必须发 cmd.get_queue')
+  // sessionId 不能漏：主机按会话过滤，漏了就串台
+  const m = client.match(/getQueue\(sessionId\)\s*\{[\s\S]{0,320}?\}/)
+  assert.ok(m, 'getQueue 方法体要能取到')
+  assert.match(m[0], /sessionId/, '必须带 sessionId')
+})
+
+test('mp 端拉取失败时不清空已有排队（老主机不认识这条命令）', () => {
+  const chat = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
+    'utf8',
+  )
+  const i = chat.indexOf('_pullQueue: function')
+  const body = chat.slice(i, chat.indexOf('},', i) + 2)
+  // 失败路径必须直接 return，不能顺手 setData({pending: []})
+  assert.ok(/r\.ok !== true\) return/.test(body), '回执不 ok 就要直接返回')
+  assert.ok(!/pending:\s*\[\]/.test(body), '拉取失败不许把排队清空——那会让用户以为消息没了')
+})
+
+test('排队条只由主机给：mp 端不做本地增删（以 dsh 为准）', () => {
+  const chat = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
+    'utf8',
+  )
+  // 映射收敛到 _applyQueue 一处：ev.queue 与 cmd.get_queue 回执共用
+  assert.match(chat, /_applyQueue: function/, '要有统一的映射入口')
+  assert.match(chat, /_onQueue: function ?\(p\)\s*\{\s*this\._applyQueue/, 'ev.queue 走统一映射')
+  assert.match(chat, /_applyQueue\(d\.items \|\| \[\]\)/, 'get_queue 回执也走统一映射')
+  // 发送成功后不许自己往 pending 里塞（那会与主机状态分叉）
+  // 只看 sendDrop 方法体本身（下一处缩进回到 2 空格的成员定义即止）
+  const dropIdx = chat.indexOf('sendDrop: function')
+  const after = chat.slice(dropIdx)
+  const end = after.search(/\n  [a-zA-Z_]+: function/)
+  const dropBody = after.slice(0, end > 0 ? end : 600)
+  assert.ok(!/setData/.test(dropBody), '删除后不要本地改 pending，等主机回执')
+  assert.match(dropBody, /dropQueued/, '必须真的问主机')
+})
+

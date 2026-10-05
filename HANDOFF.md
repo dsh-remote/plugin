@@ -2452,3 +2452,97 @@ node scripts/mp-upload.mjs --version x.y.z
 ```
 截图验收用：node scripts/mp-shots.mjs --pages sessions|chat|dark
 
+
+
+## 9.29.20 排队四连问题的真正根因：inbox 事件一直在门口，但被 switch 丢掉了（wire 1.8.0 / control 2.0.9 / mp 1.1.21）
+
+用户 2026-10-05 20:30 实测：
+  1、dsh 创建的，在 mp 端不显示
+  2、mp 端删除的，在 dsh 没删除
+  3、mp 端进来会话没有加载当前的排队消息
+  4、双端目前还是没有保持双项同步（以 dsh 的排队消息为权威）
+
+── 上一轮（§9.29.17）的方向性错误 ──────────────────────────────
+当时判断「`agent.followup()` 不返回句柄 ⇒ agent inbox 是黑盒，插件看不见主机侧
+在排什么」，于是用「run-state=running 且本会话无可提升项 → 造 host 占位项，
+再等 delta role=user 回填文字」来**猜**。
+这个判断**是错的**。取证（`~/.dsh/dsh-remote-control/status.json`）：
+```
+kernel.eventTypes         = agent/inbox/spliced | turn/start | …
+kernel.unmappedEventTypes = agent/inbox/spliced | step/start | …
+```
+宿主**确实**把 `agent/inbox/spliced` 转给了插件，只是 `sessionEventKernelEvents`
+的 switch 没有对应 case，落到 `default: return []` 被静默丢弃——所以它同时
+出现在 unmapped 列表里。**那条线索一直在那儿，是上一轮没去查。**
+
+── 真实负载（真机 session log，27440 行事件，338 条 inbox）─────────
+```json
+{"type":"agent/inbox/spliced","data":{
+  "target":"next-turn",              // 163 条 next-turn / 175 条 next-step
+  "start":0,
+  "inserted":[{"content":[{"type":"text","text":"读handoff…"}],
+               "source":{"kind":"user"},"role":"user","id":"46d1e63d-…"}]}}
+```
+正文、来源、消息 id 全都自带。三道过滤，**少一道手机就多出假排队**：
+  1. `target !== 'next-turn'` → 那是插话（当前轮内消化），不是排队
+  2. `inserted` 有 158/338 是**空数组**（纯 start 调整），空的不算消息
+  3. `source.kind` 只有 `user` 是人写的。实测另有 ptc-mode(51，图片回传)、
+     repeat-tool-reminder(29，内核重复调用提醒)、user-approval(4，策略变更)、
+     tool-jobs(4，后台任务回执)——全部不显示
+
+第 3 条的判据与 `user/message` 那条同源同理由（那里第一版没看 source，
+结果一条 time-context 快照顶着用户气泡显示，用户没发过这句话）。
+
+── 问题 3 的根因：协议里根本没有拉取命令 ──────────────────────
+control 的 case 列表：list_sessions / send_prompt / drop_queued / interrupt /
+resolve_permission / answer / keep_awake / new_session / session_history
+——**没有 cmd.queue**。mp 端 `onShow` 只发 `client.listSessions()`。
+
+也就是说此前是**纯推送模型**：`ev.queue` 只在状态变化时才推，而手机
+①进入会话 ②切回前台 ③刚重连 这三个时刻主机什么都没发生 ⇒ 没有任何一帧会来。
+这不是同步慢，是**根本没有触发点**。
+
+── 修法 ────────────────────────────────────────────────────────
+- `ports/index.ts` 新增 `kind:'inbox'`（含三道过滤的完整注释）
+- `carrier-services.ts` 加 `case 'agent/inbox/spliced'` + 登记进
+  `MAPPED_SESSION_EVENTS`（否则 status.json 会一直记着它没被映射）
+- `queue.ts` 用 `noteInbox(sessionId, kernelId, text)` 替换 `ensureHostSlot`
+  / `fillHostText`；queueId 直接用内核消息 id（双端对得上号），
+  按 kernelId 幂等（实测同一条会被报告多次）
+- `runtime.ts` 的 inbox 分支入表后立刻 `pushQueue`；
+  **delta 分支与 run-state 分支里那两处猜测全部删除**
+- 协议新增 `cmd.get_queue`（wire 1.8.0），主机回执里带全量 items
+- mp `client.getQueue()` + `_pullQueue()`，挂在 `onShow`；
+  映射收敛到 `_applyQueue`，`ev.queue` 与回执共用（形状同源）
+
+拉取失败**静默 return**，绝不 `setData({pending: []})`——老主机不认识这条
+命令时清空会让用户以为消息没了。判据专门钉了这一条。
+
+── 自我循环验证（3 条，全部验证会红）────────────────────────
+1. 把 `agent/inbox/spliced` 从 MAPPED 集合拿掉 → 判据 72 红
+2. 把 switch 里的 case 摘掉（回到 default 吞掉）→ 判据 67/71 红
+3. 把 mp `onShow` 里的 `_pullQueue()` 删掉 → 判据 95 红
+全部恢复后：control 370/370、伞仓 175/175。
+
+── 迁动的旧判据 ────────────────────────────────────────────────
+- `未识别的类型返回空数组且不抛` 的名单里原本含 `agent/inbox/spliced`，
+  拿掉（它已映射），并补 5 条 inbox 专项
+- `dsh 侧创建的回合也要同步到 mp：run-state…造 host slot` 整条重写为
+  inbox 版（正文直接来自事件、不靠回填、queueId=内核 id、state=held），
+  另补幂等与 cmd.get_queue 两条
+
+── 仍然做不到的一件事（必须如实告知）──────────────────────────
+宿主只暴露 followup / steer / cancel / interrupt，**没有删除 inbox 的入口**。
+所以「删掉一条 dsh 侧已排队的消息」在物理上做不到：插件能看见它（现在看见了），
+但删不掉它。目前 sent 走 `kernel.interrupt`，held 走「从表里拿掉」。
+而 inbox 里那条消息**仍会**被内核消化——这一点尚未在 UI 上说清。
+
+Judgment: inbox 三道过滤 / 同 id 幂等 / 正文与 id 原样 / cmd.get_queue 回全量 /
+跨会话不串台 / mp onShow 主动拉 / 拉取失败不清空 / 映射只有一处（8 条）。
+闸门：control 370/370 + typecheck + format；protocol 全绿；mp 全绿（含对比度）；
+伞仓 175/175。
+
+⚠️ **仍未发布 npm**：wire 1.8.0 与 control 2.0.9 都卡在 ~/.npmrc token 401。
+    本机已把 2.0.9 产物直接装进 dsh profile（备份 .bak-2.0.8），
+    **重启 Harness 后即为新行为**。
+
