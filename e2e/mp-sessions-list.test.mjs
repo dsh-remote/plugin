@@ -132,49 +132,59 @@ test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortA
   }
 })
 
-test('wxml/wxss：一条会话一行、整张列表一张卡；项目名是第二行里的描边胶囊', () => {
+test('wxml/wxss：路径去掉只留项目名；项目是品牌色圆点 + 24rpx 深灰文字', () => {
   const { readFileSync } = require('node:fs')
   const page = path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions')
   const wxml = readFileSync(path.join(page, 'sessions.wxml'), 'utf8')
   const wxss = readFileSync(path.join(page, 'sessions.wxss'), 'utf8')
 
-  // ① 回到原来的样式：整张列表一张卡 + 细线分隔（2026-10-05 用户：
-  //    “还是改成原来的样式（不要卡片）”——1.1.16 那版一会话一卡撤了）。
-  assert.match(wxml, /wx:else class="card"/, '列表外层要是一张卡：不是一会话一卡')
-  assert.match(wxml, /class="sess-line"/, '细线分隔要回来')
-  assert.ok(!/class="card sess"/.test(wxml), '会话节点不许再自己带 card 类')
-  assert.match(wxss, /\.sess-line\s*\{/, '.sess-line 规则要存在')
+  // ① 路径整个去掉（2026-10-05 用户：去掉路径只保留项目标签）。
+  //    不再渲染 workspace 全路径，也不再有 .sess-sub 这条规则。
+  assert.ok(!wxml.includes('sess-sub'), '全路径不许再渲染：用户要求只保留项目名')
+  assert.ok(!/\.sess-sub\s*\{/.test(wxss), '.sess-sub 规则要删掉')
 
-  // ② 排版重排成两行（原来是三栏：左列标题/路径 + 右列项目名/徽标/时间）。
+  // ② 项目名换成 圆点 + 文字，不再是胶囊（用户：不一定要用标签形式）。
+  //    所以 .sess-tag / border / padding / border-radius 那套全不许回来。
+  assert.ok(!wxml.includes('sess-tag'), '胶囊形态的 class 不许回来')
+  assert.ok(!/\.sess-tag\s*\{/.test(wxss), '.sess-tag 规则要删掉')
   assert.match(
     wxml,
-    /<view class="sess-head">[\s\S]*?<view class="sess-title ellipsis">[\s\S]*?<view class="sess-badge/,
-    '第一行 = 标题 + 状态徽标（原来徽标在右列，现在归到第一行）',
+    /<view[^>]*class="sess-project">[\s\S]*?<view class="sess-project-dot"><\/view>[\s\S]*?<text class="sess-project-name ellipsis">/,
+    '第二行 = 圆点 + 项目名文字（不再是 pill）',
+  )
+
+  // ③ 强化在字号和字色：24rpx 比原来的 20rpx 大一档，字色深一档。
+  //    层级必须是 标题30 > 项目24 > 时间20，反了就是在抢标题。
+  const nameRule = (wxss.match(/\.sess-project-name\s*\{([^}]*)\}/) || [, ''])[1]
+  assert.ok(nameRule.length > 0, '找不到 .sess-project-name 规则')
+  assert.match(nameRule, /font-size:\s*24rpx/, '项目名要 24rpx（原胶囊只有 20rpx）')
+  assert.match(
+    nameRule,
+    /--td-text-color-secondary/,
+    '项目名字色要用 secondary（比 placeholder 深一档，读得清）',
   )
   assert.match(
-    wxml,
-    /<view class="sess-meta">[\s\S]*?<view wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag">[\s\S]*?<view class="sess-sub ellipsis">[\s\S]*?<view class="sess-time">/,
-    '第二行 = 项目名 + 全路径 + 时间（原来时间戳在右列，现在归到第二行）',
+    wxss,
+    /\.sess-title\s*\{[^}]*font-size:\s*30rpx/,
+    '标题要维持 30rpx：项目名不能反超标题',
   )
-  assert.ok(!wxml.includes('sess-right'), '右列容器要删掉：信息拆进两行，不再分左右两栏')
-  assert.match(wxss, /\.sess-head\s*\{/, '.sess-head 规则要存在（第一行）')
-  assert.match(wxss, /\.sess-meta\s*\{/, '.sess-meta 规则要存在（第二行）')
+  assert.match(
+    wxss,
+    /\.sess-time\s*\{[^}]*font-size:\s*20rpx/,
+    '时间要维持 20rpx：三级层级 标题>项目>时间',
+  )
 
-  // ③ 两行里的 flex 子项都要能收缩：标题让位给徽标、路径让位给时间，
-  //    否则长标题把徽标挤出屏幕，长路径把时间戳顶掉。
-  assert.match(wxss, /\.sess-title\s*\{[^}]*min-width:\s*0/, '标题要能收缩')
-  assert.match(wxss, /\.sess-sub\s*\{[^}]*min-width:\s*0/, '路径要能收缩')
-  assert.match(wxss, /\.sess-badge\s*\{[^}]*flex:\s*0 0 auto/, '徽标不许被压缩')
-  assert.match(wxss, /\.sess-time\s*\{[^}]*flex:\s*0 0 auto/, '时间戳不许被压缩')
+  // ④ 圆点是 CSS 画的实心圆（不用图标字体——真机缺字形）。
+  assert.match(wxss, /\.sess-project-dot\s*\{[^}]*border-radius:\s*50%/, '圆点要画成正圆')
+  assert.match(wxss, /\.sess-project-dot\s*\{[^}]*background:/, '圆点要有实心底色')
 
-  // ④ 项目名：描边小胶囊。有样式，但不实心——实心就跟第一行那颗状态
-  //    徽标混成一类了。描边=分类，实心=状态。
-  const tagRule = (wxss.match(/\.sess-tag\s*\{([^}]*)\}/) || [, ''])[1]
-  assert.ok(tagRule.length > 0, '找不到 .sess-tag 规则')
-  assert.match(tagRule, /border:/, '项目名得有描边才谈得上样式')
-  assert.match(tagRule, /padding:/, '描边胶囊要有 padding')
-  assert.match(tagRule, /border-radius:/, '要有圆角，那是胶囊形')
-  assert.ok(!/background/.test(tagRule), '不许实心：实心就和状态徽标混成一类了')
+  // ⑤ 项目名可收缩（长名字不能把时间戳顶出屏幕）。
+  assert.match(nameRule, /min-width:\s*0/, '项目名要能收缩')
+  assert.match(nameRule, /text-overflow:\s*ellipsis/, '项目名超长要省略')
+
+  // ⑥ 时间戳贴最右。靠 margin-left:auto——路径去掉后第二行没有 flex:1 的项了，
+  //    不写 auto 时间会紧贴在项目名后面。
+  assert.match(wxss, /\.sess-time\s*\{[^}]*margin-left:\s*auto/, '时间要靠 auto 外边距顶到行尾')
 })
 
 
