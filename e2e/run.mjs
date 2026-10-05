@@ -365,6 +365,11 @@ export async function bootHost({
    * 落盘关闭时那条路**仍然**是干净的 —— 那正是有人会误以为"落盘顺手修好了静默黑洞"的场景。
    */
   pairStoreFile = '',
+  /**
+   * 自动发码间隔秒。默认 0（关）——与真机默认配置一致，且开着它会让"屏幕上永远有码"
+   * 干扰冒烟步骤。配对窗口这一族用例（离线重连/退出配对后码还能不能用）要传 > 0。
+   */
+  pairOnStartSec = 0,
 } = {}) {
   installFrameTap()
   await installKernelCapture()
@@ -423,7 +428,7 @@ export async function bootHost({
     // 下面两条是这套装置的前提，不是可调项：自动发码一开，「屏幕上永远有一张码」就不再是
     // 「点一下配对」那条路径，冒烟步骤会互相干扰；防休眠在 CI 上更不许真去 caffeinate。
     // 以前它们是 bootHost 的入参，而没有任何调用点传过。
-    pairOnStartSec: 0,
+    pairOnStartSec,
     pairTtlMs,
     keepAwake: { enabled: false, idleReleaseSec: 300, keepDisplay: false },
     listingRefreshSec: 15,
