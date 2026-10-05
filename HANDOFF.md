@@ -1603,3 +1603,30 @@ A real problem found while re-verifying /healthz after the release: the relay re
 Cause: with a half-open socket no FIN/RST ever arrives locally, so close never fires. The relay has its own heartbeat (it pings the host, kills it after 2x60s); the host side of that pair was missing. Fix: the host asks a ping every 20s (an application frame pair the protocol already has; the relay answers unconditionally, no wire change) and terminates when no pong arrives within 10s -- only a forced teardown can coax a close event out of a half-open socket, which then walks the existing reconnect.
 
 Judgment relay-client +3 (349/0). Released: control 2.0.4. The relay needs no change.
+
+#### 9.29.2 用户报"二维码无法配对"——真因是主机反复半开掉线（2026-10-05 上午）
+
+用户报"配对有问题，当前的二维码无法配对"。逐层查下来不是配对链路坏了：
+
+- 中继日志：00:12:51 `host offline` → 00:16:58 `host online` → 00:27:01
+  `host offline` → 00:27:52 `host online`。**主机每约 10 分钟半开掉线一次**，
+  而 2.0.4 的探针没生效——跑着的还是旧 bundle（pill 状态 version 2.0.0）。
+  用户此前的 3 次尝试（00:16:26/31/35）全落在主机离线窗口内，
+  中继一律 `invalid_or_expired`。
+- 复证：用脚本新签发的码在手机上配对，一次成功（clients 0→1→0、pending 被消耗）。
+  所以"配对机制坏了"是错的，真因是**主机不在线**+**码过期无提示**。
+
+改了两处（都是用户点了头的）：
+
+1. **mp 1.1.5**：加号直接进相册，删掉单选项 action sheet「图片（从相册选）」——
+   括号文本正是用户点名不要的，且这一代只有图片一种附件，中间那屏只多一次点击；
+2. **control 2.0.5**：配对码剩余寿命常显在码上方（`X 分 Y 秒后过期`，最后 30 秒
+   转重），倒计时在说这件事时 note 闭嘴；中继不在线时**一个发码请求都不打**，
+   那一屏改成"主机还没连上中继 现在发不出配对码"+右上角刷新；面板开着时中继
+   掉线，死的二维码在 2 秒节拍内当场换成这一屏。
+
+判据：client-bundle +2（离线不发码 / 开着面板掉线当场换屏），plugin 351/0；
+mp check 32/32 + 310；伞仓 160/0 + run.mjs 17 步。
+
+**最要紧的一条**：要让 2.0.4/2.0.5 生效，用户必须重启 Harness——现在是旧 bundle
+在跑，探针不在，主机还会继续每 10 分钟半开一次。这已当面告知。

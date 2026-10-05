@@ -161,7 +161,7 @@ TDesign 裁剪清单与验证）全部见 skill `dsh-mp-ui-dev`**，那里是唯
 
 ## current release state (updated 2026-10-05 02:00)
 
-- npm: dsh-remote-wire 1.5.0 (historyItem widened with ev.todo), dsh-remote-control 2.0.4 (todo in history replay + patch/README cleanup + host-side liveness probe).
+- npm: dsh-remote-wire 1.5.0 (historyItem widened with ev.todo), dsh-remote-control 2.0.5 (adding: pairing QR countdown + no dead code while the relay is offline). Restart Harness is REQUIRED -- the running bundle is still old (pill version 2.0.0), the liveness probe from 2.0.4 is not live and the host goes half-open every ~10 minutes..
 - relay 1.0.4 in production (unchanged this round, docs only); mp 1.1.4 uploaded (todo history replay).
 - user side: restart Harness / pick mp 1.1.4 as trial build / phone re-scan once.
 - 19 Dependabot PRs all merged; TS 7.x typechecks clean in all four repos.
