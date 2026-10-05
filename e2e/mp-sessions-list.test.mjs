@@ -132,40 +132,49 @@ test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortA
   }
 })
 
-test('wxml/wxss：一条会话一张卡；项目名是描边小胶囊（2026-10-05 用户：做成卡片 + 项目文字得有样式）', () => {
+test('wxml/wxss：一条会话一行、整张列表一张卡；项目名是第二行里的描边胶囊', () => {
   const { readFileSync } = require('node:fs')
   const page = path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions')
   const wxml = readFileSync(path.join(page, 'sessions.wxml'), 'utf8')
   const wxss = readFileSync(path.join(page, 'sessions.wxss'), 'utf8')
 
-  // ① 卡片化：每条会话节点自己带 card 类。以前是外层一张大卡 + .sess-line
-  //    灰线切开，现在卡下沉到每一行，卡间用 margin 留缝。
-  assert.match(wxml, /class="card sess"/, '每条会话要自己带 card 类：一会话一卡，不是一张卡切几行')
-  assert.ok(!wxml.includes('sess-line'), '细线分隔必须删掉：横线是上一版的做法，卡片之间用 margin 留缝')
-  assert.match(wxss, /\.sess\s*\{[^}]*margin-bottom/, '卡片之间要有 margin-bottom 才看得成一张张的卡')
+  // ① 回到原来的样式：整张列表一张卡 + 细线分隔（2026-10-05 用户：
+  //    “还是改成原来的样式（不要卡片）”——1.1.16 那版一会话一卡撤了）。
+  assert.match(wxml, /wx:else class="card"/, '列表外层要是一张卡：不是一会话一卡')
+  assert.match(wxml, /class="sess-line"/, '细线分隔要回来')
+  assert.ok(!/class="card sess"/.test(wxml), '会话节点不许再自己带 card 类')
+  assert.match(wxss, /\.sess-line\s*\{/, '.sess-line 规则要存在')
 
-  // ② 位置：右列第一项、徽标之前，才是卡片右上角
+  // ② 排版重排成两行（原来是三栏：左列标题/路径 + 右列项目名/徽标/时间）。
   assert.match(
     wxml,
-    /<view class="sess-right">[\s\S]*?<view wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag">[\s\S]*?<view class="sess-badge/,
-    '项目名必须是右列第一项（卡片右上角），不能跑到徽标下面',
+    /<view class="sess-head">[\s\S]*?<view class="sess-title ellipsis">[\s\S]*?<view class="sess-badge/,
+    '第一行 = 标题 + 状态徽标（原来徽标在右列，现在归到第一行）',
   )
-  assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, '只在有工作区时渲染')
+  assert.match(
+    wxml,
+    /<view class="sess-meta">[\s\S]*?<view wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag">[\s\S]*?<view class="sess-sub ellipsis">[\s\S]*?<view class="sess-time">/,
+    '第二行 = 项目名 + 全路径 + 时间（原来时间戳在右列，现在归到第二行）',
+  )
+  assert.ok(!wxml.includes('sess-right'), '右列容器要删掉：信息拆进两行，不再分左右两栏')
+  assert.match(wxss, /\.sess-head\s*\{/, '.sess-head 规则要存在（第一行）')
+  assert.match(wxss, /\.sess-meta\s*\{/, '.sess-meta 规则要存在（第二行）')
 
-  // ③ 项目名得有样式，但**不能是实心**。
-  //    实心 = 跟右侧状态徽标（空闲/运行中/待审批）同一种视觉语言，
-  //    两样东西会被读成一类。所以：有 border / padding / border-radius，
-  //    但不许有 background。描边=分类，实心=状态。
+  // ③ 两行里的 flex 子项都要能收缩：标题让位给徽标、路径让位给时间，
+  //    否则长标题把徽标挤出屏幕，长路径把时间戳顶掉。
+  assert.match(wxss, /\.sess-title\s*\{[^}]*min-width:\s*0/, '标题要能收缩')
+  assert.match(wxss, /\.sess-sub\s*\{[^}]*min-width:\s*0/, '路径要能收缩')
+  assert.match(wxss, /\.sess-badge\s*\{[^}]*flex:\s*0 0 auto/, '徽标不许被压缩')
+  assert.match(wxss, /\.sess-time\s*\{[^}]*flex:\s*0 0 auto/, '时间戳不许被压缩')
+
+  // ④ 项目名：描边小胶囊。有样式，但不实心——实心就跟第一行那颗状态
+  //    徽标混成一类了。描边=分类，实心=状态。
   const tagRule = (wxss.match(/\.sess-tag\s*\{([^}]*)\}/) || [, ''])[1]
   assert.ok(tagRule.length > 0, '找不到 .sess-tag 规则')
-  assert.match(tagRule, /font-size:\s*20rpx/, '字号要小一档（20rpx）才能当角标')
-  assert.match(tagRule, /border:/, '项目名不能再是纯文字：得有描边才谈得上样式')
-  assert.match(tagRule, /padding:/, '描边胶囊要有 padding，否则文字贴边框')
+  assert.match(tagRule, /border:/, '项目名得有描边才谈得上样式')
+  assert.match(tagRule, /padding:/, '描边胶囊要有 padding')
   assert.match(tagRule, /border-radius:/, '要有圆角，那是胶囊形')
-  assert.ok(!/background/.test(tagRule), '不许实心：实心就和右侧状态徽标混成一类了')
-
-  // ④ 整行顶对齐，否则角标贴不到卡片右上角
-  assert.match(wxss, /\.sess\s*\{[^}]*align-items:\s*flex-start/, '整行必须顶对齐')
+  assert.ok(!/background/.test(tagRule), '不许实心：实心就和状态徽标混成一类了')
 })
 
 
