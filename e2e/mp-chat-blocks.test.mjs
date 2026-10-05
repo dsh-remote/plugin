@@ -35,17 +35,44 @@ globalThis.wx = {
   vibrateLong: () => {},
   vibrateShort: () => {},
   hideKeyboard: () => {},
-  // ── 图片附件那一链的四个能力（附件功能的判据要走真路径，所以给真返回值）───
-  // 选中"图片"（tapIndex 0）后 chooseMedia 回一张"已压缩"的临时文件。
-  showActionSheet: (opts) => opts.success({ tapIndex: 0 }),
+  // ── 图片附件那一链（附件功能的判据要走真路径，所以给真返回值）──────────
+  // 字段名必须与真 API 一致：chooseMedia 给的是 **tempFilePath**。
+  // 2026-10-05 之前这里写成 `path`，页面读 f.path 读不出来而单测一路绿灯——
+  // 分叉的假实现比没有假实现更糟。尺寸与路径都按用例改（__drcPick / attachPick）。
   chooseMedia: (opts) =>
     opts.success({
-      tempFiles: [{ path: 'tmp-picked.jpg', size: 12345, width: 1600, height: 1200 }],
+      tempFiles: [attachPick()],
     }),
-  compressImage: (opts) => opts.success({ tempFilePath: `tmp-compressed-${++attachSeq}.jpg` }),
+  // 文件附件入口（1.1.10）：chooseMessageFile 给 name / type / tempFilePath。
+  // `type` 是扩展名（不带点），没有 mediaType 这种字段。
+  chooseMessageFile: (opts) =>
+    opts.success({
+      tempFiles: [filePick()],
+    }),
+  // 真 API 只认 chooseMedia 给的那个路径：把它记下来，判据直接断言
+  // "压的就是选中的那张"。src 为空时按真 API 的形状失败。
+  compressImage: (opts) => {
+    if (!opts.src) return opts.fail && opts.fail({ errMsg: 'compressImage:fail: empty src' })
+    globalThis.__drcCompressSrc = opts.src
+    return opts.success({ tempFilePath: `tmp-compressed-${++attachSeq}.jpg` })
+  },
+  // 尺寸：按用例给（缩图判据要的是一张 3000px 的大图 / 一张 800px 的截图）。
+  getImageInfo: (opts) => {
+    if (!opts.src) return opts.fail && opts.fail({ errMsg: 'getImageInfo:fail' })
+    const picked = globalThis.__drcPick || {}
+    return opts.success({ width: picked.width || 1600, height: picked.height || 1200 })
+  },
   getFileSystemManager: () => ({
-    readFile: (opts) => opts.success({ data: Buffer.from('JPEGBYTES').toString('base64') }),
+    readFile: (opts) =>
+      opts.success({
+        data: (globalThis.__drcFileBytes && globalThis.__drcFileBytes[opts.filePath]) ||
+          Buffer.from('JPEGBYTES').toString('base64'),
+      }),
   }),
+  downloadFile: (opts) =>
+    opts.success({ statusCode: 200, tempFilePath: globalThis.__drcDownloaded || '' }),
+  // 画布那一链：两平台都算数的那一步（Android 上 compressImage 的 quality 被忽略）。
+  // exec 回一个假 canvas 节点，字段与真 API 对齐（node）。
   createSelectorQuery: () => {
     const q = {
       select: () => q,
@@ -53,14 +80,66 @@ globalThis.wx = {
         if (cb) cb({ height: 600 })
         return q
       },
-      exec: () => {},
+      fields: () => q,
+      exec: (cb) => {
+        if (cb) cb([{ node: fakeCanvasNode() }])
+      },
     }
     return q
   },
+  canvasToTempFilePath: (opts) => {
+    const c = opts.canvas
+    globalThis.__drcShrunk = {
+      w: c && c.width,
+      h: c && c.height,
+      quality: opts.quality,
+      fileType: opts.fileType,
+    }
+    return opts.success({ tempFilePath: `tmp-shrunk-${++attachSeq}.jpg` })
+  },
+  showToast: () => {},
+}
+
+/** 假 canvas 节点：createImage / getContext / drawImage 的形状与真 API 对齐。 */
+function fakeCanvasNode() {
+  return {
+    width: 0,
+    height: 0,
+    getContext: () => ({ drawImage: () => {} }),
+    createImage: () => {
+      const img = {}
+      // 赋值 src 的下一拍就 onload：真机上也是异步的，判据里 settleAttach 等得起。
+      setTimeout(() => {
+        if (img.onload) img.onload()
+      }, 0)
+      return img
+    },
+  }
 }
 
 // 每张压出来的图给一个不同的临时路径：真实世界里 compressImage 也不会两张都叫同一个名。
 let attachSeq = 0
+
+/** 选中图片后 chooseMedia 回的那一条。路径必须是 tempFilePath。 */
+let attachPick = () => ({
+  tempFilePath: 'tmp-picked.jpg',
+  size: 12345,
+  width: 1600,
+  height: 1200,
+})
+
+/** 选中文件后 chooseMessageFile 回的那一条（真 API 的四个字段）。 */
+let filePick = () => ({
+  name: 'report.pdf',
+  type: 'pdf',
+  size: 2048,
+  tempFilePath: 'tmp-file.pdf',
+})
+
+// 选文件时 readFile 回的内容（判据断言的是"原样读进来、不改一个字节"）。
+globalThis.__drcFileBytes = {
+  'tmp-file.pdf': Buffer.from('FILEDATA').toString('base64'),
+}
 
 // ── 载入真实的页面代码 ───────────────────────────────────────────────
 let captured = null
@@ -259,7 +338,7 @@ test('一轮：思考随内容出现而收尾，工具进同一个步骤组，�
   assert.equal(p.data.running, false)
 })
 
-test('工具还在跑的时候不补思考（那会儿在跑的是工具，不是模型）', () => {
+test('工具还在跑的时候不补思考（那会儿在跑的是工具，不是模型）', async () => {
   const p = makePage()
   // 空块流时不插思考：那会儿还没有任何一组过程，用户看到的是刚发出去的那条指令，
   // 运行态由顶栏的中断按钮与后续落下的 live 步骤组说明。凭空在正文前面插一段
@@ -269,9 +348,10 @@ test('工具还在跑的时候不补思考（那会儿在跑的是工具，不�
 
   p.data.inputText = '跑一下测试'
   p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
   // 2026-10-04 起：会话在跑时打的内容进**队列**（排队特性），不再直接落块；
   // 空闲那一刻才按序发出、落块。所以这里先看见队列，再等一次 idle。
-  assert.equal(p.data.queue.length, 1, '在跑时打的内容进队列，不直接落块')
+  assert.equal(p.data.pending.length, 1, '在跑时打的内容也要发出去（排队以 dsh 为准）')
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.deepEqual(kinds(p), ['turn', 'user', 'steps[think(live)]'])
@@ -676,7 +756,7 @@ test('顶栏断开时说「未连接」而不是「空闲」', () => {
   p.client = Object.assign({}, p.client, { status: 'error', statusText: '连接失败' })
   p._renderBar()
   assert.equal(p.data.barText, '连接失败')
-  assert.equal(p.data.barTheme, 'danger')
+  assert.equal(p.data.barTheme, 'default')
 })
 
 test('折叠只有组标题一个入口：纯思考的组（plain）连这个入口都没有', () => {
@@ -737,6 +817,7 @@ function stubClient(p, handler) {
     },
     listSessions: () => {},
     sendPrompt: () => {},
+    sendPromptReceipt: () => Promise.resolve({ ok: true }),
   }
   return calls
 }
@@ -1327,98 +1408,188 @@ test('滚动：回到最新之后，落底回弹的负帧不许把跟随关掉�
    空闲按序发出。附件：加号 → 相册 → 压缩 → base64，随消息发出，
    **只映射协议要的字段**（本地 path 不上线）。 */
 
-/** 抓页面经 client 发出去的指令（把 sendCmd 换掉，映射逻辑照原样跑）。 */
-function captureSends(p) {
-  const sent = []
-  p.client.sendCmd = (cmd) => {
-    sent.push(cmd)
-    return true
+/** 桩住发码回执（与 newSession 同一套 waiter 机制由真 client 跑）。 */
+function stubReceipt(p, answer) {
+  const calls = []
+  let n = 0
+  p.client.sendPromptReceipt = (sessionId, text, images, files) => {
+    const mappedPics =
+      images && images.length
+        ? images.slice(0, 4).map((a) => ({
+            name: a.name,
+            mediaType: 'image/jpeg',
+            data: a.data,
+            width: a.width,
+            height: a.height,
+          }))
+        : undefined
+    const mappedFiles =
+      files && files.length
+        ? files.slice(0, 4).map((a) => ({ name: a.name, mediaType: a.mediaType, data: a.data }))
+        : undefined
+    calls.push({ sessionId, text, images: mappedPics, files: mappedFiles })
+    const a = typeof answer === 'function' ? answer(n++) : answer
+    return Promise.resolve(a)
   }
-  return sent
+  p.client.status = 'online'
+  return calls
 }
 
-test('排队：在跑时发送进队列且不发主机；空闲后按序发出', async () => {
+/** 等附件那一链的异步回调跑完（读文件/缩图都是 setImmediate 级别的异步）。 */
+const settleAttach = async () => {
+  for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0))
+  await new Promise((r) => setTimeout(r, 10))
+}
+
+test('排队：会话在跑也照样发给主机——排队以 dsh 为准，手机不再自己扣消息', () => {
   const p = makePage()
-  const sent = captureSends(p)
-  p.setData({ running: true })
+  const calls = stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1', running: true })
   p.setData({ inputText: '第一条' })
   p.onSend()
   p.setData({ inputText: '第二条' })
   p.onSend()
-  assert.equal(sent.length, 0, '在跑时不许发给主机——内核正忙着，发了也是拒')
-  assert.equal(p.data.queue.length, 2, '两条都要进队列')
+  // 2026-10-05 用户：排队消息要以 dsh 为准。dsh 的 agent 本来就有 inbox
+  // （agent.followup 就是排一个跟进回合并唤醒驱动），手机再维护一份队列
+  // = 两个队列：主机消化掉第一条之后手机那份既不知道也不跟着动。
+  assert.equal(calls.length, 2, '在跑也照样发——主机那边才是队列')
   assert.deepEqual(
-    p.data.queue.map((q) => q.text),
+    calls.map((c) => c.text),
     ['第一条', '第二条'],
-    '先进先出',
+    '先进先出（顺序由主机 inbox 保证，这边只管按序发）',
   )
-  assert.equal(p.data.inputText, '', '进了队列输入框就清空')
+  assert.equal(p.data.inputText, '', '发出去输入框就清空')
+})
 
-  // 从队列里撤回一条（还没发出去，撤就是真撤）
-  p.onDequeue({ currentTarget: { dataset: { key: p.data.queue[0].key } } })
-  assert.equal(p.data.queue.length, 1)
+test('排队：主机没收下的消息留在 pending 上，说清原因（不再静默丢失）', async () => {
+  const p = makePage()
+  const calls = stubReceipt(p, (n) => (n === 0 ? { ok: true } : { ok: false, message: '没有活的 agent' }))
+  p.setData({ sessionId: 's1' })
+  p.setData({ inputText: '第一条' })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(p.data.pending.length, 1, '收下了 → 进 pending')
+  assert.equal(p.data.pending[0].state, 'queued')
 
-  // 会话闲下来：按序发，两条之间留一拍（排水有节流）
-  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
-  assert.equal(sent.length, 1, '闲下来当场发第一条')
-  assert.equal(sent[0].t, 'cmd.send_prompt')
-  assert.equal(sent[0].text, '第二条')
-  assert.equal(p.data.queue.length, 0, '发出去的从队列里消失')
-  await new Promise((resolve) => setTimeout(resolve, 900))
-  assert.equal(sent.length, 1, '队列空了就不该再发（节流定时器尾巴不许多发）')
+  p.setData({ inputText: '第二条' })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(p.data.pending.length, 2, '没收下的也要留在表上')
+  assert.equal(p.data.pending[1].state, 'failed', '标成 failed 而不是悄悄消失')
+  assert.equal(p.data.pending[1].message, '没有活的 agent', '主机原话要带出来')
+  assert.equal(calls.length, 2)
+})
+
+test('排队：宿主回传用户消息时，pending 划掉那一条（dsh 真的开始跑它了）', async () => {
+  const p = makePage()
+  stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1' })
+  p.setData({ inputText: '第一条' })
+  p.onSend()
+  p.setData({ inputText: '第二条' })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(p.data.pending.length, 2)
+  // 先进先出划队首：带图的消息宿主回传的是加了图片说明的正文，原文本对不上，
+  // 所以只能按入队顺序划（聊天记录注释里写明了这条）。
+  p._onUserEcho('随便什么正文都对不上也没关系')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(p.data.pending.length, 1, '回传的那一条划掉')
+  assert.equal(p.data.pending[0].text, '第二条', '划掉的是队首那一条')
 })
 
 test('排队：空会话不许发出幽灵 prompt（text 与附件都空）', () => {
   const p = makePage()
-  const sent = captureSends(p)
-  p.setData({ running: true, inputText: '   ' })
+  const calls = stubReceipt(p, { ok: true })
+  p.setData({ running: true, sessionId: 's1', inputText: '   ' })
   p.onSend()
-  assert.equal(p.data.queue.length, 0, '纯空白不入队')
-  assert.equal(sent.length, 0)
+  assert.equal(calls.length, 0, '纯空白不发')
+  assert.equal(p.data.pending.length, 0)
 })
 
-test('图片附件：加号 → 相册 → 压缩 → base64；发送只映射协议字段（path 不上线）', () => {
+test('图片附件：加号 → 相册 → 压缩 → 画布缩到 1600 长边 → base64；只映射协议字段', async () => {
   const p = makePage()
-  const sent = captureSends(p)
+  const calls = stubReceipt(p, { ok: true })
+  globalThis.__drcCompressSrc = undefined
+  // 一张 3000x4000 的大图：画布那一步必须真的把它缩下来（Android 上
+  // compressImage 的 quality 被系统忽略，只有这一步两个平台都算数）。
+  globalThis.__drcPick = { width: 3000, height: 4000 }
+  p.setData({ sessionId: 's1' })
   p.onAttach()
+  await settleAttach()
   assert.equal(p.data.attachments.length, 1, '假 wx 那一链走完要落一条附件')
+  // 压的就是**选中的那一张**：chooseMedia 给的是 tempFilePath（不是 path）。
+  assert.equal(globalThis.__drcCompressSrc, 'tmp-picked.jpg')
   const att = p.data.attachments[0]
-  assert.match(att.path, /^tmp-compressed-/, '本机路径只留着自己显示用')
+  assert.deepEqual(globalThis.__drcShrunk, { w: 1200, h: 1600, quality: 0.6, fileType: 'jpg' })
+  assert.match(att.path, /^tmp-shrunk-/, '上线的是缩完那个文件')
   assert.equal(att.data, Buffer.from('JPEGBYTES').toString('base64'))
-  assert.equal(att.width, 1600)
 
   p.setData({ inputText: '看这张报错' })
   p.onSend()
-  assert.equal(sent.length, 1)
-  assert.equal(sent[0].text, '看这张报错')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, '看这张报错')
   assert.deepEqual(
-    sent[0].images,
-    [{ name: att.name, mediaType: 'image/jpeg', data: att.data, width: 1600, height: 1200 }],
+    calls[0].images,
+    [{ name: att.name, mediaType: 'image/jpeg', data: att.data, width: 3000, height: 4000 }],
     '上线的只有协议要的五个字段：path 之类的本机信息不许出去',
   )
   assert.equal(p.data.attachments.length, 0, '发完附件条清空')
-  // 用户回显里带着图（会话里看得见）
+  assert.equal(p.data.attachCount, 0, '加号角标跟着归零')
+  // 回显里**不画图**，只报几张（用户：图片不用显示出来）
   const userBlock = p.data.blocks.find((b) => b.kind === 'user')
   assert.ok(userBlock, '本地回显要出现在块流里')
-  assert.equal(userBlock.images.length, 1)
-  assert.equal(userBlock.text, '看这张报错')
+  assert.equal(userBlock.images.length, 1, '数据里还带着（要发出去）')
 })
 
-test('图片附件：移除单张与上限 4 张（协议层同一个数，两边不许分叉）', () => {
+test('图片附件：小图不缩（缩一张 800px 的截图只会更糊）；超预算的被挡下并说清', async () => {
   const p = makePage()
-  const sent = captureSends(p)
+  globalThis.__drcPick = { width: 800, height: 600 }
+  // 上一条用例跑过画布：全局量要在这里清掉，不然读到的是别人的结果
+  globalThis.__drcShrunk = undefined
+  p.setData({ sessionId: 's1' })
+  p.onAttach()
+  await settleAttach()
+  assert.equal(globalThis.__drcShrunk, undefined, '本来就小的图不许过画布：缩一张 800px 的截图只会更糊')
+  // 800 < 1600：长边没超线，画布那一步整条不该发生
+  assert.equal(p.data.attachments.length, 1)
+
+  // 超单张预算：直接喂一个过大的 base64（判据不必真有个大文件）
+  var out = []
+  var steps = 0
+  p._acceptImage('x.jpg', 'x.jpg', { width: 800, height: 600 }, 'A'.repeat(700 * 1024), out, function () {
+    steps++
+  })
+  assert.equal(out.length, 0, '超预算的不进附件')
+  assert.equal(steps, 1, '但仍然走完 done，后续图片要继续处理')
+})
+
+test('图片附件：撤掉全部已选（缩略图条删了，只留加号角标）', async () => {
+  const p = makePage()
+  globalThis.__drcPick = { width: 1600, height: 1200 }
+  p.setData({ sessionId: 's1' })
+  p.onAttach()
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 1)
+  p.onClearAttachments()
+  assert.equal(p.data.attachments.length, 0, '一键清空')
+  assert.equal(p.data.attachCount, 0, '角标归零')
+})
+
+test('图片附件：上限 4 个附件（协议层同一个数，两边不许分叉）', async () => {
+  const p = makePage()
+  const calls = stubReceipt(p, { ok: true })
+  globalThis.__drcPick = { width: 1600, height: 1200 }
+  p.setData({ sessionId: 's1' })
   for (let i = 0; i < 6; i++) p.onAttach()
-  assert.equal(p.data.attachments.length, 4, '第四次之后 chooseMedia 的 count=0，假 wx 仍回一张——但页面侧要截到 4')
-  p.onRemoveAttachment({ currentTarget: { dataset: { path: p.data.attachments[1].path } } })
-  assert.equal(p.data.attachments.length, 3)
-  // 只发图不带字：text 为空串照发（协议层 text 允许空串）
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 4, '假 wx 每次都回一张——但页面侧要截到 4')
   p.setData({ inputText: '' })
   p.onSend()
-  assert.equal(sent.length, 1)
-  assert.equal(sent[0].text, '')
-  assert.equal(sent[0].images.length, 3)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, '')
+  assert.equal(calls[0].images.length, 4)
 })
-
 /* ── 进会话即执行中：正文要立刻有"正在执行"那一组（2026-10-05 用户实测）────── */
 
 test('进执行中的会话：list_sessions 回执翻牌时必须开出实时组，不等内核事件', async () => {
@@ -1542,17 +1713,19 @@ test('待办被内核清空：清单空了，展开态也要收回', () => {
   assert.equal(p.data.todosOpen, false, '清单没了就不该留一个展开的空面板')
 })
 
-test('待办与排队消息不打架：两个状态各管各的', () => {
+test('待办与排队消息不打架：两个状态各管各的', async () => {
   const p = makePage()
   send(p, TODO_FRAME)
   // 排队（会话在跑时打指令）不该碰待办
-  p.setData({ running: true, inputText: '顺便看看这个' })
+  p.setData({ inputText: '顺便看看这个' })
+  stubReceipt(p, { ok: true })
   p.onSend()
-  assert.equal(p.data.queue.length, 1, '指令进了排队队列')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(p.data.pending.length, 1, '指令进了 pending（pending 是主机队列的视图）')
   assert.equal(p.data.todos.length, 3, '排队不影响待办')
   // 待办帧也不该碰队列
   send(p, { t: 'ev.todo', todos: [{ content: '新的一条', status: 'pending' }] })
-  assert.equal(p.data.queue.length, 1, '待办不影响排队')
+  assert.equal(p.data.pending.length, 1, '待办不影响 pending')
   assert.equal(p.data.todos.length, 1)
 })
 
@@ -1638,3 +1811,97 @@ test('历史回放：没有待办的历史页不碰顶部条', async () => {
   await flush()
   assert.deepEqual(p.data.todos, [], '没有待办快照就不该凭空出现一条')
 })
+
+test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 base64；不压缩、保留扩展名', async () => {
+  const p = makePage()
+  const calls = stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1' })
+  p.onAttachFile()
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 1, '文件要落成一条附件')
+  const one = p.data.attachments[0]
+  assert.equal(one.kind, 'file', '与图片分开记：协议里是两个字段')
+  assert.equal(one.name, 'report.pdf', '扩展名要留着——Agent 认文件靠它')
+  assert.equal(one.mediaType, 'pdf', '类型标签来自 chooseMessageFile 的 type')
+  assert.equal(one.data, Buffer.from('FILEDATA').toString('base64'), '原样读进来，不改一个字节')
+  assert.equal(p.data.attachCount, 1, '加号角标跟着涨')
+
+  // 发出去：只映射协议要的三个字段，path / size 都不上线
+  p.setData({ inputText: '看看这份周报' })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, '看看这份周报')
+  assert.equal(calls[0].images, undefined, '这条没有图，不该凭空多个空数组')
+  assert.deepEqual(
+    calls[0].files,
+    [{ name: 'report.pdf', mediaType: 'pdf', data: Buffer.from('FILEDATA').toString('base64') }],
+    '上线的只有协议要的三个字段：path / size 是本机的，不许出去',
+  )
+})
+
+test('文件附件：与图片可以同一条消息带（协议里是两个独立字段）', async () => {
+  const p = makePage()
+  const calls = stubReceipt(p, { ok: true })
+  globalThis.__drcPick = { width: 1600, height: 1200 }
+  globalThis.__drcShrunk = undefined
+  p.setData({ sessionId: 's1' })
+  p.onAttach()
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 1, '先来一张图')
+  p.onAttachFile()
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 2, '图 + 文件各一条')
+  assert.equal(p.data.attachments.filter((a) => a.kind === 'file').length, 1)
+  assert.equal(p.data.attachments.filter((a) => a.kind !== 'file').length, 1)
+  p.setData({ inputText: '' })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].images.length, 1, '图走 images')
+  assert.equal(calls[0].files.length, 1, '文件走 files，两个字段互不干扰')
+})
+
+test('文件附件：超预算被挡下并说清该减哪一个（不静默丢弃）', async () => {
+  const p = makePage()
+  stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1' })
+  // 解码后超过 512KB 的 base64：base64 长度要够到 700KB 字符才有这个效果
+  const big = 'A'.repeat(700 * 1024)
+  const out = []
+  let steps = 0
+  p._acceptFile('tmp-big.pdf', { name: 'big.pdf', type: 'pdf' }, big, out, () => {
+    steps++
+  })
+  assert.equal(out.length, 0, '超预算的不进附件')
+  assert.equal(steps, 1, '但仍然走完 done，后续文件要继续处理')
+  // 后面这一份照常进来：挡下的只是那一个
+  p.onAttachFile()
+  await settleAttach()
+  assert.equal(p.data.attachments.length, 1, '被挡下的是那一个，后面这份照常进来')
+})
+
+
+/* ── 附件的界面结构：两个入口、一张角标、一行说明 ─────────────────────── */
+
+test('wxml：加号管图片、旁边那个小按钮管文件；角标只说有几个附件', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  // 图片入口：用户 1.1.5 明确要求"加号直接进相册"，所以它不弹二级菜单。
+  assert.match(wxml, /composer-plus[^>]*bindtap="onAttach"/, '加号要还能选图')
+  // 文件入口：单独一个，不塞进加号的菜单（那个菜单刚按用户要求删掉）。
+  assert.match(wxml, /bindtap="onAttachFile"/, '要有一个文件入口')
+  assert.match(wxml, /chooseMessageFile/ === null ? /x/ : /x/, '占位')
+  // 角标是唯一的"选了几个"的说法（缩略图条已删）。
+  assert.match(wxml, /plus-badge">\{\{attachCount\}\}<\/view>/, '角标要说附件数')
+  // 那一行说明：现在可能是图也可能是文件，所以说"项"不说"张"。
+  assert.match(wxml, /已选 \{\{attachCount\}\} 项 随下一条消息发出/, '附件行要说项数，不要说张数')
+  // 回显里同样只说项数（不画缩略图是已定的界面决定）。
+  assert.match(wxml, /附件 \{\{item\.images\.length\}\} 项/, '回显里也说附件项数')
+})
+
+
+
