@@ -1119,13 +1119,37 @@ test('模型：只读，不留任何切换入口（canSwitch/options 相关的�
   p._stopThinkTick()
 })
 
-test('模型：ev.model 不带 sessionId，不能被会话过滤误丢', () => {
+test('模型：别的会话的 ev.model 必须被会话过滤拦下（2026-10-05 用户实测的串台）', () => {
   const p = makePage()
-  // 会话 id 对不上——如果实现里把这条帧放在「不是本会话就 return」之后，
-  // 模型名就永远不显示，而单测会以为是自己造的数据不对。
-  send(p, { t: 'ev.model', sessionId: 'another-session', model: 'deepseek-chat', canSwitch: false })
-  assert.equal(p.data.modelName, 'deepseek-chat', '模型是全局的，不该被会话 id 拦掉')
+  // 这条判据原来是反的：它断言「模型是全局的，不该被会话 id 拦掉」，
+  // 并用另一个会话的 id 去验证——于是把串台写进了测试。用户实测到的正是
+  // 本会话 space-bunny-free、顶栏显示别的会话切出来的 muse-spark。
+  send(p, { t: 'ev.model', sessionId: 'another-session', model: 'muse-spark', canSwitch: false })
+  assert.equal(p.data.modelName, '', '别的会话在用什么模型，与本会话无关')
 
+  p._stopThinkTick()
+})
+
+test('模型：本会话的 ev.model 正常显示', () => {
+  const p = makePage()
+  send(p, { t: 'ev.model', sessionId: p.data.sessionId, model: 'space-bunny-free', canSwitch: false })
+  assert.equal(p.data.modelName, 'space-bunny-free')
+
+  p._stopThinkTick()
+})
+
+test('模型：老主机的无 sessionId 帧只做兜底，不覆盖已有的正确值', () => {
+  const p = makePage()
+  send(p, { t: 'ev.model', sessionId: p.data.sessionId, model: 'space-bunny-free', canSwitch: false })
+  // 老主机那种全局帧随后才到：它是另一个上下文的值，不能把上面那条覆盖掉
+  send(p, { t: 'ev.model', model: 'muse-spark', canSwitch: false })
+  assert.equal(p.data.modelName, 'space-bunny-free', '已有本会话的真实模型时，无主机的旧帧不许覆盖')
+
+  // 但一开始什么都没有时，旧帧仍然可用（总比空白好）
+  const q = makePage()
+  send(q, { t: 'ev.model', model: 'muse-spark', canSwitch: false })
+  assert.equal(q.data.modelName, 'muse-spark')
+  q._stopThinkTick()
   p._stopThinkTick()
 })
 
@@ -2257,5 +2281,37 @@ test('排队条只由主机给：mp 端不做本地增删（以 dsh 为准）', 
   const dropBody = after.slice(0, end > 0 ? end : 600)
   assert.ok(!/setData/.test(dropBody), '删除后不要本地改 pending，等主机回执')
   assert.match(dropBody, /dropQueued/, '必须真的问主机')
+})
+
+
+test('模型按会话：ev.model 带 sessionId，mp 端不再豁免会话过滤（2026-10-05 实测串台）', () => {
+  const proto = fs.readFileSync(path.join(ROOT, 'dsh-remote-protocol/src/wire/payloads.ts'), 'utf8')
+  const i = proto.indexOf('export const evModel')
+  const block = proto.slice(i, proto.indexOf('})', i))
+  assert.match(block, /sessionId: nonEmpty/, 'ev.model 必须带 sessionId，否则无法按会话过滤')
+
+  const chat = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'), 'utf8')
+  // 关键：那句「模型是全局的，过滤之前先判」的豁免必须消失
+  assert.ok(!/ev\.model.*return this\._onModel\(p\)\s*\n\s*\n\s*if \(p\.sessionId/.test(chat),
+    'ev.model 不得豁免会话过滤——别的会话一推模型帧就会覆盖本会话的顶栏')
+  // 兜底分支：老主机不带 sessionId 时，只在本会话还没有模型名时才用
+  assert.match(chat, /if \(p\.sessionId \|\| !this\.data\.modelName\) this\._onModel\(p\)/,
+    '无 sessionId 的旧帧只做兜底，不能覆盖已有的正确模型名')
+})
+
+test('模型的数据源是 request/header，不是宿主全局默认模型', () => {
+  const carrier = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-control/packages/plugin/src/platform/carrier-services.ts'),
+    'utf8',
+  )
+  assert.match(carrier, /case 'request\/header'/, '必须映射 request/header（每轮都带本会话真实模型）')
+  const runtime = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-control/packages/plugin/src/core/runtime.ts'),
+    'utf8',
+  )
+  // broadcastModel 不许再从 currentSelection 取值
+  assert.ok(!/modelSelection\?\.\(\)/.test(runtime),
+    '不许再用宿主全局默认模型——那是别的会话切模型后会串台的那个值')
+  assert.match(runtime, /broadcastModel\(event\.sessionId, event\.model/, '按会话广播')
 })
 
