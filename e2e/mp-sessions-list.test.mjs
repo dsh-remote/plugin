@@ -132,10 +132,18 @@ test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortA
   }
 })
 
-test('wxml：标题行带工作区 chip，空目录不渲染', () => {
+test('wxml：工作区 chip 自己一行，不在标题右边（2026-10-05 用户：新增一行，别放右边）', () => {
   const { readFileSync } = require('node:fs')
   const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
-  assert.match(wxml, /class="sess-title-row"/, '标题与 chip 要在一行（chip 不动、标题先省略）')
+  // 标题必须独占一行。sess-title-row 那个 flex 容器已经删掉——留着它，
+  // 标题就会继续被 chip 和右侧徽标夹成一条放不下省略号的窄条。
+  assert.ok(!wxml.includes('sess-title-row'), '标题行容器必须删掉：chip 不跟标题挤一行了')
+  // chip 紧跟标题、在完整目录之前，是 .sess-main 的直接子元素
+  assert.match(
+    wxml,
+    /class="sess-title ellipsis">[\s\S]*?wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/,
+    'chip 要紧跟标题成行，而不是挤在标题右边（那是本次要改掉的样子）',
+  )
   assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, 'chip 只在有工作区时渲染')
 })
 
