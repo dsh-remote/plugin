@@ -2313,3 +2313,53 @@ test('待办条：蓝色分段进度条整块删干净（wxml、样式、算分�
     '连「待办 7/9」这个数字一起删了：用户要的是去掉蓝条，不是去掉进度',
   )
 })
+
+/**
+ * 「默认永远跟底」这条契约（2026-10-05 用户：以滑动底部作为默认行为，
+ * 避免场景确实导致不跟滑）。
+ *
+ * 旧写法把「deltaY 为负」当成用户往上拖，于是**位置明明还在底部也停跟**——
+ * 那正是「不跟手、很多场景卡住」的来源。现在判据只看位置：贴底就跟着。
+ *
+ * 这一条钉的是**顺序**：位置判据必须在 deltaY 之前。反过来写的话，
+ * 回弹帧（位置在底部、deltaY 为负）会先把跟随关掉——现有那三条判据都盖不住它，
+ * 因为它们的帧要么在底部之外、要么 deltaY 为正。
+ */
+test('滚动：贴在底部时不管 deltaY 什么符号都跟着（默认行为是跟）', () => {
+  const p = readyAtBottom()
+  // 一条「位置在底部但 deltaY 为负」的帧 —— iOS 落底回弹就是这个样子
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1380, scrollHeight: 2000, deltaY: -30 } })
+  assert.equal(p._autoScroll, true, '还在底部就把跟随关了：这正是「不跟手」的成因')
+  assert.equal(p.data.atBottom, true, '按钮不该浮出来')
+
+  // 正的 deltaY（同理，不该影响）
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1390, scrollHeight: 2000, deltaY: 12 } })
+  assert.equal(p._autoScroll, true, '贴底时正向滚动也要保持跟随')
+})
+
+/**
+ * 自作滚动途中的那些帧：位置还没到底、deltaY 为负。
+ *
+ * 这时候停下跟随就等于把一次自动滚动拆成两半（后续帧不再跟），用户看到的是
+ * 「滚到一半就不动了」。窗口只覆盖**我们自己触发**的那次滚动——
+ * 旧写法是「点完回到最新之后的 600ms」，那会把用户在这段时间里的真回看也吃掉。
+ */
+test('滚动：自动滚动途中的中间帧不许停跟（否则一次滚动被拆成两半）', () => {
+  const p = readyAtBottom()
+  p.onJumpLatest()
+  assert.ok(p._programmaticUntil > 0, '夹具自检：点了回到最新就该记下窗口')
+  // 途中一帧：还没到底、deltaY 为负
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1200, scrollHeight: 2000, deltaY: -40 } })
+  assert.equal(p._autoScroll, true, '自动滚动的中间帧被当成了用户回看：这次滚动到此为止')
+})
+
+/**
+ * 反过来：窗口之外的真实回看**照旧**要停跟。
+ *
+ * 没有这一条，上一条会退化成「永远不跟」——而用户往上翻历史正是要这个。
+ */
+test('滚动：窗口之外的真实回看照旧停跟（不然就变成永远不跟了）', () => {
+  const p = readyAtBottom()
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1000, scrollHeight: 2000, deltaY: -50 } })
+  assert.equal(p._autoScroll, false, '没在底部、也不是自动滚动的回弹帧：这就是用户在回看')
+})
