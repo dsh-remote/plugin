@@ -1920,3 +1920,79 @@ file 附件 / 加号->图片落成 image / 满了不弹选择）+ 改写原有�
 闸门：mp 32/32；伞仓 160 项（156 到 160）；截图 15 张全过，
 chat-composer 已人工看过：+ / 输入指令... / 发送，输入框不挤了。
 
+
+
+## 9.29.11 Queue two-way sync + real delete (wire 1.7.0 / control / mp 1.1.13)
+
+User 2026-10-05: queued messages were not two-way synced, and mp must support delete.
+
+-- Why the architecture had to change ------------------------------------
+Old behaviour: cmd.send_prompt forwarded straight to agent.followup(), leaving no
+trace on the host. So queueing was only an optimistic list on the phone - it never
+knew what the host forwarded, how many were left, or which had failed to go out.
+That is exactly the missing two-way sync.
+
+And followup() returns no handle, nor does the host expose any inbox removal
+(evidence this round: only followup / steer / cancel exist). Once a message is out,
+it can never be recalled.
+
+Conclusion: only messages still held by the host can be deleted. The host must own
+the queue: enqueue on arrival, hold while the turn runs, forward when idle.
+
+-- Protocol (wire 1.7.0) --------------------------------------------------
+- cmd.send_prompt gains optional queueId (the phone mints it: host-side minting
+  would need an extra mapping, and the phone already uses it as list key). Old
+  phones omit it and keep the old behaviour, with no delete path.
+- New cmd.drop_queued { queueId }.
+- New ev.queue { sessionId, items[] }: full snapshot, pushed on every change.
+  Item states: held (host holds it, deletable) / sent (forwarded, not deletable) /
+  failed (never went out, deletable, carries message).
+
+-- Host (shell/queue.ts + runtime) --------------------------------------
+- PromptQueue: enqueue dedupes by queueId; takeHeld takes only un-forwarded;
+  retireSent runs when run-state turns idle (retire those now in the message flow).
+- cmd.send_prompt now enqueues and replies with data.queued instead of forwarding.
+- cmd.drop_queued: only held can be dropped; sent replies ok:false saying it is
+  already running; failed is dropped as a bonus. Never a fake success.
+- drainQueue fires on run-state idle, forwarding the batch in order.
+
+-- Phone (chat.js / wxml / client.js) -----------------------------------
+- pending becomes a mirror of the host snapshot: _onQueue replaces wholesale, no
+  local add/remove. Local mutation creates ghosts the host never had.
+- Delete button only for state !== sent: held asks the host, failed deletes locally,
+  sent gets no button at all (a dead button is worse than none).
+- client.dropQueued() is its own method: delete failure differs from send failure
+  (the former may mean already running), so they must be worded separately.
+- Attachment-only rows now say Attachments N (counting both images and files).
+
+-- Three traps hit (none in the feature itself) --------------------------
+1. 0 + String.fromCharCode(10) is the two-character string 0-newline. A judgement
+   written that way never split, so find returned the whole file and the assertion
+   always failed - while a standalone debug of the same logic passed. The two sides
+   differed by an entire file, making it very hard to locate. Drop the 0 +.
+2. drainQueue is void-ed, so a kernel exception became an unhandled rejection and
+   that item stayed sent forever: the phone showed running while nothing happened,
+   with no path to recover. Added try/catch + markFailed and released busy (else
+   the whole table locks after an exception). Judgement 283 was rewritten to the
+   new contract: enqueueing always yields a receipt, failure lands on ev.queue
+   attached to that specific item.
+3. drainQueue must not retireSent: doing it there makes sent invisible for even a
+   frame, so a just-sent message vanishes. Retirement belongs to run-state idle.
+
+-- Still open (awaiting your call) --------------------------------------
+- wire 1.7.0 is NOT on npm: npm whoami returns 401, the token expired. Protocol
+  source, tag and judgements are all in (92/92); control temporarily points at the
+  local protocol repo via file:. Once the token is renewed: npm publish, then set
+  plugin package.json back to ^1.7.0, pnpm install, rerun all control gates, ship
+  2.0.7.
+- The queue bar has no position-in-host-queue: the agent inbox is a black box.
+  The UI therefore says Awaiting host, N messages and never invents a position.
+
+Judgements: protocol 3 (send_prompt queueId / cmd.drop_queued / ev.queue snapshot);
+control runtime 283 rewritten + 355/355; umbrella mp-chat-blocks 7 (snapshot replaces
+wholesale, cross-session ignore, delete behaviour per state, wxml button condition).
+
+Gates: protocol 92/92; plugin 355/355 + typecheck/format/build; mp 32/32; umbrella
+167. 15 screenshots pass; chat-todo-queue reviewed by eye: the held row has an x,
+the sent row has none.
+
