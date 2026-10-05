@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
@@ -201,4 +202,51 @@ test('系统栏每次 onShow 都要重设：从 chat 返回时微信会用静态
   const navAfterShow = barCalls.filter((c) => c.kind === 'nav').pop()
   assert.deepEqual(navAfterShow, { kind: 'nav', front: '#ffffff', bg: '#242424' }, '返回这一页也要是深底白字')
   assert.equal(p.data.themeClass, 'theme-dark', 'class 也要在（页面本体跟着深色）')
+})
+test('状态徽标规则必须整套在：缺了 flex 容器，脉冲点会挤到文字上面', () => {
+  const wxss = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxss'),
+    'utf8',
+  )
+  // 1.1.18 改样式时把这一整块连坐删掉，只剩 .sess-badge.primary .pulse。
+  // 后果：徽标退回普通块级盒子，里面的 .pulse 独占一行，
+  // "运行中"被挤到下一行——用户看到的就是"运行中前面的点错位了，点跑上面去了"。
+  const rule = (wxss.match(/\.sess-badge\s*\{([^}]*)\}/) || [, ''])[1]
+  assert.ok(rule.length > 0, '.sess-badge 基础规则整块不见了（1.1.18 丢过一次）')
+  assert.match(rule, /display:\s*flex/, '徽标必须是 flex 容器，否则圆点和文字会折行')
+  assert.match(rule, /align-items:\s*center/, '必须垂直居中，点才会跟文字对齐')
+  assert.match(rule, /padding:/, '徽标要有内边距，撑成胶囊')
+  assert.match(rule, /border-radius:/, '徽标要圆角')
+  assert.match(rule, /background:/, '徽标要填色——状态靠颜色说，不靠点')
+
+  // 三个主题变体都要在，否则某些会话的徽标会褪成灰色
+  for (const theme of ['primary', 'warning']) {
+    assert.ok(
+      new RegExp('\\.sess-badge\\.' + theme + '\\s*\\{').test(wxss),
+      theme + ' 主题的徽标规则不见了',
+    )
+  }
+})
+
+test('一行只留一颗点：徽标里不放脉冲点，项目名那颗就够', () => {
+  const wxml = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'),
+    'utf8',
+  )
+  // 用户 2026-10-05：一行两个点看起来有点怪。原先徽标里有 pulse 圆点，
+  // 第二行项目名左侧也有一颗——两颗点挨着两行，重复又晃眼。
+  assert.ok(!wxml.includes('class="pulse"'), '徽标里不许再放脉冲点')
+  // 项目名那颗要留着，它是"这是哪一间屋子"的视觉锚点
+  assert.ok(wxml.includes('sess-project-dot'), '项目名圆点要留着')
+})
+
+test('死规则不许留下：没人引用的 .pulse 规则要删掉', () => {
+  const wxss = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxss'),
+    'utf8',
+  )
+  assert.ok(!/\.pulse\s*\{/.test(wxss), '.pulse 已无 wxml 引用，规则要删')
+  // 但 dot-blink 是共享的（聊天页在跑圆点、顶栏连接点都在用），不能一起删
+  const app = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/app.wxss'), 'utf8')
+  assert.match(app, /@keyframes dot-blink/, 'dot-blink 是共享关键帧，要留在 app.wxss')
 })
