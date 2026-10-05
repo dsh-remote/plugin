@@ -1996,3 +1996,44 @@ Gates: protocol 92/92; plugin 355/355 + typecheck/format/build; mp 32/32; umbrel
 167. 15 screenshots pass; chat-todo-queue reviewed by eye: the held row has an x,
 the sent row has none.
 
+
+
+## 9.29.12 会话列表：项目标签挪成单独一行（mp 1.1.14）
+
+用户 2026-10-05："会话列表中会话的项目标签要新增一行，不要放在右边"。
+
+── 改之前的问题 ──────────────────────────────────────────────────
+工作区 chip 挤在标题右边那一行：`标题…` + `chip` + 右侧的"运行中/待审批"徽标
+全在争同一段横向空间。结果是标题被压成一条只能放一两个字的窄条
+（截图里"重做小程序对话页信..."只剩 9 个字），而 chip 本来是想让人
+一眼认出项目名的——挤在那边反而看不清是哪个项目。
+
+── 改法 ──────────────────────────────────────────────────────────
+chip 从 `.sess-title-row` 里搬出来，成为 `.sess-main` 的直接子元素、
+在标题下面自己一行。三行结构：标题（满宽）/ chip / 完整路径。
+
+顺手删掉三处现在多余的样式：
+- `.sess-title-row` 整个规则删掉（容器没了）。
+- `.sess-title` 去掉 `flex:1 1 auto; min-width:0`——那两个是当年为了和
+  chip 挤一行、让标题"可压缩"才加的；现在标题是块级，宽度天然满宽。
+- chip 的 `flex:0 0 auto; margin-left:12rpx` 换成 `display:inline-block;
+  margin-top:8rpx`。**inline-block 是关键**：view 默认 display:block，
+  块级元素的 background 会铺满整行，chip 会变成一条满宽色带而不是小方块。
+- `.sess-sub` 的上间距 6rpx → 8rpx，和 chip 与标题的间距对齐。
+
+── 判据 ──────────────────────────────────────────────────────────
+原来有一条判据钉的是**反的方向**（`sess-title-row 必须在`），已反转：
+- `assert.ok(!wxml.includes('sess-title-row'))` 标题行容器必须删掉；
+- chip 紧跟标题之后（不是挤在标题同一行的右边）。
+换回旧行为这条会红。
+
+── 顺带补的取证缺口 ──────────────────────────────────────────────
+`dark-sessions` 那张截图的夹具一直没给 `workspaceTag`，所以深色下
+chip 从来没被渲染出来过——而 chip 的字色当初是专门挑了
+`brand-color-10` 才过对比度闸门的（深色下 `text-color-brand` 只有
+3.56:1），那个决定从没在深色下亲眼看过。已给三条会话补上 tag，
+重截后确认 chip 在深色底下清晰可读。
+
+Judgment: chip 不跟标题挤一行，标题拿满宽度（1 条，反转旧判据）。
+<repo> 32/32；伞仓 167 项全过；截图 light 4 张 + dark 9 张全过，sessions-list / dark-sessions 都人工看过。
+
