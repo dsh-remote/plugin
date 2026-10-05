@@ -31,6 +31,16 @@ globalThis.wx = {
     delete storage[k]
   },
   setNavigationBarTitle: () => {},
+  // 剪贴板：真 API 的成功回调是异步的，这里同步回，判据等得起
+  setClipboardData: (opts) => {
+    globalThis.__drcClipboard = String(opts.data || '')
+    opts.success && opts.success({})
+  },
+  // 剪贴板：真 API 的成功回调是异步的，这里同步回，判据等得起
+  setClipboardData: (opts) => {
+    globalThis.__drcClipboard = String(opts.data || '')
+    opts.success && opts.success({})
+  },
   showToast: () => {},
   vibrateLong: () => {},
   vibrateShort: () => {},
@@ -1904,4 +1914,84 @@ test('wxml：加号管图片、旁边那个小按钮管文件；角标只说有�
 })
 
 
+
+
+
+test('长按复制：助手回复同样能复制（markdown 原文）', () => {
+  const p = makePage()
+  globalThis.__drcClipboard = undefined
+  const md = '## 结论\n\n**问题**在第三行'
+  p.onCopyMessage({ currentTarget: { dataset: { text: md } } })
+  assert.equal(globalThis.__drcClipboard, md, '复制的是模型原文，不是渲染后的版本')
+})
+
+test('长按复制：空文本不动作（不许用空串覆盖用户已复制的东西）', () => {
+  const p = makePage()
+  globalThis.__drcClipboard = '用户之前复制的'
+  p.onCopyMessage({ currentTarget: { dataset: { text: '' } } })
+  assert.equal(globalThis.__drcClipboard, '用户之前复制的', '空文本不许碰剪贴板')
+  // 连 dataset 都没有（没绑 data-text 的节点）也不能炸
+  p.onCopyMessage({ currentTarget: { dataset: {} } })
+  p.onCopyMessage({})
+  assert.equal(globalThis.__drcClipboard, '用户之前复制的')
+})
+
+test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  // 两处绑定：user 与 text
+  const binds = wxml.match(/bindlongpress="onCopyMessage"/g) || []
+  assert.equal(binds.length, 2, '只该有两处：用户气泡 + 回复气泡')
+  // 步骤组那一行：不许出现 onCopyMessage（用户明说 steps 不用）
+  const stepsLine = wxml
+    .split(String.fromCharCode(10))
+    .find((l) => l.includes("class=\"steps\"") && l.includes('wx:if'))
+  assert.ok(stepsLine, '夹具自检：步骤组的渲染行没找到')
+  assert.ok(!stepsLine.includes('onCopyMessage'), '步骤组不许绑复制')
+  // data-text 必须跟着绑（没有它两手都空）
+  assert.equal((wxml.match(/data-text="\{\{item\.text\}\}"/g) || []).length, 2)
+})
+
+
+
+test('长按复制：助手回复同样能复制（markdown 原文）', () => {
+  const p = makePage()
+  globalThis.__drcClipboard = undefined
+  const md = '## 结论\n\n**问题**在第三行'
+  p.onCopyMessage({ currentTarget: { dataset: { text: md } } })
+  assert.equal(globalThis.__drcClipboard, md, '复制的是模型原文，不是渲染后的版本')
+})
+
+test('长按复制：空文本不动作（不许用空串覆盖用户已复制的东西）', () => {
+  const p = makePage()
+  globalThis.__drcClipboard = '用户之前复制的'
+  p.onCopyMessage({ currentTarget: { dataset: { text: '' } } })
+  assert.equal(globalThis.__drcClipboard, '用户之前复制的', '空文本不许碰剪贴板')
+  // 连 dataset 都没有（没绑 data-text 的节点）也不能炸
+  p.onCopyMessage({ currentTarget: { dataset: {} } })
+  p.onCopyMessage({})
+  assert.equal(globalThis.__drcClipboard, '用户之前复制的')
+})
+
+test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  // 两处绑定：user 与 text
+  const binds = wxml.match(/bindlongpress="onCopyMessage"/g) || []
+  assert.equal(binds.length, 2, '只该有两处：用户气泡 + 回复气泡')
+  // 步骤组那一行：不许出现 onCopyMessage（用户明说 steps 不用）
+  const stepsLine = wxml
+    .split(String.fromCharCode(10))
+    .find((l) => l.includes("class=\"steps\"") && l.includes('wx:if'))
+  assert.ok(stepsLine, '夹具自检：步骤组的渲染行没找到')
+  assert.ok(!stepsLine.includes('onCopyMessage'), '步骤组不许绑复制')
+  // data-text 必须跟着绑（没有它两手都空）
+  assert.equal((wxml.match(/data-text="\{\{item\.text\}\}"/g) || []).length, 2)
+})
 
