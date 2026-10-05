@@ -2191,3 +2191,64 @@ test('发送键在执行中变中断键；顶栏不再挂第二颗中断键', ()
     '顶栏还挂着中断键：同一个动作两个入口，而且它在拇指最难够到的位置',
   )
 })
+
+/**
+ * 断链重连后消息流必须恢复（2026-10-05 用户：chat 页激活时断链，重连后就不刷新了）。
+ *
+ * 病根：`_maybeLoadHistory` 第一句是 `if (this._historyStarted) return`，
+ * 而那个标志一辈子只置真一次。于是重连成功那一刻它直接返回 —— 断链期间
+ * 主机上跑完的东西一条都补不回来，主机又只发 resync 不推历史，
+ * 于是页面活着、顶栏亮着，而消息流从此静止。
+ *
+ * 判据钉的是**重连那一刻真的又去读了一次**：断了之后收到 online，
+ * 必须再发一次 loadHistory。没修之前这里是 0 次。
+ */
+test('断链重连后要重新读历史：断链期间落下的消息不能永远补不回来', async () => {
+  const p = readyAtBottom()
+  const calls = stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: [] }))
+
+  // 第一次连上：读一页
+  p._onEvent({ kind: 'status', status: 'connecting' })
+  p._onEvent({ kind: 'status', status: 'online' })
+  await flush()
+  const afterFirst = calls.length
+  assert.ok(afterFirst >= 1, '夹具自检：首次连上就该读一次历史')
+
+  // 链断了又回来。这中间主机上发生了什么，这一页完全不知道。
+  calls.length = 0
+  p._onEvent({ kind: 'status', status: 'connecting', text: '连接已断开，正在重连…' })
+  p._onEvent({ kind: 'status', status: 'online' })
+  await flush()
+
+  assert.ok(
+    calls.length > 0,
+    '重连后一次都没读：断链期间跑完的步骤、工具、回复永远补不回来了（消息流就此静止）',
+  )
+})
+/**
+ * 反过来：只是多余的状态帧、并没有真的断开过，就不该重读。
+ *
+ * 没有这一条，上面那条修法会退化成「每次 online 都把历史重拉一遍」——
+ * 长会话每收到一次 online 就把整页翻出来，既慢又把用户正在看的位置冲掉。
+ *
+ * 注意场景：这里**不**发 connecting。全程 online，所以没有"断过"这件事。
+ */
+test('不是重连（没断过链）就不重读历史：否则每次 online 都把整页翻出来', async () => {
+  const p = readyAtBottom()
+  const calls = stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: [] }))
+
+  p._onEvent({ kind: 'status', status: 'online' })
+  await flush()
+  assert.ok(calls.length >= 1, '夹具自检：首次连上读过')
+
+  // 又来两次 online，中间**没有** connecting —— 全程没断过
+  calls.length = 0
+  p._onEvent({ kind: 'status', status: 'online' })
+  p._onEvent({ kind: 'status', status: 'online' })
+  await flush()
+  assert.equal(
+    calls.length,
+    0,
+    '没断过链却重读历史：长会话每收到一次 online 就整页翻出来，又慢又冲掉用户正在看的位置',
+  )
+})
