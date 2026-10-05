@@ -11,6 +11,9 @@
  *   node scripts/mp-upload.mjs                       # 版本号取自 dsh-remote-mp/package.json
  *   node scripts/mp-upload.mjs --version 0.3.0 --desc "修 xxx"
  *   node scripts/mp-upload.mjs --dry                 # 只跑真编译，不真上传
+
+ * 想让手机**当场**看到最新代码（不传后台、不选体验版）用另一个脚本：
+ *   node scripts/mp-preview.mjs     # 在开发者工具里跑「编译并预览」，出临时二维码
  *
  * 同一个版本号重复上传是**覆盖**，不会报错也不产生第二条记录。
  *
