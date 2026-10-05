@@ -568,7 +568,7 @@ test('宿主回传的用户消息要与本地回显去重', () => {
 })
 
 
-test('折叠：实时新组默认展开（否则看不见工具列表），历史回放的组默认收起', () => {
+test('折叠：新组默认收起，展开只能由用户点开（2026-10-05 用户：全部场景默认收起）', () => {
   const p = makePage()
   send(p, {
     t: 'ev.tool_event',
@@ -579,21 +579,24 @@ test('折叠：实时新组默认展开（否则看不见工具列表），历�
     resultPreview: 'ok',
   })
   assert.equal(p.data.blocks[0].kind, 'steps')
+  // 这一条原来钉的是反面：实时新组默认展开，理由是"看不见工具列表"。
+  // 但长会话里每来一次工具调用就顶开一段过程，正文被推出屏幕，想看正文得
+  // 一路收回去——这正是用户报的。组头那行汇总已经够说明它在干什么了。
   assert.equal(
     p.data.blocks[0].open,
-    true,
-    '实时新组默认展开 —— 只给一行"正在执行 1 个步骤"会让人以为根本没有工具列表',
+    false,
+    '新步骤组默认展开：数据流不该替用户决定展开与否，想看细节由用户点开',
   )
-  assert.equal(p.data.blocks[0].items[0].open, false, '组内某一步的参数/结果仍默认收起')
+  assert.equal(p.data.blocks[0].items[0].open, false, '组内某一步的参数/结果同样默认收起')
 
   p.onToggleSteps({ currentTarget: { dataset: { idx: 0 } } })
-  assert.equal(p.data.blocks[0].open, false, '点一下可以手动收起这一组')
+  assert.equal(p.data.blocks[0].open, true, '点一下才展开')
 
   p.onToggleTool({ currentTarget: { dataset: { b: 0, i: 0 } } })
   assert.equal(p.data.blocks[0].items[0].open, true, '再点展开这一步的参数与完整结果')
 
   p.onToggleSteps({ currentTarget: { dataset: { idx: 0 } } })
-  assert.equal(p.data.blocks[0].open, true, '再点一次展开回来 —— 折叠只有这一个层级')
+  assert.equal(p.data.blocks[0].open, false, '再点一次收回去 —— 折叠只有这一个层级')
 
   // 顶栏那个全局「展开过程」按钮已经删掉：折叠只有组标题一行这一个入口。
   // 留着它等于同一个动作有两个地方管，而且一键全收会把正在跑的那组也收起来。

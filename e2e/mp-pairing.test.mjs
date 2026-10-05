@@ -113,7 +113,7 @@ test('扫到带配对码的二维码：直接连，不需要用户再输任何�
   assert.equal(p.data.paired, false, '还没连上，不能提前切成已配对')
 })
 
-test('二维码不带配对码：展开手动输入而不是静默停在半路', () => {
+test('二维码不带配对码：不自动展开，但要说清去哪儿填（2026-10-05：全部默认收起）', () => {
   const p = makePage()
   scanImpl = (o) => o.success({ result: qr({}) })
 
@@ -121,8 +121,13 @@ test('二维码不带配对码：展开手动输入而不是静默停在半路',
 
   assert.equal(calls.some((c) => c[0] === 'connect'), false, '没有配对码，连不了')
   assert.equal(p.data.hasPsk, true, '密钥已读到，要能看出来')
-  assert.equal(p.data.manualOpen, true, '要把用户要的输入框露出来')
+  // 原来这里断言 manualOpen===true，理由是"要把输入框露出来"。
+  // 现在默认收起（用户：全部场景默认收起），但**不许静默停在半路**——
+  // toast 必须说清还差什么、以及去哪儿点，否则用户以为扫完就成了。
+  assert.equal(p.data.manualOpen, false, '不该自动展开手动输入区')
   assert.ok(calls.some((c) => c[0] === 'toast'), '要说明还差什么')
+  const toast = calls.find((c) => c[0] === 'toast')
+  assert.match(String(toast[1] || ''), /手动输入/, `说清了还差配对码，但没告诉用户去哪儿输入：${String(toast[1])}`)
 })
 
 test('扫到不是配对码的东西：给完整说明，不能默默失败', () => {
@@ -153,8 +158,16 @@ test('容器没有扫码能力：不调用 scanCode，展开手动输入并说�
     env.probe(true) // 还原，别污染后面的用例
   }
   assert.equal(calls.some((c) => c[0] === 'scanCode'), false, '不能去调不存在的 API')
-  assert.ok(calls.some((c) => c[0] === 'modal'))
-  assert.equal(p.data.manualOpen, true, '把还能用的那条路露出来')
+  const modal = calls.find((c) => c[0] === 'modal')
+  assert.ok(modal)
+  // 默认收起（2026-10-05 用户），但弹窗里要指路 —— 以前是自动展开代替指路，
+  // 现在不展开了，指路就得落在文案上，否则用户在这台机器上无路可走。
+  assert.equal(p.data.manualOpen, false, '不该自动展开手动输入区')
+  assert.match(
+    String(modal[2]),
+    /手动输入/,
+    '没扫码能力却不自动展开，弹窗就必须指路，否则用户无路可走',
+  )
 })
 
 // ── 粘贴 ──────────────────────────────────────────────────────────────
@@ -303,4 +316,30 @@ test('页面里不再残留任何跳转配对页的死代码', () => {
   const js = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'), 'utf8')
   assert.equal(/pages\/pair/.test(js), false, '配对页已删除，不能再 navigateTo 过去')
   assert.equal(/onGoPair/.test(js), false)
+})
+
+/**
+ * 用户 2026-10-05 原话：「手动输入默认收起，取消配对后重新连接也是默认收起，
+ * 全部场景都是默认收起，不自动展开，除非用户自己手动展开」。
+ *
+ * 这一条钉的是**那句抱怨本身**指的那条路：配对失效（needs-pair）会把界面带回
+ * 扫码态，而那一支原来写死 `manualOpen: true` —— 于是「解配 → 重新连」每次都
+ * 顶开一整片输入控件。它与扫码/粘贴那两条是**不同的触发**，所以要单独钉：
+ * 少了这条，改了扫码那两处也照样复现。
+ */
+test('配对失效（解配后重新连）也不自动展开手动输入', () => {
+  const p = makePage()
+  p.setData({ paired: true, manualOpen: false })
+  p._onEvent({ kind: 'status', status: 'needs-pair', text: '会话已失效，请重新扫码配对' })
+  assert.equal(p.data.paired, false, '界面要带回扫码态，否则用户没有地方重新配对')
+  assert.equal(
+    p.data.manualOpen,
+    false,
+    'needs-pair 又把手动输入自动顶开了：用户报的「取消配对后重新连也是默认收起」就是这一条',
+  )
+
+  // 反过来：配对**成功**那一支要主动收起来（连上了就不该还挂着输入区）。
+  p.setData({ manualOpen: true, busy: true })
+  p._onEvent({ kind: 'status', status: 'online' })
+  assert.equal(p.data.manualOpen, false, '连上之后手动输入区应该收起来')
 })
