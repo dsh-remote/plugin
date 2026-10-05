@@ -1749,3 +1749,49 @@ chat 页顶栏那颗点同理（`connTheme` 的 error 也曾经是红）。
 老判据"断开时说未连接而不是空闲"的颜色断言同步更新为 default。
 
 闸门：mp check 32/32 + 322 组、伞仓 146 项 + run.mjs 17 步。
+
+#### 9.29.7 屏幕上那张配对码不许是花掉的那张（2026-10-05 下午，control 2.0.6）
+
+用户一次连报三条，三个表象：
+
+> 手机离线太久后，就连不上了，然后 dsh 操作退出配对后，新的二维码也连不上，
+> 要等下次刷新的二维码才能用，手机解除配对之后 dsh 又不同步状态了（之前修过一次）。
+
+**根因：配对码是一次性的，而屏幕上那张从来没有人把它在该花掉的时候换掉。**
+
+配对码的一次性由中继保证：`state.claim()` 里 `pending.used = true`，重放只拿到
+`already_used`。而主机的 `active.pairing`——status.json 里那张、状态栏二维码那张、
+`/pairing/new` 发的那张——原来只由 `markConsumed` 与 `wrappedPublish` 两处维护，
+缺的就是"这一张现在不能用了"这件事本身：
+
+- `unpairAll()` 只 `voidConversation`，**不动码**。于是退出配对后 pill 上还是刚走的
+  那部手机花掉的那一张，手机扫上去中继回 `already_used`；
+- `pairOnStartSec` 默认 **0**（自动发码关着，真机默认配置），所以 `PairingWindow.tick()`
+  第一行就 return，没有任何东西去换它 —— 只能干等 TTL（线上中继 180 秒）走完。
+  用户说的"要等下次刷新的二维码才能用"就是这个等待。
+
+复发出来的取证（真中继 + 真插件 + 真小程序客户端）：
+
+- 旧行为：退出配对后 `status.json.pairing` 恒为 null（花掉的码被勾掉后没有东西补位），
+  要 3 秒节拍上的窗口补发才恢复，而默认配置下窗口根本不动；
+- 修后：退出配对这一步自己就补一张，`untilAsync` 第一轮就拿到 `{qr, token}`，
+  新手机一次扫通。把改动换回旧行为，判据当场红。
+
+**修法**（control `index.ts`）：加一本"花名账" `spentTokens`，
+`currentPairing()` / `describeActivePairing()` 见账上有的码一律当没有；
+`onPeerJoined` 消费一张就记一笔；`unpairAll()` 把当前那张记账后**当场补发一张**
+（`wrappedPublish()`，同时让窗口认领，不至于同一台主机挂两张有效码）。
+
+**另外两个表象在取证里各自归位**：
+
+- "手机离线太久连不上"：D3 续用路径（`clientGone` 不动成员表、空会话只由显式
+  `session-leave` 打点）实测没问题，回来仍是同一条 convId 直接 online。它是上面那个
+  二维码 bug 的下游——用户回来扫到的是死码，于是重扫。
+- "手机解除配对后 dsh 又不同步状态"：pill 的 `paired` 读 `clientCount` 这条路是对的，
+  实测手机 `unpair()` 之后 200ms 内 `paired` 就归零。这条没有复发，新增判据把它钉住。
+
+判据：伞仓新增 `e2e/pairing-refresh.test.mjs` 三条（真链路）。已验证换回旧行为会红。
+`bootHost` 增加 `pairOnStartSec` 入参（默认 0，与真机一致）——不提供这个开关，
+配对窗口这一族用例根本没法写。
+
+闸门：plugin 351/0、typecheck/format/build 全过；伞仓 168 项 + run.mjs 17 步。
