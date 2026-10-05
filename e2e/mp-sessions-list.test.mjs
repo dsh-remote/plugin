@@ -132,19 +132,37 @@ test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortA
   }
 })
 
-test('wxml：工作区 chip 自己一行，不在标题右边（2026-10-05 用户：新增一行，别放右边）', () => {
+test('wxml/wxss：项目名在卡片右上角、纯文字无底色（2026-10-05 用户：放右上角，像分类卡）', () => {
   const { readFileSync } = require('node:fs')
-  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
-  // 标题必须独占一行。sess-title-row 那个 flex 容器已经删掉——留着它，
-  // 标题就会继续被 chip 和右侧徽标夹成一条放不下省略号的窄条。
+  const page = path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions')
+  const wxml = readFileSync(path.join(page, 'sessions.wxml'), 'utf8')
+  const wxss = readFileSync(path.join(page, 'sessions.wxss'), 'utf8')
+
+  // ① 标题行容器还是不能回来——chip 跟标题挤一行的老问题
   assert.ok(!wxml.includes('sess-title-row'), '标题行容器必须删掉：chip 不跟标题挤一行了')
-  // chip 紧跟标题、在完整目录之前，是 .sess-main 的直接子元素
+
+  // ② 位置：右列第一项、徽标之前，才是"卡片右上角"
+  //    （在徽标下面 = 右侧中间，那不是用户要的）
   assert.match(
     wxml,
-    /class="sess-title ellipsis">[\s\S]*?wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/,
-    'chip 要紧跟标题成行，而不是挤在标题右边（那是本次要改掉的样子）',
+    /<view class="sess-right">[\s\S]*?<view wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag">[\s\S]*?<view class="sess-badge/,
+    '项目名必须是右列第一项（卡片右上角），不能跑到徽标下面',
   )
-  assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, 'chip 只在有工作区时渲染')
+  assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, '只在有工作区时渲染')
+
+  // ③ 去掉标签样式：.sess-tag 里不许有 background / padding / border-radius。
+  //    少了底色 padding 圆角却留着的话，它还是个方块（只是空心的），
+  //    而分类卡的角标就是一行纯文字。
+  const tagRule = (wxss.match(/\.sess-tag\s*\{([^}]*)\}/) || [, ''])[1]
+  assert.ok(tagRule.length > 0, '找不到 .sess-tag 规则')
+  assert.match(tagRule, /font-size:\s*20rpx/, '字号要小一档（20rpx）才能当角标')
+  assert.ok(!/background/.test(tagRule), '项目名不许有底色：纯文字角标，底色会在右上角压出一块色斑')
+  assert.ok(!/padding/.test(tagRule), '去掉标签样式 = padding 一起去掉，不然底色没了还是个方块')
+  assert.ok(!/border-radius/.test(tagRule), '去掉标签样式 = 圆角一起去掉')
+
+  // ④ 整行顶对齐：不改成 flex-start 的话，多出来的角标会把右列撑高，
+  //    而 align-items:center 会让整段掉到徽标上面而不是卡片右上角。
+  assert.match(wxss, /\.sess\s*\{[^}]*align-items:\s*flex-start/, '整行必须顶对齐，否则角标贴不到卡片右上角')
 })
 
 test('系统栏每次 onShow 都要重设：从 chat 返回时微信会用静态白把顶栏冲掉（用户实测）', () => {
