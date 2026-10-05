@@ -2252,3 +2252,64 @@ test('不是重连（没断过链）就不重读历史：否则每次 online 都
     '没断过链却重读历史：长会话每收到一次 online 就整页翻出来，又慢又冲掉用户正在看的位置',
   )
 })
+
+/**
+ * 待办条那两个显示问题的判据（2026-10-05 用户截图）。
+ *
+ * ① 折叠三角一直在闪；② 不要那排蓝色分段进度条。
+ *
+ * ① 的病根值得记下来：**两个互不相关的东西共用了 .caret 这个类名**——
+ * 用户消息里「正在输入」的光标（蓝色、caret-blink 1s infinite），
+ * 和待办条的折叠三角。wxss 里后定义的那条覆盖前面的，于是三角被顶成光标。
+ * 判据钉的是**两个类名不许相同**，而不只是「别闪」：只钉现象的话，
+ * 下一个人把三角改回 .caret 时没人会知道那是同一个坑。
+ */
+test('待办条：折叠三角不能沿用输入光标的类名（否则它会变成一根闪的光标）', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8')
+
+  assert.match(
+    wxml,
+    /todo-caret/,
+    '待办条的折叠三角还在用 .caret —— 那个类名是用户消息里正在输入的光标',
+  )
+  assert.match(
+    wxss,
+    /\.todo-caret\s*\{/,
+    'wxss 里没有 .todo-caret 的定义：三角会退回套 .caret，也就退回那根闪的光标',
+  )
+  // .caret 那条带闪烁动画 —— 它只该属于输入光标
+  assert.match(
+    wxss,
+    /\.caret\s*\{[^}]*caret-blink/s,
+    '夹具自检：.caret 应当是那根闪的光标，否则这条判据的前提就不成立了',
+  )
+  assert.doesNotMatch(
+    wxss,
+    /\.caret-up\s*\{/,
+    '.caret-up 还在：三角改名了它没跟着改，这条会变成没有主人的孤儿规则',
+  )
+})
+
+/**
+ * ② 蓝色分段进度条整块删掉（用户：可以不要这些蓝色的进度条）。
+ *
+ * 连着判据「死代码也要清」：只删 wxml 不删 _todoSegs/TODO_SEG_MAX 的话，
+ * 那段算分格的代码还留在那儿，下一个人会以为它还在用。
+ */
+test('待办条：蓝色分段进度条整块删干净（wxml、样式、算分格的代码都不许留）', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8')
+  const js = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'), 'utf8')
+
+  assert.doesNotMatch(wxml, /todo-segs/, '分段条还在页面上：用户明确说不要那排蓝条')
+  assert.doesNotMatch(wxss, /\.todo-seg/, '分段条的样式没删：wxml 已经不用它们了，纯死代码')
+  assert.doesNotMatch(js, /todoSegs|TODO_SEG_MAX/, '算分格的代码还在：只删视图不删算法，下一个人会以为它还在用')
+
+  // 而进度本身还在：那个数字才是这条要说的（用户删的是蓝条，不是进度）
+  assert.match(
+    wxml,
+    /待办 \{\{todoDone\}\}\/\{\{todos\.length\}\}/,
+    '连「待办 7/9」这个数字一起删了：用户要的是去掉蓝条，不是去掉进度',
+  )
+})
