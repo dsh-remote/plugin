@@ -41,6 +41,13 @@ globalThis.wx = {
     globalThis.__drcClipboard = String(opts.data || '')
     opts.success && opts.success({})
   },
+  // 加号弹的选择：图片 / 文件。默认回第 0 项（图片），判据想测文件就改 __drcSheetTap
+  showActionSheet: (opts) => {
+    globalThis.__drcSheetItems = (opts.itemList || []).slice()
+    var tap = globalThis.__drcSheetTap === undefined ? 0 : globalThis.__drcSheetTap
+    if (tap < 0 || tap >= (opts.itemList || []).length) return
+    opts.success && opts.success({ tapIndex: tap })
+  },
   showToast: () => {},
   vibrateLong: () => {},
   vibrateShort: () => {},
@@ -210,6 +217,10 @@ function makePage() {
     for (const p in patch) setByPath(ctx.data, p, patch[p])
     if (cb) cb()
   }
+  // 加号选择的归零：不归零的话，上一条用例选了"文件"，下一条用例点加号
+  // 也会进文件链——两个用例都莫名失败（本次真实踩到）。
+  globalThis.__drcSheetTap = 0
+  globalThis.__drcSheetItems = undefined
   ctx.onLoad({ id: 's1', title: '测试会话' })
   live.push(ctx)
   return ctx
@@ -1826,7 +1837,8 @@ test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 
   const p = makePage()
   const calls = stubReceipt(p, { ok: true })
   p.setData({ sessionId: 's1' })
-  p.onAttachFile()
+  globalThis.__drcSheetTap = 1
+  p.onAttach()
   await settleAttach()
   assert.equal(p.data.attachments.length, 1, '文件要落成一条附件')
   const one = p.data.attachments[0]
@@ -1859,7 +1871,8 @@ test('文件附件：与图片可以同一条消息带（协议里是两个独�
   p.onAttach()
   await settleAttach()
   assert.equal(p.data.attachments.length, 1, '先来一张图')
-  p.onAttachFile()
+  globalThis.__drcSheetTap = 1
+  p.onAttach()
   await settleAttach()
   assert.equal(p.data.attachments.length, 2, '图 + 文件各一条')
   assert.equal(p.data.attachments.filter((a) => a.kind === 'file').length, 1)
@@ -1886,7 +1899,8 @@ test('文件附件：超预算被挡下并说清该减哪一个（不静默丢�
   assert.equal(out.length, 0, '超预算的不进附件')
   assert.equal(steps, 1, '但仍然走完 done，后续文件要继续处理')
   // 后面这一份照常进来：挡下的只是那一个
-  p.onAttachFile()
+  globalThis.__drcSheetTap = 1
+  p.onAttach()
   await settleAttach()
   assert.equal(p.data.attachments.length, 1, '被挡下的是那一个，后面这份照常进来')
 })
@@ -1894,16 +1908,16 @@ test('文件附件：超预算被挡下并说清该减哪一个（不静默丢�
 
 /* ── 附件的界面结构：两个入口、一张角标、一行说明 ─────────────────────── */
 
-test('wxml：加号管图片、旁边那个小按钮管文件；角标只说有几个附件', () => {
+test('wxml：加号一个入口管两样，没有旁边的第二个按钮', () => {
   const { readFileSync } = require('node:fs')
   const wxml = readFileSync(
     path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
     'utf8',
   )
-  // 图片入口：用户 1.1.5 明确要求"加号直接进相册"，所以它不弹二级菜单。
-  assert.match(wxml, /composer-plus[^>]*bindtap="onAttach"/, '加号要还能选图')
-  // 文件入口：单独一个，不塞进加号的菜单（那个菜单刚按用户要求删掉）。
-  assert.match(wxml, /bindtap="onAttachFile"/, '要有一个文件入口')
+  // 加号现在是唯一的附件入口（2026-10-05 用户：文件要放在加号里面）。
+  assert.match(wxml, /composer-plus[^>]*bindtap="onAttach"/, '加号要点得动')
+  // 不许有第二个附件按钮：1.1.7 加过一个，1.1.11 按用户要求收回加号里。
+  assert.ok(!wxml.includes('composer-file'), '文件入口已经并进加号，不许再留一个旁边的按钮')
   assert.match(wxml, /chooseMessageFile/ === null ? /x/ : /x/, '占位')
   // 角标是唯一的"选了几个"的说法（缩略图条已删）。
   assert.match(wxml, /plus-badge">\{\{attachCount\}\}<\/view>/, '角标要说附件数')
@@ -1993,5 +2007,54 @@ test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑'
   assert.ok(!stepsLine.includes('onCopyMessage'), '步骤组不许绑复制')
   // data-text 必须跟着绑（没有它两手都空）
   assert.equal((wxml.match(/data-text="\{\{item\.text\}\}"/g) || []).length, 2)
+})
+
+
+/* ── 加号弹选择：图片 / 文件（2026-10-05 用户：文件要放在加号里面） ────── */
+
+test('加号先弹选择：两项，图片在前文件在后', () => {
+  const p = makePage()
+  globalThis.__drcSheetItems = undefined
+  globalThis.__drcSheetTap = 0
+  p.onAttach()
+  assert.deepEqual(globalThis.__drcSheetItems, ['图片', '文件'], '选择就这两项，顺序按常用排')
+})
+
+test('加号 -> 选文件：走 chooseMessageFile，落成 file 附件', async () => {
+  const p = makePage()
+  globalThis.__drcSheetTap = 1
+  globalThis.__drcFileBytes = { 'tmp-file.pdf': Buffer.from('PDFDATA') }
+  p.onAttach()
+  await settleAttach()
+  const got = p.data.attachments
+  assert.equal(got.length, 1, '选完文件就该有一个附件')
+  assert.equal(got[0].kind, 'file', '从加号->文件进来的也是文件附件')
+  assert.equal(got[0].name, 'report.pdf', '扩展名要留着（Agent 认文件靠它）')
+})
+
+test('加号 -> 选图片：走 chooseMedia，落成 image 附件', async () => {
+  const p = makePage()
+  globalThis.__drcSheetTap = 0
+  p.onAttach()
+  await settleAttach()
+  const got = p.data.attachments
+  assert.equal(got.length, 1, '选完图就该有一个附件')
+  assert.notEqual(got[0].kind, 'file', '走的是图片那条链，不是文件')
+})
+
+test('加号：满了不弹选择，直接说满（不浪费一次点击）', () => {
+  const p = makePage()
+  // 先填满（每次点加号都走一遍选择 -> 选图）
+  for (let i = 0; i < 4; i++) {
+    globalThis.__drcSheetTap = 0
+    p.onAttach()
+  }
+  assert.equal(p.data.attachments.length, 4, '先确认真的满了')
+  // 再点一次：这次不许弹选择，直接告诉用户满了
+  globalThis.__drcSheetItems = undefined
+  globalThis.__drcSheetTap = -1 // 越界 = 假 wx 的 showActionSheet 直接 return
+  p.onAttach()
+  assert.equal(globalThis.__drcSheetItems, undefined, '满了以后连选择都不该弹')
+  assert.equal(p.data.attachments.length, 4, '也不许多收')
 })
 
