@@ -255,6 +255,7 @@ const send = (ctx, payload) => ctx._onEvent({ kind: 'payload', payload })
  * 与粗收单的 `ev.run_state`（这一会话两张一起收）。两条都发是因为老版本手机只认后者。
  * 于是"收错张"与"两条互相打架"都是真会出现的形状，而不是理论风险。
  */
+
 test('ev.permission_resolved 只收对得上 requestId 的那张审批卡，也不去动运行态', () => {
   const ctx = makePage()
   send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_1', action: 'bash', options: [{ id: 'approve', label: '允许' }] })
@@ -275,6 +276,7 @@ test('ev.permission_resolved 只收对得上 requestId 的那张审批卡，也�
   assert.equal(ctx.data.running, true, '作废帧不该顺手改运行态：回合在不在跑由 ev.run_state 说')
 })
 
+
 test('ev.question_resolved 收提问卡；主机没发这一帧时（老宿主）什么都不动', () => {
   const ctx = makePage()
   send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_1', questions: [{ id: 'x', question: '要哪个' }] })
@@ -288,6 +290,7 @@ test('ev.question_resolved 收提问卡；主机没发这一帧时（老宿主�
   send(ctx, { t: 'ev.question_resolved' })
   assert.equal(ctx.data.pendingQuestion, null, '没有 requestId 的作废帧必须收当前那张')
 })
+
 
 test('提问卡带 expiresAt 就走表；老宿主不发时不显示也不报错', () => {
   const withExpiry = makePage()
@@ -309,6 +312,7 @@ test('提问卡带 expiresAt 就走表；老宿主不发时不显示也不报错
   assert.equal(both.data.pendingQuestion.remainSec, 120, '两张卡共用一条表时，后挂上的那张也要有自己的数字')
 })
 
+
 test('ev.run_state 仍然是粗收单：两张卡一起收，并把还在走的表停掉', () => {
   const ctx = makePage()
   send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_c', action: 'bash', expiresAt: new Date(Date.now() + 60_000).toISOString() })
@@ -319,6 +323,7 @@ test('ev.run_state 仍然是粗收单：两张卡一起收，并把还在走的�
   assert.equal(ctx.data.pendingQuestion, null)
   assert.equal(ctx._cardTimer, null, '卡片都收了而那条表还在走：它会一直 setData 到天荒地老')
 })
+
 
 test('一轮：思考随内容出现而收尾，工具进同一个步骤组，按 callId 原地更新', () => {
   const p = makePage()
@@ -367,6 +372,7 @@ test('一轮：思考随内容出现而收尾，工具进同一个步骤组，�
   assert.equal(p.data.running, false)
 })
 
+
 test('工具还在跑的时候不补思考（那会儿在跑的是工具，不是模型）', async () => {
   const p = makePage()
   // 空块流时不插思考：那会儿还没有任何一组过程，用户看到的是刚发出去的那条指令，
@@ -375,13 +381,13 @@ test('工具还在跑的时候不补思考（那会儿在跑的是工具，不�
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.deepEqual(kinds(p), [], '空流不插思考段')
 
+  // 2026-10-05 取消排队：执行中不许提交，所以这条消息现在发不出去（那一层由
+  // 「执行中不许提交」那条判据钉）。先把会话置回空闲，再走正常那条路。
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
   p.data.inputText = '跑一下测试'
   p.onSend()
   await new Promise((r) => setTimeout(r, 0))
-  // 2026-10-04 起：会话在跑时打的内容进**队列**（排队特性），不再直接落块；
-  // 空闲那一刻才按序发出、落块。所以这里先看见队列，再等一次 idle。
-  assert.equal(p.data.pending.length, 1, '在跑时打的内容也要发出去（排队以 dsh 为准）')
-  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.deepEqual(kinds(p), ['turn', 'user'], '空闲时发出去就该立刻落块，不该再等一个「消化」动作')
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
   assert.deepEqual(kinds(p), ['turn', 'user', 'steps[think(live)]'])
 
@@ -401,6 +407,7 @@ test('工具还在跑的时候不补思考（那会儿在跑的是工具，不�
   )
   assert.equal(stepGroups(p)[0].items[1].args, '{"command":"ls"}', '参数要落到那一条上')
 })
+
 
 test('正文出现即给步骤组封口：新的工具调用另起一组，不插回上一段过程', () => {
   const p = makePage()
@@ -450,6 +457,7 @@ test('正文出现即给步骤组封口：新的工具调用另起一组，不�
   assert.ok(order[4].startsWith('steps['), '第二组')
 })
 
+
 test('assistant/message 自带 done，不得据此判定这一轮结束', () => {
   const p = makePage()
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
@@ -472,6 +480,7 @@ test('assistant/message 自带 done，不得据此判定这一轮结束', () => 
   assert.ok(kinds(p).includes('text'), '正文在流，光标就是"还在动"')
 })
 
+
 test('流式 delta 合并成一块，done 落在块上', () => {
   const p = makePage()
   send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '工作区是干净的' })
@@ -491,6 +500,7 @@ test('流式 delta 合并成一块，done 落在块上', () => {
   assert.equal(texts[0].text, '工作区是干净的。')
   assert.equal(texts[0].done, true)
 })
+
 
 test('空正文帧（reasoning-only 的 assistant 消息）不许留下空白块', () => {
   // 宿主里绝大多数 assistant/message 带的是 reasoning + tool-call，正文是空的；
@@ -519,6 +529,7 @@ test('空正文帧（reasoning-only 的 assistant 消息）不许留下空白块
   assert.equal(texts[0].text, '结论是这样。')
   assert.equal(texts[0].done, true)
 })
+
 
 test('宿主回传的用户消息要与本地回显去重', () => {
   const p = makePage()
@@ -556,6 +567,7 @@ test('宿主回传的用户消息要与本地回显去重', () => {
   assert.equal(p.data.blocks.at(-1).text, '另一个客户端发的话', '对不上的用户消息要照常追加')
 })
 
+
 test('折叠：实时新组默认展开（否则看不见工具列表），历史回放的组默认收起', () => {
   const p = makePage()
   send(p, {
@@ -590,6 +602,7 @@ test('折叠：实时新组默认展开（否则看不见工具列表），历�
   assert.equal('foldable' in p.data, false, '顶栏按钮的可见性计数不该还留着')
 })
 
+
 test('展开策略只对实时生效：历史回放的步骤组默认收起', () => {
   const p = makePage()
   const blocks = p._replayPage([
@@ -598,6 +611,7 @@ test('展开策略只对实时生效：历史回放的步骤组默认收起', ()
   assert.equal(blocks[0].kind, 'steps')
   assert.equal(blocks[0].open, false, '历史里的组默认收起 —— 一屏全是过程就没法读正文了')
 })
+
 
 test('只有 think 的组（plain）只是一行状态：不给箭头、不给卡片、耗时并进标题', () => {
   const p = makePage()
@@ -628,6 +642,7 @@ test('只有 think 的组（plain）只是一行状态：不给箭头、不给�
   assert.equal(g2.label, '正在执行 1 个步骤', '标题切回工具计数')
 })
 
+
 test('plain 组在渲染层真的没有箭头也没有卡片（数据层判断不算数）', () => {
   const p = makePage()
   send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '我看一下。', role: 'assistant', done: true })
@@ -642,6 +657,7 @@ test('plain 组在渲染层真的没有箭头也没有卡片（数据层判断�
   assert.equal(again.plain, 1, '前提：这仍是 plain 组')
   assert.match(fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8'), /item\.open && !item\.plain/)
 })
+
 
 test('过程窗口：组内自动滚到组尾，但只有还在跑的组才给 -- 跑完的组不许拽人', () => {
   const p = makePage()
@@ -675,6 +691,7 @@ test('过程窗口：组内自动滚到组尾，但只有还在跑的组才给 -
   p._stopThinkTick()
 })
 
+
 test('「回到最新」的锚点必须是两个静态 id；过程窗口必须限高且用 scroll-view', () => {
   const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
   const wxss = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxss'), 'utf8')
@@ -697,6 +714,7 @@ test('「回到最新」的锚点必须是两个静态 id；过程窗口必须�
 })
 
 // ── 过程显示（SHOW_STEPS = true），但仍是数据层与渲染层分开 ────────────
+
 
 test('过程块渲染，但开关仍然独立于落块逻辑', () => {
   const p = makePage()
@@ -746,6 +764,7 @@ test('过程块渲染，但开关仍然独立于落块逻辑', () => {
   )
 })
 
+
 test('运行态不再单独占一行：没有 runText，也没有 runbar，信号落在 live 步骤组上', () => {
   const p = makePage()
   stubClient(p, () => Promise.resolve(null))
@@ -780,6 +799,7 @@ test('运行态不再单独占一行：没有 runText，也没有 runbar，信�
   )
 })
 
+
 test('顶栏断开时说「未连接」而不是「空闲」', () => {
   const p = makePage()
   p.client = Object.assign({}, p.client, { status: 'error', statusText: '连接失败' })
@@ -787,6 +807,7 @@ test('顶栏断开时说「未连接」而不是「空闲」', () => {
   assert.equal(p.data.barText, '连接失败')
   assert.equal(p.data.barTheme, 'default')
 })
+
 
 test('折叠只有组标题一个入口：纯思考的组（plain）连这个入口都没有', () => {
   const p = makePage()
@@ -801,6 +822,7 @@ test('折叠只有组标题一个入口：纯思考的组（plain）连这个入
   assert.equal(typeof p.onToggleTool, 'function', '组内某一步可点开参数与结果')
 })
 
+
 test('点空白收起键盘；输入区自己 catch 住不误收', () => {
   const p = makePage()
   p.data.inputFocus = true
@@ -808,6 +830,7 @@ test('点空白收起键盘；输入区自己 catch 住不误收', () => {
   assert.equal(p.data.inputFocus, false, '点空白必须真的失焦，否则键盘收不起来')
   assert.equal(typeof p.onNoop, 'function', '输入区/面板的 catchtap 需要一个空实现')
 })
+
 
 test('块流裁剪后索引要重建到新下标', () => {
   const p = makePage()
@@ -868,6 +891,7 @@ const HISTORY_PAGE = [
   { t: 'ev.message_delta', messageId: 'h5', delta: '测试全过。', role: 'assistant', done: true },
 ]
 
+
 test('历史：一页条目走同一条落块路径 —— 用户消息开新轮次，工具进步骤组，不补思考段', async () => {
   const p = makePage()
   const calls = stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: 4 }))
@@ -890,6 +914,7 @@ test('历史：一页条目走同一条落块路径 —— 用户消息开新轮
   assert.equal(p.data.running, false, '回放历史绝不能把顶栏改成"运行中"')
 })
 
+
 test('历史：与实时已经渲染过的内容按 id 去重（会话正在跑时进来，同一帧会到两次）', async () => {
   const p = makePage()
   // 先用实时路径喂进一条消息与一次工具调用
@@ -908,6 +933,7 @@ test('历史：与实时已经渲染过的内容按 id 去重（会话正在跑�
   assert.ok(kinds(p).length > before.length, '只有更早的内容该被补进来')
   assert.equal(kinds(p)[0], 'turn', '更早的轮次拼在最前面')
 })
+
 
 test('历史：「加载更早」把上一页拼到前面并重排轮次号（先加载的那页编号一定偏小）', async () => {
   const p = makePage()
@@ -941,6 +967,7 @@ test('历史：「加载更早」把上一页拼到前面并重排轮次号（�
   assert.equal(p.data.toView, 'b' + anchorKey, '要靠锚点把用户刚读到的那一块滚回视口，否则页面会原地跳动')
 })
 
+
 test('历史：翻回唯一的一页之后不留游标；再点「加载更早」不会再发请求', async () => {
   const p = makePage()
   const calls = stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE }))
@@ -951,6 +978,7 @@ test('历史：翻回唯一的一页之后不留游标；再点「加载更早�
   await flush()
   assert.equal(calls.length, 1, '已经到底了还在发请求：用户点一下就要等一次超时')
 })
+
 
 test('历史：读不到 ≠ 没内容 —— 读不到要给重试的出口，不能装作会话是空的', async () => {
   const p = makePage()
@@ -969,6 +997,7 @@ test('历史：读不到 ≠ 没内容 —— 读不到要给重试的出口，�
   assert.equal(p.data.historyState, 'ok')
   assert.equal(p.data.blocks.length, 8)
 })
+
 
 test('历史：还没配对 / 还没连上时不发请求，等状态变化再试（而不是记成"读不到"）', async () => {
   const p = makePage()
@@ -997,6 +1026,7 @@ test('历史：还没配对 / 还没连上时不发请求，等状态变化再�
 // onReady 之后没有任何东西把视口推到底：automator 实测打开会话 scrollTop=0，
 // 用户每次都要自己滚一遍（真机报「自动滚动有点问题」的一半）。现在：第一页
 // 必须翻锚点（= 落底），往前插更早内容才不许翻。
+
 test('历史：第一页落底，往前插更早内容静默（不该被甩走）', async () => {
   const p = makePage()
   p.onReady()
@@ -1012,6 +1042,7 @@ test('历史：第一页落底，往前插更早内容静默（不该被甩走�
   assert.equal(p._flip, beforeFlip, '往前插更早内容不许翻尾锚点——那会把用户从刚读的位置甩走')
   assert.match(p.data.toView, /^b/, '翻页拼完要把原来第一块滚回视口（内容锚点）')
 })
+
 
 test('历史头的文案不许自相矛盾（这类缺陷只有截图看得见，所以用断言补一道闸）', () => {
   const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
@@ -1029,6 +1060,7 @@ test('历史头的文案不许自相矛盾（这类缺陷只有截图看得见�
   assert.match(wxml, /没读到主机上的历史/)
 })
 
+
 test('列表里这条会话正在跑时，页面上要看得见（从列表点进运行中的会话，原来毫无动静）', () => {
   const p = makePage()
   // 必须桩住 client：真实的那个单例此刻 status 还是 'idle'，而 'idle' 在本项目里的
@@ -1039,15 +1071,20 @@ test('列表里这条会话正在跑时，页面上要看得见（从列表点�
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'running', running: true }], reason: 'list' })
   assert.equal(p.data.running, true)
-  // 刚点进会话时正文是空的，还没有步骤组 —— 运行态这时唯一的落点是顶栏的中断按钮。
-  // 判据要认这一条：断言"必须有 live 步骤组"在这里是错的，前提不成立。
-  assert.match(wxml, /wx:if="\{\{running\}\}"\s*\n?\s*class="bar-stop"/, '运行中要在顶栏给出中断按钮')
+  // 刚点进会话时正文是空的，还没有步骤组 —— 运行态这时唯一的落点是那颗
+  // 「变成中断的发送键」（2026-10-05 用户把顶栏那颗取消了）。
+  assert.match(
+    wxml,
+    /wx:if="\{\{running\}\}"[\s\S]{0,80}composer-send composer-stop/,
+    '运行中要把发送键变成中断键，否则用户进到一个正在跑的会话却停不下来',
+  )
   assert.deepEqual(kinds(p), [], '空流不该凭空插一段过程')
 
   send(p, { t: 'ev.session_changed', sessions: [{ id: 's1', state: 'idle', running: false }], reason: 'refresh' })
   assert.equal(p.data.running, false)
   p._stopThinkTick()
 })
+
 
 test('历史：刚发出去的那句话不会因为历史里也有就显示两遍', async () => {
   const p = makePage()
@@ -1070,6 +1107,7 @@ test('历史：刚发出去的那句话不会因为历史里也有就显示两�
 
 // ── 模型 ────────────────────────────────────────────────────────────
 
+
 test('模型：ev.model 到达后显示模型名，且这一帧不该被"不是本会话"过滤掉', () => {
   const p = makePage()
   send(p, { t: 'ev.model', model: 'deepseek-chat', provider: 'deepseek', canSwitch: false, reason: '主机内核只提供读取' })
@@ -1078,6 +1116,7 @@ test('模型：ev.model 到达后显示模型名，且这一帧不该被"不是�
 
   p._stopThinkTick()
 })
+
 
 test('模型：超长名字在这一层就截断，界面层不再自己判断', () => {
   const p = makePage()
@@ -1090,6 +1129,7 @@ test('模型：超长名字在这一层就截断，界面层不再自己判断',
 
   p._stopThinkTick()
 })
+
 
 test('模型：只读，不留任何切换入口（canSwitch/options 相关的字段与处理器都不许存在）', () => {
   const p = makePage()
@@ -1119,6 +1159,7 @@ test('模型：只读，不留任何切换入口（canSwitch/options 相关的�
   p._stopThinkTick()
 })
 
+
 test('模型：别的会话的 ev.model 必须被会话过滤拦下（2026-10-05 用户实测的串台）', () => {
   const p = makePage()
   // 这条判据原来是反的：它断言「模型是全局的，不该被会话 id 拦掉」，
@@ -1130,6 +1171,7 @@ test('模型：别的会话的 ev.model 必须被会话过滤拦下（2026-10-05
   p._stopThinkTick()
 })
 
+
 test('模型：本会话的 ev.model 正常显示', () => {
   const p = makePage()
   send(p, { t: 'ev.model', sessionId: p.data.sessionId, model: 'space-bunny-free', canSwitch: false })
@@ -1137,6 +1179,7 @@ test('模型：本会话的 ev.model 正常显示', () => {
 
   p._stopThinkTick()
 })
+
 
 test('模型：老主机的无 sessionId 帧只做兜底，不覆盖已有的正确值', () => {
   const p = makePage()
@@ -1154,6 +1197,7 @@ test('模型：老主机的无 sessionId 帧只做兜底，不覆盖已有的正
 })
 
 // ── 审批卡：本地倒计时 ──────────────────────────────────────────────
+
 
 test('审批：expiresAt 换算成剩余秒数并逐秒往下走', () => {
   const p = makePage()
@@ -1183,6 +1227,7 @@ test('审批：expiresAt 换算成剩余秒数并逐秒往下走', () => {
   p._stopThinkTick()
 })
 
+
 test('审批：没有 expiresAt 就不倒计时（不能自己编一个 180 秒出来）', () => {
   const p = makePage()
   send(p, { t: 'ev.permission_request', sessionId: 's1', requestId: 'rq1', action: 'Bash' })
@@ -1193,6 +1238,7 @@ test('审批：没有 expiresAt 就不倒计时（不能自己编一个 180 秒�
 
   p._stopThinkTick()
 })
+
 
 test('审批：点了按钮就回传逐字的 option id，并停掉那个还在走的表', () => {
   const p = makePage()
@@ -1219,6 +1265,7 @@ test('审批：点了按钮就回传逐字的 option id，并停掉那个还在�
   p._stopThinkTick()
 })
 
+
 test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停', () => {
   const p = makePage()
   send(p, {
@@ -1236,6 +1283,7 @@ test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停'
 
   p._stopThinkTick()
 })
+
 
 test('审批：页面隐藏时倒计时停表（定时器必须与撤销成对）', () => {
   const p = makePage()
@@ -1294,6 +1342,7 @@ function mdText(p) {
   return txt(mdNodes(p)) + (mdOf(p).mdPending || '')
 }
 
+
 test('正文在流的时候就按 Markdown 排版（不是等 done 才切）', () => {
   // 反证：把 `_withMd` 改成 `if (!b.done) return b`（流式期不渲染）→ 这条红。
   const p = makePage()
@@ -1304,6 +1353,7 @@ test('正文在流的时候就按 Markdown 排版（不是等 done 才切）', (
   assert.ok(mdNodes(p).length > 0, '还没 done 就该有排好版的 nodes —— 否则流式期是纯文本')
   assert.equal(mdText(p), '这是重点结论', 'md 渲染出来的文字不对：' + JSON.stringify(mdText(p)))
 })
+
 
 test('未闭合的标记被暂扣住，闭合那帧才补上样式（跳变的根因）', () => {
   // 反证：让 `_withMd` 走非流式分支（渲染全文不暂扣）→ 这条红
@@ -1327,6 +1377,7 @@ test('未闭合的标记被暂扣住，闭合那帧才补上样式（跳变的�
   assert.equal(mdText(p), '这是重点结论')
 })
 
+
 test('done 之后暂扣区必须为空、且与一次性渲染完全一致', () => {
   // 反证：让 done 分支也走 renderStream 并把 pending 原样透出 → 这条红。
   const p = makePage()
@@ -1347,6 +1398,7 @@ test('done 之后暂扣区必须为空、且与一次性渲染完全一致', () 
   // 且不能把标记符号漏进屏幕
   assert.ok(!mdText(p).includes('```'), '围栏标记漏进输出了：' + JSON.stringify(mdText(p)))
 })
+
 
 test('表格留在 nodes 里（不再摘出去），列宽按容器百分比', () => {
   // 反证：让 `_withMd` 改回 `splitTables` → 下面「占位符数为 0」那条红。
@@ -1377,6 +1429,7 @@ test('表格留在 nodes 里（不再摘出去），列宽按容器百分比', (
   const th = table.children[0].children[0].children.filter((n) => n.name === 'th')
   for (const c of th) assert.match(c.attrs.style, /width:\s*33\.3333%/, '每列应平分宽度：' + c.attrs.style)
 })
+
 
 test('多块正文各自一份 nodes，按块 key 分开（wxml 靠 key 取，不能串）', () => {
   // 反证：`_commit` 改成只留最后一块（`bodies[最后一块key] = …`）→ 这条红。
@@ -1413,6 +1466,7 @@ function bottomFrame() {
   return { detail: { scrollLeft: 0, scrollTop: 1376, scrollHeight: 2000, deltaY: 10 } }
 }
 
+
 test('滚动：贴底时新内容要跟滚（toView 每提交翻一次面）', () => {
   const p = readyAtBottom()
   assert.equal(p._autoScroll, true, '初始就该是跟随态')
@@ -1425,6 +1479,7 @@ test('滚动：贴底时新内容要跟滚（toView 每提交翻一次面）', (
   p._flushDelta()
   assert.equal(p.data.toView, 'anchor-a', '第二次提交要翻回另一颗锚点')
 })
+
 
 test('滚动：往上回看立即停跟随，之后的 delta 不许把人拽回去', () => {
   const p = readyAtBottom()
@@ -1439,6 +1494,7 @@ test('滚动：往上回看立即停跟随，之后的 delta 不许把人拽回�
   p._flushDelta()
   assert.equal(p.data.toView, before, '不跟随时提交不许翻锚点')
 })
+
 
 test('滚动：回到最新之后，落底回弹的负帧不许把跟随关掉（用户报的点）', () => {
   const p = readyAtBottom()
@@ -1500,71 +1556,6 @@ const settleAttach = async () => {
   await new Promise((r) => setTimeout(r, 10))
 }
 
-test('排队：会话在跑也照样发给主机——排队以 dsh 为准，手机不再自己扣消息', () => {
-  const p = makePage()
-  const calls = stubReceipt(p, { ok: true })
-  p.setData({ sessionId: 's1', running: true })
-  p.setData({ inputText: '第一条' })
-  p.onSend()
-  p.setData({ inputText: '第二条' })
-  p.onSend()
-  // 2026-10-05 用户：排队消息要以 dsh 为准。dsh 的 agent 本来就有 inbox
-  // （agent.followup 就是排一个跟进回合并唤醒驱动），手机再维护一份队列
-  // = 两个队列：主机消化掉第一条之后手机那份既不知道也不跟着动。
-  assert.equal(calls.length, 2, '在跑也照样发——主机那边才是队列')
-  assert.deepEqual(
-    calls.map((c) => c.text),
-    ['第一条', '第二条'],
-    '先进先出（顺序由主机 inbox 保证，这边只管按序发）',
-  )
-  assert.equal(p.data.inputText, '', '发出去输入框就清空')
-})
-
-test('排队：主机没收下的消息留在 pending 上，说清原因（不再静默丢失）', async () => {
-  const p = makePage()
-  const calls = stubReceipt(p, (n) => (n === 0 ? { ok: true } : { ok: false, message: '没有活的 agent' }))
-  p.setData({ sessionId: 's1' })
-  p.setData({ inputText: '第一条' })
-  p.onSend()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(p.data.pending.length, 1, '收下了 → 进 pending')
-  assert.equal(p.data.pending[0].state, 'queued')
-
-  p.setData({ inputText: '第二条' })
-  p.onSend()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(p.data.pending.length, 2, '没收下的也要留在表上')
-  assert.equal(p.data.pending[1].state, 'failed', '标成 failed 而不是悄悄消失')
-  assert.equal(p.data.pending[1].message, '没有活的 agent', '主机原话要带出来')
-  assert.equal(calls.length, 2)
-})
-
-test('排队：宿主回传用户消息时，pending 划掉那一条（dsh 真的开始跑它了）', async () => {
-  const p = makePage()
-  stubReceipt(p, { ok: true })
-  p.setData({ sessionId: 's1' })
-  p.setData({ inputText: '第一条' })
-  p.onSend()
-  p.setData({ inputText: '第二条' })
-  p.onSend()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(p.data.pending.length, 2)
-  // 先进先出划队首：带图的消息宿主回传的是加了图片说明的正文，原文本对不上，
-  // 所以只能按入队顺序划（聊天记录注释里写明了这条）。
-  p._onUserEcho('随便什么正文都对不上也没关系')
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(p.data.pending.length, 1, '回传的那一条划掉')
-  assert.equal(p.data.pending[0].text, '第二条', '划掉的是队首那一条')
-})
-
-test('排队：空会话不许发出幽灵 prompt（text 与附件都空）', () => {
-  const p = makePage()
-  const calls = stubReceipt(p, { ok: true })
-  p.setData({ running: true, sessionId: 's1', inputText: '   ' })
-  p.onSend()
-  assert.equal(calls.length, 0, '纯空白不发')
-  assert.equal(p.data.pending.length, 0)
-})
 
 test('图片附件：加号 → 相册 → 压缩 → 画布缩到 1600 长边 → base64；只映射协议字段', async () => {
   const p = makePage()
@@ -1601,6 +1592,7 @@ test('图片附件：加号 → 相册 → 压缩 → 画布缩到 1600 长边 �
   assert.equal(userBlock.images.length, 1, '数据里还带着（要发出去）')
 })
 
+
 test('图片附件：小图不缩（缩一张 800px 的截图只会更糊）；超预算的被挡下并说清', async () => {
   const p = makePage()
   globalThis.__drcPick = { width: 800, height: 600 }
@@ -1623,6 +1615,7 @@ test('图片附件：小图不缩（缩一张 800px 的截图只会更糊）；�
   assert.equal(steps, 1, '但仍然走完 done，后续图片要继续处理')
 })
 
+
 test('图片附件：撤掉全部已选（缩略图条删了，只留加号角标）', async () => {
   const p = makePage()
   globalThis.__drcPick = { width: 1600, height: 1200 }
@@ -1634,6 +1627,7 @@ test('图片附件：撤掉全部已选（缩略图条删了，只留加号角�
   assert.equal(p.data.attachments.length, 0, '一键清空')
   assert.equal(p.data.attachCount, 0, '角标归零')
 })
+
 
 test('图片附件：上限 4 个附件（协议层同一个数，两边不许分叉）', async () => {
   const p = makePage()
@@ -1651,6 +1645,7 @@ test('图片附件：上限 4 个附件（协议层同一个数，两边不许�
 })
 /* ── 进会话即执行中：正文要立刻有"正在执行"那一组（2026-10-05 用户实测）────── */
 
+
 test('进执行中的会话：list_sessions 回执翻牌时必须开出实时组，不等内核事件', async () => {
   const p = makePage()
   stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: null }))
@@ -1667,6 +1662,7 @@ test('进执行中的会话：list_sessions 回执翻牌时必须开出实时组
   assert.equal(live.items[live.items.length - 1].type, 'think')
   assert.equal(live.items[live.items.length - 1].done !== true, true, '思考项不能是完成态')
 })
+
 
 test('进空历史的执行中会话：列表回执先到时也要等历史落地后开组（空流不补）', async () => {
   const p = makePage()
@@ -1687,6 +1683,7 @@ test('进空历史的执行中会话：列表回执先到时也要等历史落�
   p._onSessions({ sessions: [{ id: 's1', running: false }] })
   assert.equal(stepGroups(p).length, 0, '回显落地时仍然没有步骤组')
 })
+
 
 test('进执行中的会话：历史最后是封口组时开新组，不往旧组里塞', async () => {
   const p = makePage()
@@ -1713,6 +1710,7 @@ const TODO_FRAME = {
   ],
 }
 
+
 test('待办帧：落在顶部那颗条上，默认收起只报进度', () => {
   const p = makePage()
   send(p, TODO_FRAME)
@@ -1726,6 +1724,7 @@ test('待办帧：落在顶部那颗条上，默认收起只报进度', () => {
   assert.equal(p.data.todoRunning, 1, '有一条在进行中')
   assert.equal(p.data.todoRunningText, '进行中 改完跑全链路')
 })
+
 
 test('待办条：点条子展开、点消息区收回', () => {
   const p = makePage()
@@ -1742,6 +1741,7 @@ test('待办条：点条子展开、点消息区收回', () => {
   p.onCollapseTodos()
   assert.equal(p.data.todosOpen, false)
 })
+
 
 test('待办帧去重：同一份清单到两次不重排', () => {
   const p = makePage()
@@ -1762,6 +1762,7 @@ test('待办帧去重：同一份清单到两次不重排', () => {
   assert.equal(p.data.todoRunningText, '进行中 写判据')
 })
 
+
 test('待办被内核清空：清单空了，展开态也要收回', () => {
   const p = makePage()
   send(p, TODO_FRAME)
@@ -1772,21 +1773,6 @@ test('待办被内核清空：清单空了，展开态也要收回', () => {
   assert.equal(p.data.todosOpen, false, '清单没了就不该留一个展开的空面板')
 })
 
-test('待办与排队消息不打架：两个状态各管各的', async () => {
-  const p = makePage()
-  send(p, TODO_FRAME)
-  // 排队（会话在跑时打指令）不该碰待办
-  p.setData({ inputText: '顺便看看这个' })
-  stubReceipt(p, { ok: true })
-  p.onSend()
-  await new Promise((r) => setTimeout(r, 0))
-  assert.equal(p.data.pending.length, 1, '指令进了 pending（pending 是主机队列的视图）')
-  assert.equal(p.data.todos.length, 3, '排队不影响待办')
-  // 待办帧也不该碰队列
-  send(p, { t: 'ev.todo', todos: [{ content: '新的一条', status: 'pending' }] })
-  assert.equal(p.data.pending.length, 1, '待办不影响 pending')
-  assert.equal(p.data.todos.length, 1)
-})
 
 test('wxml：待办条在顶部（scroll 之前），默认收起可点开', () => {
   const { readFileSync } = require('node:fs')
@@ -1800,6 +1786,7 @@ test('wxml：待办条在顶部（scroll 之前），默认收起可点开', () 
 })
 
 /* ── 待办进历史回放（2026-10-05：补 1.4.0 留下的 v1 边界）────────────────────── */
+
 
 test('历史回放：第一页里的待办快照落到顶部条上（进跑过的会话不用等下一帧）', async () => {
   const p = makePage()
@@ -1822,6 +1809,7 @@ test('历史回放：第一页里的待办快照落到顶部条上（进跑过�
   assert.equal(p.data.todoDone, 1)
   assert.equal(p.data.todosOpen, false, '默认仍旧收起')
 })
+
 
 test('历史回放：更早页的待办是过期快照，不许把清单往回拨', async () => {
   const p = makePage()
@@ -1846,6 +1834,7 @@ test('历史回放：更早页的待办是过期快照，不许把清单往回�
   assert.equal(p.data.todos[0].content, '最新清单', '更早页的待办是过期快照，不许覆盖')
 })
 
+
 test('历史回放：实时帧已经到过，历史快照不许盖它（后到者胜）', async () => {
   const p = makePage()
   // 实时帧先到（会话正在跑，todo/write 已经来了）
@@ -1863,6 +1852,7 @@ test('历史回放：实时帧已经到过，历史快照不许盖它（后到�
   assert.equal(p.data.todos[0].content, '实时清单', '实时帧后到，历史不许盖它')
 })
 
+
 test('历史回放：没有待办的历史页不碰顶部条', async () => {
   const p = makePage()
   stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE, nextBeforeSeq: null }))
@@ -1870,6 +1860,7 @@ test('历史回放：没有待办的历史页不碰顶部条', async () => {
   await flush()
   assert.deepEqual(p.data.todos, [], '没有待办快照就不该凭空出现一条')
 })
+
 
 test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 base64；不压缩、保留扩展名', async () => {
   const p = makePage()
@@ -1900,6 +1891,7 @@ test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 
   )
 })
 
+
 test('文件附件：与图片可以同一条消息带（协议里是两个独立字段）', async () => {
   const p = makePage()
   const calls = stubReceipt(p, { ok: true })
@@ -1922,6 +1914,7 @@ test('文件附件：与图片可以同一条消息带（协议里是两个独�
   assert.equal(calls[0].images.length, 1, '图走 images')
   assert.equal(calls[0].files.length, 1, '文件走 files，两个字段互不干扰')
 })
+
 
 test('文件附件：超预算被挡下并说清该减哪一个（不静默丢弃）', async () => {
   const p = makePage()
@@ -1946,6 +1939,7 @@ test('文件附件：超预算被挡下并说清该减哪一个（不静默丢�
 
 /* ── 附件的界面结构：两个入口、一张角标、一行说明 ─────────────────────── */
 
+
 test('wxml：加号一个入口管两样，没有旁边的第二个按钮', () => {
   const { readFileSync } = require('node:fs')
   const wxml = fs.readFileSync(
@@ -1969,6 +1963,7 @@ test('wxml：加号一个入口管两样，没有旁边的第二个按钮', () =
 
 
 
+
 test('长按复制：助手回复同样能复制（markdown 原文）', () => {
   const p = makePage()
   globalThis.__drcClipboard = undefined
@@ -1976,6 +1971,7 @@ test('长按复制：助手回复同样能复制（markdown 原文）', () => {
   p.onCopyMessage({ currentTarget: { dataset: { text: md } } })
   assert.equal(globalThis.__drcClipboard, md, '复制的是模型原文，不是渲染后的版本')
 })
+
 
 test('长按复制：空文本不动作（不许用空串覆盖用户已复制的东西）', () => {
   const p = makePage()
@@ -1987,6 +1983,7 @@ test('长按复制：空文本不动作（不许用空串覆盖用户已复制�
   p.onCopyMessage({})
   assert.equal(globalThis.__drcClipboard, '用户之前复制的')
 })
+
 
 test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
   const { readFileSync } = require('node:fs')
@@ -2009,6 +2006,7 @@ test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑'
 
 
 
+
 test('长按复制：助手回复同样能复制（markdown 原文）', () => {
   const p = makePage()
   globalThis.__drcClipboard = undefined
@@ -2016,6 +2014,7 @@ test('长按复制：助手回复同样能复制（markdown 原文）', () => {
   p.onCopyMessage({ currentTarget: { dataset: { text: md } } })
   assert.equal(globalThis.__drcClipboard, md, '复制的是模型原文，不是渲染后的版本')
 })
+
 
 test('长按复制：空文本不动作（不许用空串覆盖用户已复制的东西）', () => {
   const p = makePage()
@@ -2027,6 +2026,7 @@ test('长按复制：空文本不动作（不许用空串覆盖用户已复制�
   p.onCopyMessage({})
   assert.equal(globalThis.__drcClipboard, '用户之前复制的')
 })
+
 
 test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
   const { readFileSync } = require('node:fs')
@@ -2050,6 +2050,7 @@ test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑'
 
 /* ── 加号弹选择：图片 / 文件（2026-10-05 用户：文件要放在加号里面） ────── */
 
+
 test('加号先弹选择：两项，图片在前文件在后', () => {
   const p = makePage()
   globalThis.__drcSheetItems = undefined
@@ -2057,6 +2058,7 @@ test('加号先弹选择：两项，图片在前文件在后', () => {
   p.onAttach()
   assert.deepEqual(globalThis.__drcSheetItems, ['图片', '文件'], '选择就这两项，顺序按常用排')
 })
+
 
 test('加号 -> 选文件：走 chooseMessageFile，落成 file 附件', async () => {
   const p = makePage()
@@ -2070,6 +2072,7 @@ test('加号 -> 选文件：走 chooseMessageFile，落成 file 附件', async (
   assert.equal(got[0].name, 'report.pdf', '扩展名要留着（Agent 认文件靠它）')
 })
 
+
 test('加号 -> 选图片：走 chooseMedia，落成 image 附件', async () => {
   const p = makePage()
   globalThis.__drcSheetTap = 0
@@ -2079,6 +2082,7 @@ test('加号 -> 选图片：走 chooseMedia，落成 image 附件', async () => 
   assert.equal(got.length, 1, '选完图就该有一个附件')
   assert.notEqual(got[0].kind, 'file', '走的是图片那条链，不是文件')
 })
+
 
 test('加号：满了不弹选择，直接说满（不浪费一次点击）', () => {
   const p = makePage()
@@ -2099,190 +2103,6 @@ test('加号：满了不弹选择，直接说满（不浪费一次点击）', ()
 
 /* ── 排队双向同步：主机是真相源，手机能删 ─────────────────────────────── */
 
-test('ev.queue 快照整体替换 pending：手机是镜子，不本地增删', () => {
-  const p = makePage()
-  p.setData({ pending: [{ key: 'stale', text: '本机残留', state: 'held' }] })
-  p._onEvent({
-    kind: 'payload',
-    payload: {
-      t: 'ev.queue',
-      sessionId: 's1',
-      items: [
-        { queueId: 'q-a', text: '第一条', state: 'held' },
-        { queueId: 'q-b', text: '', images: 2, files: 1, state: 'sent' },
-        { queueId: 'q-c', text: '没发出去', state: 'failed', message: '拿不到模型' },
-      ],
-    },
-  })
-  const rows = p.data.pending
-  assert.equal(rows.length, 3, '整份替换：本机那条 stale 必须消失')
-  assert.equal(rows[0].key, 'q-a', 'key 用主机给的 queueId，删除才对得上')
-  assert.equal(rows[1].state, 'sent', 'sent 要透出：手机据此收起删除按钮')
-  assert.equal(rows[2].message, '拿不到模型', '失败原因要带到，只说失败没法排查')
-  // 只有附件的一条：两个计数都要在（界面说“附件 N 项”）
-  assert.equal(rows[1].images, 2)
-  assert.equal(rows[1].files, 1)
-})
-
-test('ev.queue 不是本会话的要忽略（排队消息不许串到别的会话去）', () => {
-  const p = makePage()
-  p.setData({ pending: [] })
-  p._onEvent({
-    kind: 'payload',
-    payload: { t: 'ev.queue', sessionId: 'other-session', items: [{ queueId: 'q-x', text: '别处的', state: 'held' }] },
-  })
-  assert.equal(p.data.pending.length, 0)
-})
-
-test('删除：held 的问主机，主机答应了就完事', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  p.setData({ pending: [{ key: 'q-1', queueId: 'q-1', text: '删我', state: 'held' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-1' } } })
-  assert.deepEqual(globalThis.__drcDropped, ['q-1'], '删除要真的发命令给主机')
-})
-
-test('删除：主机说删不掉（已经跑起来了）就照实说，不假装删掉', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropFail = '这条已经发给主机在跑了，撤不回来'
-  p.setData({ pending: [{ key: 'q-2', queueId: 'q-2', text: '别删我', state: 'held' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-2' } } })
-  // 主机拒了：本地这条还在（等下一帧快照纠正，但绝不能自己先抹掉）
-  assert.equal(p.data.pending.length, 1, '主机不答应就不能本地删——那是假删除')
-  assert.equal(p.data.pending[0].key, 'q-2')
-})
-
-
-test('删除：failed 的本机就能删（主机从没发出去过）', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  p.setData({
-    pending: [
-      { key: 'q-4', queueId: 'q-4', text: '留', state: 'held' },
-      { key: 'q-5', queueId: 'q-5', text: '删', state: 'failed', message: 'x' },
-    ],
-  })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-5' } } })
-  assert.deepEqual(globalThis.__drcDropped, [], 'failed 的不必问主机')
-  assert.equal(p.data.pending.length, 1)
-  assert.equal(p.data.pending[0].key, 'q-4', '只删点那一条')
-})
-
-test('删除：sent 的先问一句，确认后问主机中断（不是静默回绝）', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  globalThis.__drcModal = null
-  p.setData({ pending: [{ key: 'q-3', queueId: 'q-3', text: '在跑了', state: 'sent' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-3' } } })
-  // 必须先问：嘴上说"取消"其实是中断整轮，不问就发出去比无法取消更吓人
-  assert.ok(globalThis.__drcModal, 'sent 的取消必须先弹确认')
-  assert.match(String(globalThis.__drcModal.content), /中断/, '确认框要写明这是中断，不是删除')
-  assert.equal(String(globalThis.__drcModal.confirmText), '中断', '确认按钮就叫中断')
-  // 没点确认就不该发给主机
-  assert.deepEqual(globalThis.__drcDropped, [], '没确认就不许发给主机')
-
-  // 点了确认：真的发出去（主机那头是中断）
-  globalThis.__drcModal.success({ confirm: true })
-  assert.deepEqual(globalThis.__drcDropped, ['q-3'], '确认后要真的去问主机')
-})
-
-test('删除：held 的不问，直接问主机拿掉', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  globalThis.__drcModal = null
-  p.setData({ pending: [{ key: 'q-9', queueId: 'q-9', text: '还扣着', state: 'held' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-9' } } })
-  assert.equal(globalThis.__drcModal, null, 'held 还没有副作用，不问')
-  assert.deepEqual(globalThis.__drcDropped, ['q-9'], 'held 直接问主机删')
-})
-
-test('删除：failed 的本机就删，不问主机也不弹确认', () => {
-  const p = makePage()
-  stubClient(p)
-  globalThis.__drcDropped = []
-  globalThis.__drcModal = null
-  p.setData({ pending: [{ key: 'q-7', queueId: 'q-7', text: '没发出去', state: 'failed' }] })
-  p.onDropQueued({ currentTarget: { dataset: { key: 'q-7' } } })
-  assert.equal(globalThis.__drcModal, null, 'failed 不需要确认')
-  assert.deepEqual(globalThis.__drcDropped, [], 'failed 主机从没收过，别浪费往返')
-  assert.equal(p.data.pending.length, 0, 'failed 本机就删掉')
-})
-
-test('wxml：删除按钮三种状态都给，不再只给非 sent 的', () => {
-  const wxml = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
-    'utf8',
-  )
-  // 旧版是 wx:if="{{item.state !== 'sent'}}"——用户看到的就是 "mp 端无法取消"
-  assert.ok(!wxml.includes("item.state !== 'sent'"), 'sent 也要给删除按钮')
-  assert.match(wxml, /class="queue-del"[^>]*catchtap="onDropQueued"/, '删除按钮要一直在')
-  // 在跑的那一条要有可见标记，否则用户分不出谁在跑
-  assert.ok(wxml.includes('queue-state'), 'sent 那条要有在跑标记')
-  assert.ok(wxml.includes('在跑'), '标记文案要直接说在跑')
-  // 主机侧发起的回合也要能显示（dsh 为准）
-  assert.ok(wxml.includes('item.text'), '排队条目要显示文字（主机侧回合靠它露出）')
-})
-
-test('mp 端进入会话会主动问主机要排队，不靠被动推送（2026-10-05 用户实测第三点）', () => {
-  const chat = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
-    'utf8',
-  )
-  // ev.queue 只在主机状态变化时推。进会话 / 切回前台 / 刚重连这三个时刻
-  // 主机什么都没发生，于是没有任何一帧会来——不是同步慢，是没有触发点。
-  assert.match(chat, /_pullQueue/, '必须有主动拉取的方法')
-  // 拉取必须挂在 onShow 上：这三个时刻都只触发 onShow
-  const onShow = chat.slice(chat.indexOf('onShow: function'), chat.indexOf('onLoadEarlier:'))
-  assert.match(onShow, /_pullQueue\(\)/, 'onShow 必须拉一次排队')
-
-  const client = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/core/client.js'),
-    'utf8',
-  )
-  assert.match(client, /getQueue\s*\(/, 'client 必须有 getQueue')
-  assert.match(client, /cmd\.get_queue/, '必须发 cmd.get_queue')
-  // sessionId 不能漏：主机按会话过滤，漏了就串台
-  const m = client.match(/getQueue\(sessionId\)\s*\{[\s\S]{0,320}?\}/)
-  assert.ok(m, 'getQueue 方法体要能取到')
-  assert.match(m[0], /sessionId/, '必须带 sessionId')
-})
-
-test('mp 端拉取失败时不清空已有排队（老主机不认识这条命令）', () => {
-  const chat = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
-    'utf8',
-  )
-  const i = chat.indexOf('_pullQueue: function')
-  const body = chat.slice(i, chat.indexOf('},', i) + 2)
-  // 失败路径必须直接 return，不能顺手 setData({pending: []})
-  assert.ok(/r\.ok !== true\) return/.test(body), '回执不 ok 就要直接返回')
-  assert.ok(!/pending:\s*\[\]/.test(body), '拉取失败不许把排队清空——那会让用户以为消息没了')
-})
-
-test('排队条只由主机给：mp 端不做本地增删（以 dsh 为准）', () => {
-  const chat = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.js'),
-    'utf8',
-  )
-  // 映射收敛到 _applyQueue 一处：ev.queue 与 cmd.get_queue 回执共用
-  assert.match(chat, /_applyQueue: function/, '要有统一的映射入口')
-  assert.match(chat, /_onQueue: function ?\(p\)\s*\{\s*this\._applyQueue/, 'ev.queue 走统一映射')
-  assert.match(chat, /_applyQueue\(d\.items \|\| \[\]\)/, 'get_queue 回执也走统一映射')
-  // 发送成功后不许自己往 pending 里塞（那会与主机状态分叉）
-  // 只看 sendDrop 方法体本身（下一处缩进回到 2 空格的成员定义即止）
-  const dropIdx = chat.indexOf('sendDrop: function')
-  const after = chat.slice(dropIdx)
-  const end = after.search(/\n  [a-zA-Z_]+: function/)
-  const dropBody = after.slice(0, end > 0 ? end : 600)
-  assert.ok(!/setData/.test(dropBody), '删除后不要本地改 pending，等主机回执')
-  assert.match(dropBody, /dropQueued/, '必须真的问主机')
-})
-
 
 test('模型按会话：ev.model 带 sessionId，mp 端不再豁免会话过滤（2026-10-05 实测串台）', () => {
   const proto = fs.readFileSync(path.join(ROOT, 'dsh-remote-protocol/src/wire/payloads.ts'), 'utf8')
@@ -2298,6 +2118,7 @@ test('模型按会话：ev.model 带 sessionId，mp 端不再豁免会话过滤�
   assert.match(chat, /if \(p\.sessionId \|\| !this\.data\.modelName\) this\._onModel\(p\)/,
     '无 sessionId 的旧帧只做兜底，不能覆盖已有的正确模型名')
 })
+
 
 test('模型的数据源是 request/header，不是宿主全局默认模型', () => {
   const carrier = fs.readFileSync(
@@ -2315,3 +2136,55 @@ test('模型的数据源是 request/header，不是宿主全局默认模型', ()
   assert.match(runtime, /broadcastModel\(event\.sessionId, event\.model/, '按会话广播')
 })
 
+
+/**
+ * 取消排队之后的新约定（2026-10-05 用户拍板）。三条都要钉：
+ *
+ * 1) 执行中不许提交。判据钉 onSend 那一层而不是只钉按钮：键盘的 send 走
+ *    bindconfirm，绕得过去，只在 wxml 上拦会漏。
+ * 2) 发送键在执行中变中断键——同一位置、同一形状，文案说清身份变了。
+ * 3) 顶栏那颗中断键取消：同一个动作挂两处，用户会怀疑哪颗是真的。
+ *
+ * 顺带钉住「执行中照发」这个老行为**不再**成立——它当年是为了配合
+ * 主机侧排队；队列没了还留着，就等于把消息丢进一个没人消费的 inbox。
+ */
+test('执行中不许提交：onSend 被 running 挡住，输入框与附件都留着', () => {
+  const p = readyAtBottom()
+  p.setData({ running: true, inputText: '再补一句', attachCount: 0 })
+  const sent = []
+  p.client.sendPromptReceipt = (...a) => {
+    sent.push(a)
+    return Promise.resolve({ ok: true })
+  }
+  p.onSend()
+  assert.equal(sent.length, 0, '执行中还是把消息发出去了：主机那边没有队列，它会掉进 agent inbox 没人管')
+  assert.equal(p.data.inputText, '再补一句', '被挡住的那次提交不该把用户已经打好的字吞掉')
+})
+
+test('不执行中：onSend 正常发出去，并且清空输入', () => {
+  const p = readyAtBottom()
+  p.setData({ running: false, inputText: '发出去', attachCount: 0 })
+  const sent = []
+  p.client.sendPromptReceipt = (...a) => {
+    sent.push(a)
+    return Promise.resolve({ ok: true })
+  }
+  p.onSend()
+  assert.equal(sent.length, 1, '空闲时反而发不出去：这是最常见的那条路，坏了整页就不能用了')
+  assert.equal(p.data.inputText, '', '发出去了就该清空，不然下一条会带上上一条')
+})
+
+test('发送键在执行中变中断键；顶栏不再挂第二颗中断键', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  assert.match(
+    wxml,
+    /wx:if="\{\{running\}\}"[\s\S]{0,80}composer-send composer-stop/,
+    '执行中那颗键没有变成中断键：用户只能去别处找停止，而那个入口已经被取消了',
+  )
+  assert.match(wxml, /bindtap="onInterrupt"/, '执行中那颗键没有绑中断')
+  assert.doesNotMatch(
+    wxml,
+    /class="bar-stop"/,
+    '顶栏还挂着中断键：同一个动作两个入口，而且它在拇指最难够到的位置',
+  )
+})
