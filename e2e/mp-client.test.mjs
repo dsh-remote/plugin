@@ -508,11 +508,24 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
       label: 'pill 抬头那句从"已配对"变成"未配对"',
       trail: [{ kind: 'check', status: '打 pill status 路由读 paired' }],
     })
-    // 会话必须**留着**（D3：手机回前台要用同一个 convId 回来）——所以这条同时钉住
-    // "pill 不再拿会话数冒充手机数"：会话还在，但 pill 已经不把它算成已连接了。
-    assert.ok(
-      host.state().conversations >= 1,
-      `会话不该被解配删掉（D3），读到 ${host.state().conversations}`,
+    // 会话必须**一起作废**（2026-10-05 用户报：「mp 端解除配对，dsh 端执行的是手机离线」）。
+    //
+    // 这一条原来钉的是**反面**：会话必须留着，理由是 D3。但 mp 的 unpair() 里
+    // `_forgetPairing()` 已经把 convId 清了，**它再也不会带这个 convId 回来**——
+    // 于是留着它就是一条永远清不掉的幽灵：pairedClients 归 0 而 conversations 恒为 1，
+    // pill 于是永远停在「手机离线」，用户永远等不到「未配对」。
+    //
+    // D3 保的是**掉线**（切后台、断网）那条路，手机会带着同一个 convId 回来；
+    // 主动解配是另一回事，它本来就是不可逆的。两条路现在由 peer-left.unpaired 分开。
+    await untilAsync(async () => (await host.callPill(PILL_STATUS)).body.pairings === 0, {
+      timeoutMs: 5_000,
+      label: 'pill 的配对数也归零（会话已作废，不该停在「手机离线」）',
+      trail: [{ kind: 'check', status: '打 pill status 路由读 pairings' }],
+    })
+    assert.equal(
+      host.state().conversations,
+      0,
+      `手机已经解配、convId 也清掉了，主机却还留着这条会话（读到 ${host.state().conversations}）：它永远清不掉`,
     )
   })
 
