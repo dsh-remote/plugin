@@ -442,7 +442,7 @@ const SHOTS = {
           { key: 'r1', kind: 'turn', label: '第 1 轮', time: '23:30' },
           { key: 'u1', kind: 'user', text: '排队和待办别打架', confirmed: true },
         ],
-        queue: [{ key: 'q1', text: '这条排在下面，不跟待办抢地方', images: [] }],
+        pending: [{ key: 'q1', queueId: 'q1', text: '这条排在下面，不跟待办抢地方', state: 'held', images: 0, files: 0 }, { key: 'q2', queueId: 'q2', text: '主机已经在跑这条了', state: 'sent', images: 0, files: 0 }],
         queueOpen: true,
       },
     },

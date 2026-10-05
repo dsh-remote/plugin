@@ -220,6 +220,8 @@ function makePage() {
   // 加号选择的归零：不归零的话，上一条用例选了"文件"，下一条用例点加号
   // 也会进文件链——两个用例都莫名失败（本次真实踩到）。
   globalThis.__drcSheetTap = 0
+  globalThis.__drcDropped = []
+  globalThis.__drcDropFail = ''
   globalThis.__drcSheetItems = undefined
   ctx.onLoad({ id: 's1', title: '测试会话' })
   live.push(ctx)
@@ -839,6 +841,12 @@ function stubClient(p, handler) {
     listSessions: () => {},
     sendPrompt: () => {},
     sendPromptReceipt: () => Promise.resolve({ ok: true }),
+  // dropQueued: delete a queued message. __drcDropFail non-empty = host refuses
+  dropQueued: function (sessionId, queueId) {
+    globalThis.__drcDropped = (globalThis.__drcDropped || []).concat([queueId])
+    var fail = globalThis.__drcDropFail
+    return Promise.resolve(fail ? { ok: false, message: fail } : { ok: true })
+  },
   }
   return calls
 }
@@ -2056,5 +2064,96 @@ test('加号：满了不弹选择，直接说满（不浪费一次点击）', ()
   p.onAttach()
   assert.equal(globalThis.__drcSheetItems, undefined, '满了以后连选择都不该弹')
   assert.equal(p.data.attachments.length, 4, '也不许多收')
+})
+
+
+/* ── 排队双向同步：主机是真相源，手机能删 ─────────────────────────────── */
+
+test('ev.queue 快照整体替换 pending：手机是镜子，不本地增删', () => {
+  const p = makePage()
+  p.setData({ pending: [{ key: 'stale', text: '本机残留', state: 'held' }] })
+  p._onEvent({
+    kind: 'payload',
+    payload: {
+      t: 'ev.queue',
+      sessionId: 's1',
+      items: [
+        { queueId: 'q-a', text: '第一条', state: 'held' },
+        { queueId: 'q-b', text: '', images: 2, files: 1, state: 'sent' },
+        { queueId: 'q-c', text: '没发出去', state: 'failed', message: '拿不到模型' },
+      ],
+    },
+  })
+  const rows = p.data.pending
+  assert.equal(rows.length, 3, '整份替换：本机那条 stale 必须消失')
+  assert.equal(rows[0].key, 'q-a', 'key 用主机给的 queueId，删除才对得上')
+  assert.equal(rows[1].state, 'sent', 'sent 要透出：手机据此收起删除按钮')
+  assert.equal(rows[2].message, '拿不到模型', '失败原因要带到，只说失败没法排查')
+  // 只有附件的一条：两个计数都要在（界面说“附件 N 项”）
+  assert.equal(rows[1].images, 2)
+  assert.equal(rows[1].files, 1)
+})
+
+test('ev.queue 不是本会话的要忽略（排队消息不许串到别的会话去）', () => {
+  const p = makePage()
+  p.setData({ pending: [] })
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.queue', sessionId: 'other-session', items: [{ queueId: 'q-x', text: '别处的', state: 'held' }] },
+  })
+  assert.equal(p.data.pending.length, 0)
+})
+
+test('删除：held 的问主机，主机答应了就完事', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  p.setData({ pending: [{ key: 'q-1', queueId: 'q-1', text: '删我', state: 'held' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-1' } } })
+  assert.deepEqual(globalThis.__drcDropped, ['q-1'], '删除要真的发命令给主机')
+})
+
+test('删除：主机说删不掉（已经跑起来了）就照实说，不假装删掉', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropFail = '这条已经发给主机在跑了，撤不回来'
+  p.setData({ pending: [{ key: 'q-2', queueId: 'q-2', text: '别删我', state: 'held' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-2' } } })
+  // 主机拒了：本地这条还在（等下一帧快照纠正，但绝不能自己先抹掉）
+  assert.equal(p.data.pending.length, 1, '主机不答应就不能本地删——那是假删除')
+  assert.equal(p.data.pending[0].key, 'q-2')
+})
+
+test('删除：sent 的本地就回绝，不麻烦主机', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  p.setData({ pending: [{ key: 'q-3', queueId: 'q-3', text: '在跑了', state: 'sent' }] })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-3' } } })
+  assert.deepEqual(globalThis.__drcDropped, [], 'sent 的发过去也删不掉，别浪费一次往返')
+  assert.equal(p.data.pending.length, 1)
+})
+
+test('删除：failed 的本机就能删（主机从没发出去过）', () => {
+  const p = makePage()
+  stubClient(p)
+  globalThis.__drcDropped = []
+  p.setData({
+    pending: [
+      { key: 'q-4', queueId: 'q-4', text: '留', state: 'held' },
+      { key: 'q-5', queueId: 'q-5', text: '删', state: 'failed', message: 'x' },
+    ],
+  })
+  p.onDropQueued({ currentTarget: { dataset: { key: 'q-5' } } })
+  assert.deepEqual(globalThis.__drcDropped, [], 'failed 的不必问主机')
+  assert.equal(p.data.pending.length, 1)
+  assert.equal(p.data.pending[0].key, 'q-4', '只删点那一条')
+})
+
+test('wxml：删除按钮只给非 sent 的；只有附件的消息说“附件 N 项”', () => {
+  const { readFileSync } = require('node:fs')
+  const wxml = readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'), 'utf8')
+  assert.match(wxml, /wx:if="\{\{item.state !== 'sent'\}\}"[^>]*catchtap="onDropQueued"/)
+  assert.match(wxml, /item.text \|\| \('附件 ' \+ \(item\.images \+ item\.files\) \+ ' 项'\)/)
 })
 
