@@ -132,17 +132,19 @@ test('工作区 tag：完整路径取最后一段，空路径不出 chip；sortA
   }
 })
 
-test('wxml/wxss：项目名在卡片右上角、纯文字无底色（2026-10-05 用户：放右上角，像分类卡）', () => {
+test('wxml/wxss：一条会话一张卡；项目名是描边小胶囊（2026-10-05 用户：做成卡片 + 项目文字得有样式）', () => {
   const { readFileSync } = require('node:fs')
   const page = path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions')
   const wxml = readFileSync(path.join(page, 'sessions.wxml'), 'utf8')
   const wxss = readFileSync(path.join(page, 'sessions.wxss'), 'utf8')
 
-  // ① 标题行容器还是不能回来——chip 跟标题挤一行的老问题
-  assert.ok(!wxml.includes('sess-title-row'), '标题行容器必须删掉：chip 不跟标题挤一行了')
+  // ① 卡片化：每条会话节点自己带 card 类。以前是外层一张大卡 + .sess-line
+  //    灰线切开，现在卡下沉到每一行，卡间用 margin 留缝。
+  assert.match(wxml, /class="card sess"/, '每条会话要自己带 card 类：一会话一卡，不是一张卡切几行')
+  assert.ok(!wxml.includes('sess-line'), '细线分隔必须删掉：横线是上一版的做法，卡片之间用 margin 留缝')
+  assert.match(wxss, /\.sess\s*\{[^}]*margin-bottom/, '卡片之间要有 margin-bottom 才看得成一张张的卡')
 
-  // ② 位置：右列第一项、徽标之前，才是"卡片右上角"
-  //    （在徽标下面 = 右侧中间，那不是用户要的）
+  // ② 位置：右列第一项、徽标之前，才是卡片右上角
   assert.match(
     wxml,
     /<view class="sess-right">[\s\S]*?<view wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag">[\s\S]*?<view class="sess-badge/,
@@ -150,20 +152,22 @@ test('wxml/wxss：项目名在卡片右上角、纯文字无底色（2026-10-05 
   )
   assert.match(wxml, /wx:if="{{item.workspaceTag}}"[^>]*class="sess-tag"/, '只在有工作区时渲染')
 
-  // ③ 去掉标签样式：.sess-tag 里不许有 background / padding / border-radius。
-  //    少了底色 padding 圆角却留着的话，它还是个方块（只是空心的），
-  //    而分类卡的角标就是一行纯文字。
+  // ③ 项目名得有样式，但**不能是实心**。
+  //    实心 = 跟右侧状态徽标（空闲/运行中/待审批）同一种视觉语言，
+  //    两样东西会被读成一类。所以：有 border / padding / border-radius，
+  //    但不许有 background。描边=分类，实心=状态。
   const tagRule = (wxss.match(/\.sess-tag\s*\{([^}]*)\}/) || [, ''])[1]
   assert.ok(tagRule.length > 0, '找不到 .sess-tag 规则')
   assert.match(tagRule, /font-size:\s*20rpx/, '字号要小一档（20rpx）才能当角标')
-  assert.ok(!/background/.test(tagRule), '项目名不许有底色：纯文字角标，底色会在右上角压出一块色斑')
-  assert.ok(!/padding/.test(tagRule), '去掉标签样式 = padding 一起去掉，不然底色没了还是个方块')
-  assert.ok(!/border-radius/.test(tagRule), '去掉标签样式 = 圆角一起去掉')
+  assert.match(tagRule, /border:/, '项目名不能再是纯文字：得有描边才谈得上样式')
+  assert.match(tagRule, /padding:/, '描边胶囊要有 padding，否则文字贴边框')
+  assert.match(tagRule, /border-radius:/, '要有圆角，那是胶囊形')
+  assert.ok(!/background/.test(tagRule), '不许实心：实心就和右侧状态徽标混成一类了')
 
-  // ④ 整行顶对齐：不改成 flex-start 的话，多出来的角标会把右列撑高，
-  //    而 align-items:center 会让整段掉到徽标上面而不是卡片右上角。
-  assert.match(wxss, /\.sess\s*\{[^}]*align-items:\s*flex-start/, '整行必须顶对齐，否则角标贴不到卡片右上角')
+  // ④ 整行顶对齐，否则角标贴不到卡片右上角
+  assert.match(wxss, /\.sess\s*\{[^}]*align-items:\s*flex-start/, '整行必须顶对齐')
 })
+
 
 test('系统栏每次 onShow 都要重设：从 chat 返回时微信会用静态白把顶栏冲掉（用户实测）', () => {
   const p = makePage()
