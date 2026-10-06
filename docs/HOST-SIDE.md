@@ -75,6 +75,23 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 8; open -a "De
 
 ## 4. 配置（profile 的 `cordis.patch.yml` 里那条 `dsh-remote-control`）
 
+⚠️ **这张表的两个方向都有机械判据守着**（`e2e/host-config-docs.test.mjs`，伞仓侧，
+因为插件仓看不到本文件）：表里的每个键必须在 `shell/config.ts` 里真的存在；
+`config.ts` 的每个键、以及它读的每个 `DRC_*`，都必须在这张表里被点名。
+
+为什么值得较真——插件的配置是"**写了不报错、不告警、不生效**"那一类：读不认识的键
+不会失败，只是静默用默认值。于是**表里多一行**（照着配了一个不存在的开关）和
+**表里少一行**（有个开关没人知道）后果完全一样。
+
+2026-10-06 真去数了一遍，两个方向各抓到一处，都已订正：
+
+- 表里有 `takeOverQuestions` / `DRC_TAKE_OVER_QUESTIONS`，而代码里**根本没有这个键**
+  ——这一代宿主上 `userQuestions.registerProvider` 不存在（`platform/guard.ts` 记着），
+  功能早没了，行却一直留着。
+- 代码里有 5 个键表里一个都没有：`pairStoreFile`、`restoredIdleTtlSec`、`uploadDir`、
+  `maxFileBytes`、`newSessionCwd`。前两个决定"密钥落在哪、免扫码续用能活多久"，
+  后两个决定"附件落在哪"，最后一个直接决定"新建会话落在 DSH 的哪个分组"。
+
 优先级：**环境变量 > patch 注入的 config > 默认值**。键名一律沿用旧名——这些键写在用户机器的
 patch 里，改名等于让线上配置静默失效。
 
@@ -91,11 +108,15 @@ patch 里，改名等于让线上配置静默失效。
 | `pill.enabled` | `true` | `DRC_PILL=0/1` | 状态栏那颗 pill = **配对的唯一入口**。关掉它这台主机就没有配对入口，`status.json` 会留一条 `warn:pill` 与 `pill:"disabled"`。这个键**只 warn 不 error**（error 会让主插件整个不启动，等于把界面功能变成配对链路的单点） |
 | `keepAwake.enabled` / `.idleReleaseSec` / `.keepDisplay` | `true` / `300` / `false` | — | 只在"会话运行中 / 有审批或提问挂起"时持锁 |
 | `unarchiveOnPrompt` | `true` | — | 对归档会话下发指令时自动恢复 |
-| `takeOverQuestions` | `false` | `DRC_TAKE_OVER_QUESTIONS=1` | 会剥夺桌面 UI 的提问能力（`ctx.userQuestions` 只允许一个活跃 provider），所以默认关 |
 | `approvalTimeoutSec` | `180` | — | 审批卡超时 |
 | `listingRefreshSec` | `15` | — | 会话列表刷新周期 |
 | `conversationIdleTtlSec` | `86400` | — | 配对通道空闲剪枝（0/非法值**不表示永不剪枝**，会夹回默认） |
 | `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里 stdout 没人看，这是唯一排错入口） |
+| `pairStoreFile` | `~/.dsh/dsh-remote-control/conversations-<hostId>.json` | — | 配对通道的密钥簿落盘路径（**落的是 PSK，不是派生密钥**：派生是纯函数，存派生结果等于多一份必须永远相等的第二真相）。它让「主机重启 → 手机免扫码续用」成立；置空则每次重启都要重扫 |
+| `restoredIdleTtlSec` | `604800`（7 天） | — | **从盘上恢复的**会话多久没收发可以剪。与上一行那条分开：恢复出来的不是"新配了没人用"，而是"早就配好了、主机重启了"，按 24 小时剪等于每次长假都把唯一那条通道清掉。默认与中继的空闲 TTL 对齐 |
+| `uploadDir` | `''`（自动：`status.json` 同目录的 `uploads/`） | — | **附件落盘目录**。目录里会积累用户发过的每一张图/文件，所以要能指向一个有清理策略的位置（如 tmp）。默认值偏向"找得到"而不是"省地方" |
+| `maxFileBytes` | `524288`（512KB） | — | 单个文件附件的字节上限。中继单帧 1MB 是硬上限，而文件没有压缩这一步 |
+| `newSessionCwd` | `''`（自动推断） | `DRC_NEW_SESSION_CWD` | 新建会话落在哪个项目目录。**置空（默认）时主机自己推断**：配置 → 最后操作过的那条会话的目录 → 往前扫第一条带 cwd 的会话 → 宿主默认（真机上是 `/`，那条会话就会落进 DSH 的**未分组**） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
 
 **`hostId` 那条是实测行为，不是抄文档**：留空时插件每次加载随机生成 `h_<6 hex>`
