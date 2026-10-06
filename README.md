@@ -80,7 +80,7 @@ cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile &
 cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
 
 # 伞仓：取证与运维
-env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（295）+ 本地全链路 17 步
+env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（297）+ 本地全链路 17 步
 env -u NODE_OPTIONS node e2e/run.mjs    # 只跑本地全链路
 ```
 
@@ -123,7 +123,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 464 |
 | `npm --prefix dsh-remote-mp run check` | 小程序**四道闸**（`check` = verify + md + theme:check + contrast）：verify-miniprogram 结构自检（JSON / 页面 / 组件引用 / 自研 JS 的声明一致性）、markdown 规范（32 项）、theme:check（主题文件与生成器同步）、对比度（304 组） | 全过 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock）。**跑之前先过产物新鲜度闸门**（逐文件比对 src↔dist 的 mtime：改了 src 没 build 时直接红，测的不是旧产物） | 17 步 |
-| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 295 |
+| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 297 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
 | `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（**图片 PNG / 裸矩阵两条路径**；文本字形那条已随文本码一起删掉） | 28 组 ×2 |
 
@@ -169,6 +169,7 @@ env -u NODE_OPTIONS pnpm gates        # = node scripts/report-gates.mjs
 |---|---|
 | `e2e/readme-claims.test.mjs` | README 与 `docs/PRODUCT.md`：四条宿主路由的条数与路径、`/healthz` 落盘五字段、mp `check` 链上的每一道闸都被点名、本地全链路步数、「文档」小节的链接、四份文档的表格没有残缺行；`docs/SECURITY.md` 的每一条代码引用都指向真实文件；PRODUCT.md 不把**已实现**的事留在「明确不做/待办」里 |
 | `e2e/wire-surface.test.mjs` | 小程序引用的每个 `ev.*` / `cmd.*` 在协议层都存在，且协议层的每个都被小程序引用过——分发是一条**没有 else** 的 if 链，失配的表现是"什么都不发生" |
+| `e2e/frame-budget.test.mjs` | 生产端三处体积预算（mp 附件顶格 / 一帧流式增量 / 一整页历史）与中继那条 1 MiB 硬帧上限的关系，用**真实 `seal()`** 量而不是公式估；以及 mp 发送前的帧闸必须装得下附件能产出的最坏帧 |
 | `e2e/host-config-docs.test.mjs` | `docs/HOST-SIDE.md` 配置表与 `shell/config.ts` 逐项对齐：表里的键代码里存在、代码里的键表里点名、`DRC_*` 双向对得上——插件配置是"写了不报错、不告警、不生效"那一类 |
 
 它的由来是一次真实漂移：`check` 实际是四道闸而 README 写着「三道」、那个「32 项」

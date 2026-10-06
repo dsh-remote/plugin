@@ -355,7 +355,26 @@ export function kernelAt(index) {
 
 export async function startRelay({ port, env = {}, label = '中继' } = {}) {
   installFrameTap()
-  const chosen = port ?? (await pickFreePort())
+  // 端口抢不到就换一个再来（2026-10-06 审计）。
+  //
+  // `pickFreePort()` 是"绑 0 → 读端口 → **关掉** → 调用方再去 spawn 子进程绑它"，
+  // 中间那一段是经典的 TOCTOU：两次并行的测试跑（我本轮就撞到过两次——一次 e2e 红、
+  // 一次 report-gates 挂住）会拿到**同一个**端口，后起来的中继绑不上，
+  // 而现象是"整套 e2e 随机红几��"——看不出是自己的 bug。
+  //
+  // 显式传了 `port` 的调用方要的就是那个端口，不重试（那是它在跟别的东西约好）。
+  const attempts = port === undefined ? 3 : 1
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await startRelayOnce({ port, env, label, chosen: port ?? (await pickFreePort()) })
+    } catch (error) {
+      if (attempt >= attempts) throw error
+      await delay(120 * attempt)
+    }
+  }
+}
+
+async function startRelayOnce({ port, env, label, chosen }) {
   const child = spawn(process.execPath, [RELAY_MAIN], {
     env: {
       ...process.env,
