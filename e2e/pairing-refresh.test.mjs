@@ -19,17 +19,24 @@
  * + 真小程序客户端代码。判据只可能这样写——单测里的假发码器不会告诉你
  * "那张码中继根本不认"。
  *
- * ## 已知不稳定（2026-10-06 实测，别当成自己写坏了）
+ * ## 已知不稳定：中继日志级别会决定它红不红（2026-10-06 实测）
  *
- * 下面第 2 条**间歇性**红：实测 `node --test pairing-refresh.test.mjs` 连跑 8 次红 2 次
- * （约 25%）。失败形态固定是「扫屏幕上那张码失败：等不到配对完成（手机 status=online）」，
- * 事件轨迹 `connecting → pairing → needs-pair` —— 即中继回了 `pair-fail`（reason 在 info
- * 日志里，见 before() 把它调到 info 的那条注释）。
+ * 下面第 2 条在 `DRC_LOG_LEVEL=warn` 下**间歇性**红：连跑 8 次红 2 次（约 25%）。失败形态
+ * 固定是「扫屏幕上那张码失败：等不到配对完成（手机 status=online）」，事件轨迹
+ * `connecting → pairing → needs-pair` —— 即中继回了 `pair-fail`。
  *
- * **本轮没有定位到根因**，如实记在这里而不是加一个重试把它盖绿：
- * `pair-fail` 三个 reason 指向三条完全不同的路（码过期 / 已用过 / 主机 socket 不在 OPEN），
- * 而本轮 12 次连跑没能复现到能读到那条日志的一次。加重试会让这条判据失去意义——
- * 它要证明的正是「屏幕上那张码**真的**能配上」。
+ * 改成 `info` 之后（见 before() 的注释）连跑 **22 次全绿**，一次没复现。`warn` 档恰好把
+ * 唯一能回答「这张码为什么没配上」的那条 `pair failed {reason}` 藏掉了，所以这个对照
+ * 也正好解释了当初为什么查不出来。
+ *
+ * **机制没有定位，所以不敢说"修好了"**：按 25% 的发生率，22 次全绿在统计上很有说服力，
+ * 但 `pair-fail` 的三个 reason（码过期 / 已用过 / 主机 socket 不在 OPEN）指向三条完全
+ * 不同的路，而"日志级别能影响配对成功率"这件事本身还没有解释——它可能是巧合，也可能是
+ * 写日志带来的时序变化恰好躲开了一个竞态。**如果以后又红，先看失败消息里附带的那几行
+ * 中继日志**，那里面有 reason。**
+ *
+ * 刻意**不加重试**：这条判据要证明的正是「屏幕上那张码**真的**能配上」，
+ * 加重试等于把它变成测不出东西的判据。
  */
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -113,7 +120,16 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
       return { phone, parsed, token: pairing.token }
     } catch (error) {
       await shutdown({ phone })
-      throw new Error(`${tag}：扫屏幕上那张码失败（${String(error.message).slice(0, 120)}）`)
+      // 失败消息自带证据：配对失败时中继只打一条 `pair failed {reason}`，而它的三个 reason
+      // 指向三条完全不同的路（码过期 / 已用过 / 主机 socket 不在 OPEN）。不把这条带出来，
+      // 下一个人只能猜——本轮就是这样连猜了三次（见文件头「已知不稳定」）。
+      const evidence = relay.logLines
+        .filter((line) => /"pair failed"|"paired"|"host online"|"client online"/.test(line))
+        .slice(-6)
+      throw new Error(
+        `${tag}：扫屏幕上那张码失败（${String(error.message).slice(0, 120)}）\n` +
+          `   中继侧相关日志：\n     ${evidence.join('\n     ') || '（无——级别被调低了？）'}`,
+      )
     }
   }
 
