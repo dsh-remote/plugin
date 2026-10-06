@@ -132,7 +132,25 @@ function run(bin, args) {
   })
   const out = `${res.stdout ?? ''}${res.stderr ?? ''}`
   if (res.status !== 0) {
-    process.stderr.write(`${out.slice(-4000)}\n`)
+    /**
+     * 失败时先打**哪一条判据红了**，再打尾部。
+     *
+     * 原来只写 `out.slice(-4000)`——而 node --test 的尾部是**通过的**那部分
+     * （`# tests 297 / # pass 296 / # fail 1`），真正那条 `not ok` 早被截掉了。
+     * 于是这个工具在它最该有用的场合（判据红了）只给出一堆无关的通过记录。
+     * 本轮实测：连撞三次才靠人工翻日志找到原因。
+     */
+    const failures = [...out.matchAll(/^\s*not ok .*$/gm)].map((m) => m[0].trim())
+    if (failures.length > 0) {
+      process.stderr.write(`\n❌ 红了 ${failures.length} 条：\n`)
+      for (const line of failures) process.stderr.write(`   ${line}\n`)
+      // 每条红判据之后的几行里有断言消息与 expected/actual，一起带出来。
+      for (const block of out.split(/^\s*not ok /m).slice(1)) {
+        const detail = block.split(/\n(?=\s*(?:ok |not ok ))/)[0] ?? ''
+        process.stderr.write(`${detail.split('\n').slice(0, 14).map((l) => '   ' + l).join('\n')}\n`)
+      }
+    }
+    process.stderr.write(`\n—— 完整输出尾部 ——\n${out.slice(-1500)}\n`)
     throw new Error(`${bin} ${args.join(' ')} 退出码 ${res.status}`)
   }
   return out

@@ -18,6 +18,18 @@
  * 手法与 multi-pair / restart-resume 同一套：真中继 + 真插件运行时（内核面 mock）
  * + 真小程序客户端代码。判据只可能这样写——单测里的假发码器不会告诉你
  * "那张码中继根本不认"。
+ *
+ * ## 已知不稳定（2026-10-06 实测，别当成自己写坏了）
+ *
+ * 下面第 2 条**间歇性**红：实测 `node --test pairing-refresh.test.mjs` 连跑 8 次红 2 次
+ * （约 25%）。失败形态固定是「扫屏幕上那张码失败：等不到配对完成（手机 status=online）」，
+ * 事件轨迹 `connecting → pairing → needs-pair` —— 即中继回了 `pair-fail`（reason 在 info
+ * 日志里，见 before() 把它调到 info 的那条注释）。
+ *
+ * **本轮没有定位到根因**，如实记在这里而不是加一个重试把它盖绿：
+ * `pair-fail` 三个 reason 指向三条完全不同的路（码过期 / 已用过 / 主机 socket 不在 OPEN），
+ * 而本轮 12 次连跑没能复现到能读到那条日志的一次。加重试会让这条判据失去意义——
+ * 它要证明的正是「屏幕上那张码**真的**能配上」。
  */
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,10 +51,19 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
 
   before(async () => {
     mkdirSync(workDir, { recursive: true })
-    relay = await startRelay({ env: { DRC_SWEEP_MS: '600', DRC_CONV_EMPTY_TTL_MS: '1500', DRC_LOG_LEVEL: 'warn' }, label: '本地中继（pairing-refresh）' })
+    relay = await startRelay({
+      // `info` 而不是 `warn`：配对失败时中继只打一条 `pair failed {reason}`（info 级），
+      // `warn` 恰好把**唯一**能回答「这张码为什么没配上」的那行藏掉。实测这个用例有
+      // 间歇性失败，没有那行日志就只能猜（见文件头「已知不稳定」那条）。
+      env: { DRC_SWEEP_MS: '600', DRC_CONV_EMPTY_TTL_MS: '1500', DRC_LOG_LEVEL: 'info' },
+      label: '本地中继（pairing-refresh）',
+    })
     // TTL 给 20 秒：那张花掉的码在本地 slot 里**仍然有效**——正是旧代码会把死码
     // 递出去的那一段窗口。pairOnStartSec 用默认的 0（自动发码关着），与真机一致。
-    host = await bootHost({ relayUrl: relay.url, hostId: 'e2e_pairfresh_host', statusDir: workDir, pairTtlMs: 20_000, carrierGraceMs: 1000 })
+    // ⚠️ 不要再传 `carrierGraceMs`：它 2026-10-06 已从配置面删掉（全 src 零读取，
+    // `packages/plugin/tests/config.test.ts` 有判据钉着「它是死键」）。装置里还传着，
+    // 会让人以为这里有什么宽限期在起作用。
+    host = await bootHost({ relayUrl: relay.url, hostId: 'e2e_pairfresh_host', statusDir: workDir, pairTtlMs: 20_000 })
   })
 
   after(async () => {

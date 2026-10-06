@@ -576,7 +576,7 @@ export async function bootHost({
     pairTtlMs,
     keepAwake: { enabled: false, idleReleaseSec: 300, keepDisplay: false },
     listingRefreshSec: 15,
-    carrierGraceMs: 1000,
+    // ⚠️ 不要再加 `carrierGraceMs`：它 2026-10-06 已从配置面删掉（全 src 零读取）。
     approvalTimeoutSec,
     unarchiveOnPrompt: true,
     // 落盘路径必须显式传下去（含 `''` 与 `'off'` 两个值）：不传就用 apply() 的默认，
