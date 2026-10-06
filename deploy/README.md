@@ -17,7 +17,7 @@
 DNS 用的是既有的 `*.provid.cc` 泛解析，所以**没有新增解析记录**。
 
 **产物形态这一条是这次重写改的**：中继现在部署的是
-`pnpm --filter @dsh-rc/server build` 打出来的 `apps/server/dist/bundle/main.js`
+`pnpm build`（在 `dsh-remote-server/` 仓根）打出来的 `dist/bundle/main.js`
 （`ws` 与协议层都内联进去了，`bufferutil`/`utf-8-validate` 是可选原生加速、缺了照常跑）。
 于是生产只有"拷一个文件 + 一个 env 文件"，没有 `npm install`，也就没有
 "服务器上的依赖树和 CI 不一样"这一类故障。旧文档里的 `scp apps/server/src/main.mjs`
@@ -36,10 +36,10 @@ mkdir -p /opt/dsh-remote-control/server /etc/nginx/ssl
 ### 2. 部署中继
 
 ```sh
-# 本地先构建产物
-pnpm install && pnpm --filter @dsh-rc/server build
+# 本地先构建产物（在 dsh-remote-server 仓根）
+(cd ../dsh-remote-server && pnpm install && pnpm build)
 
-scp apps/server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
+scp ../dsh-remote-server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
 scp deploy/systemd/*.service        root@HOST:/etc/systemd/system/
 
 # token：两端必须一致
@@ -49,6 +49,8 @@ DRC_PORT=8787
 DRC_PUBLIC_URL=wss://drc.provid.cc
 DRC_PAIR_TTL_MS=90000
 DRC_LOG_LEVEL=info
+# 会话表落盘（1.0.6+，默认关闭即纯内存模式）：配上之后中继重启不再丢配对
+# DRC_STATE_FILE=/var/lib/dsh-remote-control/state.json
 EOF
 chmod 600 /etc/dsh-remote-control.env
 
@@ -121,14 +123,16 @@ tail -f /var/log/nginx/drc.access.log
 改中继代码后：
 
 ```sh
-pnpm --filter @dsh-rc/server build
-scp apps/server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
+(cd ../dsh-remote-server && pnpm build)
+scp ../dsh-remote-server/dist/bundle/main.js root@HOST:/opt/dsh-remote-control/server/relay.mjs
 ssh root@HOST 'systemctl restart dsh-remote-control'
 ```
 
-中继是纯内存的，重启会丢掉配对关系：客户端拿旧 convId 发帧会撞上
-`error{unknown_session}`，手机上就是中文的"会话已失效，请重新配对"。
+中继默认是纯内存的，未配 `DRC_STATE_FILE` 落盘时重启会丢掉配对关系：客户端拿旧 convId
+发帧会撞上 `error{unknown_session}`，手机上就是中文的"会话已失效，请重新配对"。
 这条行为有 `e2e/restart-resume.test.mjs` 的 (b) 用例锁住，不是文档里的口头承诺。
+生产现在配了 `DRC_STATE_FILE=/var/lib/dsh-remote-control/state.json`（`StateDirectory`
+已在 systemd 单元里，`ProtectSystem=strict` 下可写），重启不再丢配对。
 
 ## 安全组
 

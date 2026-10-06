@@ -6,12 +6,12 @@
 # The relay binds 127.0.0.1 by default — nginx terminates TLS and proxies wss
 # to it. (Override with DRC_BIND in the env file if it must be the edge.)
 #
-# What actually runs is ONE self-contained file. `pnpm --filter @dsh-rc/server build`
-# emits apps/server/dist/bundle/main.js with `ws` and the protocol layer inlined, so the
-# deployment is "copy that file" — no node_modules, no `npm install --omit=dev`, and
-# therefore no way for the server's dependency tree to drift from CI's.
+# What actually runs is ONE self-contained file. `pnpm build`
+# emits dist/bundle/main.js with `ws` and the protocol layer (dsh-remote-wire) inlined,
+# so the deployment is "copy that file" — no node_modules, no `npm install --omit=dev`,
+# and therefore no way for the server's dependency tree to drift from CI's.
 # The old unit ran `src/main.mjs`; that entry point is gone, and `dist/src/main.js`
-# (the unbuilt-tree form) needs devDependencies to resolve @dsh-rc/protocol —
+# (the unbuilt-tree form) needs devDependencies to resolve dsh-remote-wire —
 # the bundle is the only supported production entry.
 
 [Unit]
@@ -33,6 +33,17 @@ RestartSec=3
 # give it room, then be firm.
 TimeoutStopSec=15
 KillSignal=SIGTERM
+
+# 会话表落盘（DRC_STATE_FILE）用的目录。
+#
+# 这条是 `ProtectSystem=strict` 的直接后果，不是顺手加的：strict 把整个文件系统
+# 挂成只读（除 ReadWritePaths），所以 2026-10-06 第一次上 1.0.6 时，
+# 状态文件写到 /var/lib/... 每 5 秒失败一次（EROFS），配对表面还在、其实**永远不落盘**。
+# StateDirectory= 让 systemd 建目录、按 User/Group 修属主，并在 strict 下把这一个
+# 路径放回可写——**不需要**为它放松 ProtectSystem。
+# 别改成 ReadWritePaths=/var/lib：那是把整个 /var/lib 放开，范围大得多。
+StateDirectory=dsh-remote-control
+UMask=0077
 
 # --- hardening ---
 NoNewPrivileges=true
