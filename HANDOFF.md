@@ -1,5 +1,5 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.0 | 已发 npm（2026-10-05，Release 工作流带 provenance） |
-| dsh-remote-control/（单包） | 2.0.10 | 已发 npm（2026-10-06） |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction） |
+| dsh-remote-control/（单包） | 2.0.11 | 已发 npm 的是 2.0.10；**2.0.11 只装进了 Harness、未发版**，见 §4 |
 | dsh-remote-server/ | 1.0.5 | 已部署 2026-10-06 07:10（/healthz 1.0.5, hosts:1）；不发 npm（包名被第三方占）；⚠️ 中继重启丢配对，见 §1.1 |
 | dsh-remote-mp/ | 1.1.24 | 开发版本已上传，待「选为体验版」 |
 
@@ -14,7 +14,7 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 90/90、server 84/84、control 369/369、伞仓 194/194、mp 32/32 + 对比度全过；四个仓 format:check 全绿。
+闸门（干净工作树）：wire 92/92、server 84/84、control 372/372、伞仓 194/194、mp 32/32 + 对比度全过；四个仓 format:check 全绿。
 
 ## 1. 待办（按顺序做）
 
@@ -100,6 +100,21 @@ FAB 72rpx → 56rpx、贴右边缘、品牌色实心圆改成中性面 + 细边 
 而宿主显示中文类别，所以对齐后 mp 那一行的语义也会跟着变。
 不要凭猜测硬写映射表：猜错的表现是显示错的类别，比不翻译更糟。
 
+### 1.6 mp 侧显示重试与压缩（下一步，不用等重启）
+
+主机侧已经做完并等重启生效：wire 1.8.1 发了 `ev.retry` / `ev.compaction`，control 2.0.11
+做了映射与广播，两条都过了判据与循环验证。
+
+**但 mp 的 chat.js 里还没有这两个的处理器**，所以界面上什么都不会出现。剩下的就是这一层：
+
+- `_onEvent` 加两个分支，按 sessionId 过滤（与其它事件同一条）
+- 顶栏那行加一句瞬时提示，与现有运行态提示放一起：
+  「正在重试 2/5 · TRANSPORT」/「正在压缩上下文」/「压缩没成功：<error>」
+- **failed 与 ended 不许合并**（上下文已经烂掉而用户以为正常，比看不见更糟）
+- 提示要有清除时机：run-state 回到 idle 时清掉，否则会一直挂着
+
+判据放 e2e/mp-chat-blocks.test.mjs，并且要做循环验证。
+
 ## 2. 环境坑（还有效的）
 
 - 所有 pnpm/node 命令带 env -u NODE_OPTIONS（子 shell 注入的 loader 会搞挂 ESM 解析）。
@@ -132,46 +147,60 @@ curl -s https://drc.provid.cc/healthz                                 # 版本�
 
 ```
 
-## 4. 宿主能力面：P0 / P1（2026-10-06 通读 app.asar 后整理）
+## 4. 宿主能力面：P0 / P1（2026-10-06 通读 app.asar + 真机日志取证）
 
 完整版在 [docs/HOST-CAPABILITIES.md](docs/HOST-CAPABILITIES.md)（30 服务 / 140 方法的来源与理由）。
-这里只留**已核实的结论**。
+这里只留**已核实**的结论 —— 每条都有取证来源，不是推测。
 
-**怎么查的**（下一位复核用这个，别再靠猜）：
+**怎么查的**（别再靠猜）：
 
 ```sh
-# 每个宿主包都带一份机器可读的调用契约：lib/typert.host.js（服务 + 方法 + 参数 + 返回）
-# 每个包还有 README.md（人话版签名、语义、已知限制）
-# 线上到底挂了什么：~/.dsh/dsh-remote-control/status.json 的 probe.loaderRows / probe.wanted
+# 1. 每个宿主包带一份机器可读的调用契约：lib/typert.host.js（服务 + 方法 + 参数 + 返回）
+# 2. 每个包还有 README.md（人话版签名、语义、已知限制）
+# 3. 线上到底挂了什么：status.json 的 probe.wanted（逐个点名，回答 true/false）
+# 4. 事件到底发不发、长什么样：真机 session log 解压后统计
+#    ls -t ~/.dsh/sessions/*/*/session.v4.jsonl.zstd | head -12 | xargs -I{} /opt/homebrew/bin/zstd -dc {}
 ```
 
-**踩过的坑**：`probe.loaderRows` 被我们自己 slice(0, 2600) 过，所以**不能**拿它回答
-"某包装没装"——截断点之后的看起来就像没加载。2026-10-06 差点据此断言 token-meter 没挂。
-2026-10-06 已加 `probe.wanted`：逐个点名回答 true/false，短、不截断、可复算。
+### ⚠️ 两个取证陷阱（都踩过）
 
-### 已核实可用
+1. **`probe.loaderRows` 不能用来判断"某包装没装"** —— 它被我们自己 `slice(0, 2600)` 过，
+   截断点之后的看起来就像没加载。2026-10-06 差点据此断言 token-meter 没挂。
+   已加 `probe.wanted` 逐个点名回答，短的、不截断、可复算。
+2. **判据红了先确认变异真的改变了行为** —— 我第一次回归验证从 `MAPPED_SESSION_EVENTS` 里
+   删掉 `llm/retry`，判据却没红：那张表只管 status.json 记账，switch 照样跑。
+   换成直接改 switch case 才验到。**变异必须作用在被测的那段逻辑上。**
 
-| 能力 | 状态 |
-|---|---|
-| `llm-retry`（P0-4 重试可见） | **已加载** → `llm/retry` 事件会来，可以接 |
-| `attachment` | **已加载** → 图片内联块那条路走得通 |
+### P0
 
-### 已核实不可用（这一版 profile 里没有）
+| # | 能力 | 状态 |
+|---|---|---|
+| 1 | `tokenMeter` 上下文占用 | ❌ **这个 profile 没挂**。依赖 `session-projection` 在，它自己不在 |
+| 2 | `workspace/changes` 改了哪些文件 | ❌ **做不了**。真机 66 个样本**全是 `{turn:N}`** —— 只是"本轮有改动"的宣告，文件清单在认证 Web 路由里，中继够不到。只报"改了文件"却不给哪些文件，比不说更糟 |
+| 3 | 压缩可见 `compaction/*` | ✅ **已做（主机侧）**，真机 18 次。`start{compactionId,turn}` / `end{compactionId,turn,error?}` |
+| 4 | 重试可见 `llm/retry` | ✅ **已做（主机侧）**，真机 18 次。data 带 retry/maxRetries/failure |
 
-| 能力 | 结论 |
-|---|---|
-| `token-meter`（P0-1 上下文占用） | **没挂**。依赖 `session-projection` 在，它自己不在 → 这条路当前走不通 |
-| `compaction-basic` / `command-compact`（P0-3） | **没挂** → `compaction/*` 事件不会来，那条待办作废 |
-| `api-workspace-files`（P1-7 手机看文件） | **没挂** → `workspaceFiles.*` 取不到 |
-| `client-file-upload`（P1-5 文件附件） | **没挂** → 印证了文件附件那条路确实够不到，不是我们没找对 |
-| 语音（包名带 experimental） | **没挂** |
+P0-1/P0-2 的"没挂"指的是**这个 profile 的组合**。宿主发布清单里有（`desktop-runtime.json`
+287 个包，含 dsh-token-meter），是 profile 没引。**要启用得改 profile 的 bundle 声明**，
+那是宿主配置、影响面比改我们代码大得多，别顺手就动。
 
-⚠️ 上面"没挂"指的是**这个 profile 的组合**。宿主发布清单里有（`desktop-runtime.json` 有 287 个包，
-含 dsh-token-meter），是 profile 没引。要启用得改 profile 的 bundle 声明，**不是**改我们的代码。
+### P1
 
-### 还没核实的
+| # | 能力 | 状态 |
+|---|---|---|
+| 5 | 文件附件走 receipt（`client-file-upload`） | ❌ **没挂** → 印证了文件附件那条路确实够不到，不是没找对 |
+| 6 | 模型下拉能用（`llm.discoverModels` 等） | 🟡 **待验**。`agentDefaultModel` 那侧确认只有 `currentSelection`，但 `llm` 服务本身已加载，有没有可用枚举入口要单独验 |
+| 7 | `workspaceFiles.*` 手机看文件 | ❌ **没挂** |
 
-- `workspace/changes` / `llm/retry` 的**事件形状** —— 它们确实在发（status.json 的
-  `kernel.unmappedEventTypes` 里一直记着），但 data 长什么样要从真机 session log 取，不能照 README 猜。
-- `llm.discoverModels` 等模型枚举面 —— `agentDefaultModel` 那一侧确认只有 `currentSelection`，
-  但 `llm` 服务本身已加载，它有没有可用的枚举入口要单独验。
+### P0-3 / P0-4 的 mp 侧显示**还没做**（下一步）
+
+事件已经从主机到中继、到 mp 的 `_onEvent` 了，但 mp 的 chat.js 里**没有** `ev.retry` /
+`ev.compaction` 的处理器，所以界面上还是不会出现。
+
+要做的：顶栏那行加一句瞬时提示，与现有运行态提示放一起。建议文案：
+
+- `ev.retry` → 「正在重试 2/5 · TRANSPORT」（attempt/max/reason 都有）
+- `ev.compaction started` → 「正在压缩上下文」
+- `ev.compaction failed` → 「压缩没成功：<error>」**别与 ended 合并** —— 上下文已经烂掉而用户以为正常，比看不见更糟
+
+wire 1.8.1 与 control 2.0.11 都已就位；control 2.0.11 已装进 Harness，重启后才生效。
