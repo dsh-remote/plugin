@@ -2271,13 +2271,11 @@ function stubReceipt(p, answer) {
         : undefined;
     const mappedFiles =
       files && files.length
-        ? files
-            .slice(0, 4)
-            .map((a) => ({
-              name: a.name,
-              mediaType: a.mediaType,
-              data: a.data,
-            }))
+        ? files.slice(0, 4).map((a) => ({
+            name: a.name,
+            mediaType: a.mediaType,
+            data: a.data,
+          }))
         : undefined;
     calls.push({ sessionId, text, images: mappedPics, files: mappedFiles });
     const a = typeof answer === "function" ? answer(n++) : answer;
@@ -3470,4 +3468,47 @@ test("断链重连后要重新读历史：**进页面时已在线**（onShow 读
     calls.length > 0,
     "重连后一次都没读：断链期间跑完的步骤、工具、回复永远补不回来了（消息流就此静止）",
   );
+});
+
+test("待办：形状不对的帧不许锁死历史回放（_todoLive 是单向闩锁）", async () => {
+  // `_todoLive` 置真后全页不再复位，而历史落地处有 `!_todoLive` 这道守卫。
+  // 原实现在 _onTodo 里无条件置真：任何一帧 p.todos 不是数组的帧，都会
+  // 把历史回放永久关掉，同时把清单清成空的——条子就没了，且再也回不来。
+  const p = readyAtBottom();
+  const calls = stubClient(p, (sessionId) => {
+    const base = HISTORY_PAGE.slice();
+    return Promise.resolve({
+      sessionId: "s1",
+      cmdId: "c1",
+      // 历史里带着一份真实快照
+      items: [
+        ...base,
+        {
+          t: "ev.todo",
+          todos: [{ content: "历史那条", status: "in_progress" }],
+        },
+      ],
+    });
+  });
+
+  p._onEvent({
+    kind: "payload",
+    payload: { t: "ev.todo", sessionId: "s1", todos: null },
+  });
+  assert.equal(p._todoLive, false, "形状不对的帧没有真数据，不该置闩锁");
+
+  await p._loadHistory(null);
+  await flush();
+  assert.equal(p.data.todos.length, 1, "历史快照必须能被应用");
+  assert.equal(p.data.todos[0].content, "历史那条");
+});
+
+test("待办：空数组**要**置闩锁（内核清空清单是真数据，用户拍板取最后一份）", () => {
+  const p = readyAtBottom();
+  p._onEvent({
+    kind: "payload",
+    payload: { t: "ev.todo", sessionId: "s1", todos: [] },
+  });
+  assert.equal(p._todoLive, true, '空清单是"此刻清单为空"，是真数据');
+  assert.equal(p.data.todos.length, 0);
 });
