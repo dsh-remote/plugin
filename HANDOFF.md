@@ -1,6 +1,6 @@
 | dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction） |
 | dsh-remote-control/（单包） | 2.0.11 | 已发 npm 的是 2.0.10；**2.0.11 只装进了 Harness、未发版**，见 §4 |
-| dsh-remote-server/ | 1.0.5 | 已部署 2026-10-06 07:10（/healthz 1.0.5, hosts:1）；不发 npm（包名被第三方占）；⚠️ 中继重启丢配对，见 §1.1 |
+| dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
 | dsh-remote-mp/ | 1.1.24 | 开发版本已上传，待「选为体验版」 |
 
 三条不许再错：
@@ -14,58 +14,68 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 92/92、server 84/84、control 372/372、伞仓 194/194、mp 32/32 + 对比度全过；四个仓 format:check 全绿。
+闸门（干净工作树）：wire 92/92、server 101/101（102 条里 1 条 skip 是原有的）、control 372/372、伞仓 194/194、mp 32/32 + 对比度全过；四个仓 format:check 全绿。
+
+## 0. 本轮做完的（2026-10-06 §1.1）
+
+中继会话表落盘，**已上线 1.0.6**。`DRC_STATE_FILE=/var/lib/dsh-remote-control/state.json`，
+线上 `/healthz` 现在多五个字段：`persistence` / `stateRestored` / `stateSavedAtSec` /
+`stateWrites` / `stateWriteFailures`。
+
+验收五条全部成立，其中第 1 条**在生产验过**：改完 1.0.6 自己写出的状态文件后直接重启，
+`conversations` 从 1 读回 1，主机 0.8 秒回来，全程没人重扫。
+⇒ **§1.2 的前置解除了**，那条现在才验得动。
+
+线上那次切换**没有让你重扫**，是这么做到的：中继自己的 journal 里 `paired` 那行同时记着
+sessionId 与 clientId（`journalctl -u dsh-remote-control | grep '"msg":"paired"'`），
+拿它和主机 pair store 里的 convId 交叉核对一致，再手工播了一份状态文件。
+**只播 id，不播 PSK**——中继从来不持有它。往后不需要再手工播了。
+
+### 0.1 上线时踩到并已修的坑：ProtectSystem=strict
+
+第一次上 1.0.6，状态文件**每 5 秒写失败一次**（EROFS），但 `/healthz` 的 conversations
+是对的、配对看着完全正常——只是永远不落盘。`systemctl status` 看不出来，
+ssh 进去 `touch` 又成功，因为那是另一个 mount namespace。
+
+根因：单元里 `ProtectSystem=strict` 把整个文件系统挂成只读，只留
+`ReadWritePaths=/opt/dsh-remote-control`，所以 `/var/lib` 写不进去。
+修法是加 `StateDirectory=dsh-remote-control`（systemd 在 strict 下把**这一个**路径放回
+可写，**不用**放松 ProtectSystem）。刻意没用 `ReadWritePaths=/var/lib`——那要放开整个 /var/lib。
+
+**判据是 `stateWriteFailures` 这个字段**，它本来就为这种"功能看着正常、其实没落盘"
+的故障加的，这次正好派上用场。换台机器部署记得先看这一项，它不是 0 就是没在写。
+
+## 0.2 工作树会被外部进程清掉
+
+本轮开工时 `src/persist.ts` 是一份**未提交**的半成品，`state.ts` 也带一处未提交修改。
+09:40 左右两者一起消失、工作树变干净：git reflog 里没有任何 revert 记录，
+`.git/index` 的 mtime 与之同时更新，机器上跑着 VS Code + Copilot。
+**没查出来源**，但结论明确：半成品放在未提交状态是会丢的。
+
+下一次改代码，改完就 commit，别攒着。
+（那半成品的内容已按上下文重建并补全，`state.ts` 的未提交修改则改由 `persist.ts` 承担，
+现在 `state.ts` 与 HEAD 一致。）
 
 ## 1. 待办（按顺序做）
 
-### 1.1 中继落盘会话表（用户 2026-10-06 拍板方案 A，**未做**）
+### 1.1 ~~中继落盘会话表~~ ✅ 2026-10-06 完成并上线（1.0.6）
 
-**问题**：会话只存在内存里，中继一重启，全部配对消失，所有手机要重新扫码。
-这不是某次改坏的，是一直如此——以前没暴露，只因为线上那个进程连着跑了 29.7 小时。
+细节见 §0。三条判断值得留着，它们是踩过才知道的：
 
-取证（2026-10-06 部署 1.0.5 时撞上，日志逐行可查）：
+- **`hostOfflineSince` 刻意不落、也不恢复**。读盘那一刻没有任何主机连着，照搬盘上的计时
+  等于宣称"主机从上次落盘起就已离线"，于是宽限期从进程启动那刻开始判死——一次 130 秒的
+  停机维护就能让会话当场判死、手机照样重扫，**比不做落盘更糟**。恢复出来的会话一律按
+  "主机在场、只是还没连上"处理。判据里有配一条反向的：真掉过线的主机照样会被判死。
+- **恢复放在 `createRelay`（listen 之前）**。放 listen 之后有真实竞态：主机在读盘完成前
+  连上来发 `resync`，那轮 resync 按"服务器现有的表"去删，把主机刚声明的会话全删掉。
+- **回收必须同步删盘**。只在"建"的时候写的话，已回收的会话永远留在盘上、重启被复活。
 
-```
-07:09:01  client disconnected  clientId: muqu1ibj-…   ← 手机被踢
-07:09:59  shutting down  SIGTERM
-07:10:01  host online                                  ← 主机 1 秒内回来
-07:11:05  conversations: 0                             ← 会话没回来
-```
+变异验证做了三个，都作用在被测的那段逻辑上、都能编译：
+去掉 restore → 验收 1/2/2b 红；去掉删除路径的落盘 → 只有验收 5 红；
+把 `hostOfflineSince` 加回类型+快照+恢复 → 只有那条判据红。
 
-根因三条：
-
-- `state.ts` 里 `conversations.set(...)` **全仓只有一处**（第 162 行），在**配对认领**
-  路径里——那需要一枚新的配对码，也就是扫码。
-- 主机重连发的 `resync()`（第 220 行）**只删不建**：它遍历的是服务器现有的表，
-  主机声明的会话已经不在里面了，于是 `kept` 算出来也是 0。
-- `/etc/dsh-remote-control.env` 里没有任何状态路径，磁盘上也没有状态文件——零持久化。
-
-**它卡住了 unpair 修复的验收**：见下面 §1.2 那条「手机切后台再回来不许要求重新扫码」
-在落盘做完之前**根本验不了**——中继重启后手机必然掉配对。这两条是同一件事。
-
-**方案 A：中继落盘会话表，启动时读回**（不碰协议、不改安全模型）。
-
-要定的几件事：
-
-- 位置：新增 `DRC_STATE_FILE`。**默认关闭**，这样本地起一个中继不会被凭空多出状态。
-- 存什么：conversationId / hostId / clients / seqHost / seqClient / 时间戳。
-  **不存** pendingPairs（本来就短命，且它带一次性语义）。
-- 原子写：先写临时文件再 rename。半截状态文件把中继起挂掉，比没有文件更糟。
-- **不落任何秘密**：中继是结构性零知识的，它从来不持有 PSK。会话 id 与 client id
-  本来就明文出现在帧里，落盘不扩大暴露面。
-- 启动时先读后 listen。**文件损坏要记日志并按空启动**，不能拒绝启动——
-  起不来的中继等于整个产品停摆。
-- 回收要同步删盘：空会话回收与空闲剪枝都是内存里做的，不同步的话
-  重启会把已经死掉的会话复活。
-
-验收（缺一条都算没做完）：
-
-1. 重启中继 → `conversations` 仍然 > 0
-2. 手机带着旧 convId 连上来 → **不回** `unknown_session`，不用重扫
-3. 没有状态文件时启动 → 行为与今天完全一致
-4. 状态文件损坏 → 中继照常起来，日志说清，按空处理
-5. 会话被回收后重启 → 不会复活
-
+（第一次试第三个变异时 `pnpm build` 失败了，判据却全绿——测的是上一个产物。
+就是 HANDOFF §2 那条"变异要能编译"的教训，又踩了一次。）
 
 ### 1.2 unpair 修复的真机复验（部署已完成，**验收还没做**）
 
@@ -75,8 +85,8 @@ e2e 只覆盖了中继发标记那一半：
 - mp 解除配对 → dsh 的 pill 从「手机离线」变「**未配对**」
 - 手机切后台再回来 → **不许**要求重新扫码
 
-⚠️ 第二条在 §1.1 做完之前**必然验不过**：中继一重启配对就没了，手机连上来
-先撞 `unknown_session`。**先做 §1.1，再回来验这一条。**
+⚠️ 第二条的阻塞**已解除**（§0：落盘上线并在线上验过重启不丢配对）。
+现在可以真机验了——验之前先扫一次码把手机配上。
 
 ### 1.3 mp 1.1.24 选为体验版 + 真机复验
 
@@ -144,6 +154,11 @@ scp dsh-remote-server/dist/bundle/main.js root@47.100.82.15:/tmp/relay-new.mjs
 ssh root@47.100.82.15 'node --check /tmp/relay-new.mjs'                # 换之前先验语法
 # 远端：备份(带时间戳) → systemctl stop → install -m0755 + mv → systemctl start
 curl -s https://drc.provid.cc/healthz                                 # 版本号变了才算成
+
+# 换完必看这一项——不是 0 就是没在写（见 §0.1）
+curl -s https://drc.provid.cc/healthz | grep -o '"stateWriteFailures":[0-9]*'
+
+# 改了 systemd 单元还要：install -m0644 新单元 → systemctl daemon-reload → restart
 
 ```
 
