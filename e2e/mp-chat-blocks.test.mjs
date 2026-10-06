@@ -63,8 +63,13 @@ globalThis.wx = {
     opts.success({
       tempFiles: [attachPick()],
     }),
-  // 文件附件入口（1.1.10）：chooseMessageFile 给 name / type / tempFilePath。
-  // `type` 是扩展名（不带点），没有 mediaType 这种字段。
+  // ── 文件附件那一链 ──────────────────────────────────────────────────
+  // ⚠️ 这条夹具**必须照官方类型定义 `ChooseFile` 的字段名写，不能照上一条抄**：
+  //   1. chooseMessageFile 给的路径字段叫 `path`，它**没有** `tempFilePath`；
+  //   2. `type` 是 `'video' | 'image' | 'file'` 的**类别**，不是扩展名。
+  // 2026-10-06 这两处都抄成了 chooseMedia 的形状，于是页面读 f.tempFilePath 恒为
+  // undefined（"每个文件都读不出来"），而判据一路绿灯——真机上必现的故障被判成了通过。
+  // 假实现与实现同源出错比没有假实现更糟：它连"测的到底是哪条路径"都不再说得清。
   chooseMessageFile: (opts) =>
     opts.success({
       tempFiles: [filePick()],
@@ -163,13 +168,23 @@ let attachPick = () => ({
   height: 1200,
 })
 
-/** 选中文件后 chooseMessageFile 回的那一条（真 API 的四个字段）。 */
-let filePick = () => ({
-  name: 'report.pdf',
-  type: 'pdf',
-  size: 2048,
-  tempFilePath: 'tmp-file.pdf',
-})
+/**
+ * 选中文件后 chooseMessageFile 回的那一条。
+ *
+ * 字段与取值**逐字照官方类型定义 `miniprogram-api-typings` 的 `ChooseFile`**：
+ *   { name: string; path: string; size: number; time: number; type: 'video'|'image'|'file' }
+ * `type` 是类别不是扩展名（一条判据专门钉住这一点），路径字段叫 `path`。
+ */
+let filePick = () =>
+  globalThis.__drcPickFile
+    ? globalThis.__drcPickFile()
+    : {
+        name: 'report.pdf',
+        path: 'tmp-file.pdf',
+        size: 2048,
+        time: 1_700_000_000_000,
+        type: 'file',
+      }
 
 // 选文件时 readFile 回的内容（判据断言的是"原样读进来、不改一个字节"）。
 globalThis.__drcFileBytes = {
@@ -241,6 +256,9 @@ function makePage() {
   globalThis.__drcDropped = []
   globalThis.__drcDropFail = ''
   globalThis.__drcSheetItems = undefined
+  // 选中文件的覆写同样必须归零：它决定 chooseMessageFile 回什么形状，漏一条就会让
+  // 后面**看起来不相关**的用例拿到上一条的文件名（本次真实踩到）。
+  globalThis.__drcPickFile = null
   ctx.onLoad({ id: 's1', title: '测试会话' })
   live.push(ctx)
   return ctx
@@ -1956,7 +1974,7 @@ test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 
   const one = p.data.attachments[0]
   assert.equal(one.kind, 'file', '与图片分开记：协议里是两个字段')
   assert.equal(one.name, 'report.pdf', '扩展名要留着——Agent 认文件靠它')
-  assert.equal(one.mediaType, 'pdf', '类型标签来自 chooseMessageFile 的 type')
+  assert.equal(one.mediaType, 'pdf', '类型标签取自**文件名**的扩展名，不是 chooseMessageFile 那个类别 type')
   assert.equal(one.data, Buffer.from('FILEDATA').toString('base64'), '原样读进来，不改一个字节')
   assert.equal(p.data.attachCount, 1, '加号角标跟着涨')
 
@@ -1972,6 +1990,56 @@ test('文件附件：加号旁边的文件入口 → 选文件 → 原样读成 
     [{ name: 'report.pdf', mediaType: 'pdf', data: Buffer.from('FILEDATA').toString('base64') }],
     '上线的只有协议要的三个字段：path / size 是本机的，不许出去',
   )
+})
+
+
+test('回归：chooseMessageFile 的路径字段是 `path`（2026-10-06 用户报"txt 读不出来"）', async () => {
+  // 这条是本轮最贵的一个教训，值得单独钉住：页面读 f.tempFilePath，而真 API 只给 `path`，
+  // 于是 filePath 恒为 undefined，**每一个**文件都落进"读不出来"的 toast。
+  // 假实现当时也照抄了 chooseMedia 的形状，所以判据是绿的——它测的不是真机那条路。
+  const p = makePage()
+  globalThis.__drcFileBytes = { 'wxfile://tmp/notes.txt': Buffer.from('TXT').toString('base64') }
+  globalThis.__drcPickFile = () => ({
+    name: 'notes.txt',
+    path: 'wxfile://tmp/notes.txt',
+    size: 3,
+    time: 1_700_000_000_000,
+    type: 'file',
+  })
+  globalThis.__drcSheetTap = 1
+  p.onAttach()
+  await settleAttach()
+
+  assert.equal(p.data.attachments.length, 1, '按真 API 的形状（只有 path）也必须读得出来')
+  assert.equal(p.data.attachments[0].name, 'notes.txt', '文件名照原样带上去')
+  assert.equal(p.data.attachments[0].data, Buffer.from('TXT').toString('base64'), '内容原样读进来')
+  assert.equal(p.data.attachments[0].mediaType, 'txt', '扩展名从文件名取：txt 不该被标成类别 file')
+})
+
+
+test('type 是类别不是扩展名：媒体标签一律取自文件名（协议与主机都以名字为准）', async () => {
+  // 官方 ChooseFile.type ∈ {video,image,file}。照抄它当扩展名，界面那一行的类型标签
+  // 就退化成"file"，而主机那边 uploads.ts 保留的也是名字里的扩展名（它不改扩展名）。
+  const cases = [
+    { name: 'report.pdf', type: 'file', expect: 'pdf' },
+    { name: 'notes.TXT', type: 'file', expect: 'txt' }, // 大小写归一，否则界面上会出现 TXT
+    { name: 'archive.tar.gz', type: 'file', expect: 'gz' }, // 只取最后一段，别整条尾巴都标上
+    { name: 'README', type: 'file', expect: 'file' }, // 没有扩展名：退回类别而不是空标签
+  ]
+  for (const [i, c] of cases.entries()) {
+    const p = makePage()
+    const path = `wxfile://tmp/case-${i}`
+    globalThis.__drcFileBytes = { [path]: Buffer.from('X').toString('base64') }
+    globalThis.__drcPickFile = () => ({ name: c.name, path, size: 1, time: 0, type: c.type })
+    globalThis.__drcSheetTap = 1
+    p.onAttach()
+    await settleAttach()
+    assert.equal(
+      p.data.attachments[0].mediaType,
+      c.expect,
+      `${c.name} 的类型标签算成了 ${p.data.attachments[0].mediaType}，应为 ${c.expect}`,
+    )
+  }
 })
 
 
@@ -3344,4 +3412,65 @@ test('滚动：重连后也要到底部（不要停在"读到哪儿"）', async 
     true,
     '重连后没回到底部（用户报的第 3 条）——约定是重连与重新进入都直接到底部',
   )
+})
+
+
+/* ── 发送前的帧预算闸：附件算过了，正文没人算过 ─────────────────────── */
+
+// 512 KiB 原始字节的标准 base64 长度：ceil(524288/3)*4。
+// 用真长度而不是随手一个 700K —— 估算函数的输入必须与线格式对上，
+// 否则判据量的是一个现实中不存在的帧。
+const FULL_512KB_B64 = Math.ceil((512 * 1024) / 3) * 4
+
+
+test('回归：512KB 附件 + 长正文会顶过中继 1MB 硬帧上限，必须在发送前拦下（2026-10-06 审计）', async () => {
+  // 附件那两道闸只算附件，于是这个组合没人管：实测线上帧 1 055 304B > 1 MiB，
+  // 中继以 1009 关掉**整条连接**，用户看到的是"发出去就掉线"——正是这一页注释里
+  // 写着"绝不能让它变成莫名掉线"的那件事。
+  const p = makePage()
+  const calls = stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1' })
+  p.setData({
+    inputText: 'x'.repeat(120 * 1024),
+    attachments: [{ kind: 'file', name: 'a.bin', data: 'A'.repeat(FULL_512KB_B64) }],
+  })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+
+  assert.equal(calls.length, 0, '超预算的那一条不该真的发出去')
+  assert.equal(p.data.inputText.length, 120 * 1024, '拦下时**不许**清空输入框：清了用户就得重打一遍')
+  assert.equal(p.data.attachments.length, 1, '附件也要留着')
+})
+
+test('帧预算闸的界：附件顶格时 ~60KB 正文放行、~90KB 正文拦下', async () => {
+  const attempt = async (textKB) => {
+    const p = makePage()
+    const calls = stubReceipt(p, { ok: true })
+    p.setData({ sessionId: 's1' })
+    p.setData({
+      inputText: 'x'.repeat(textKB * 1024),
+      attachments: [{ kind: 'file', name: 'a.bin', data: 'A'.repeat(FULL_512KB_B64) }],
+    })
+    p.onSend()
+    await new Promise((r) => setTimeout(r, 0))
+    return calls.length
+  }
+  assert.equal(await attempt(60), 1, '还在预算内的那一条必须发得出去（闸不是墙）')
+  assert.equal(await attempt(90), 0, '越界的那一条必须发不出去')
+})
+
+test('纯文字的长消息不受附件闸牵连（估高也要够准）', async () => {
+  // 闸是按"线上字节"算的，不是"有一个数就拦"：没有附件时，一段正常长度的正文
+  // 必须照发，否则这条修复就变成了"长文本也不能发"的新故障。
+  //
+  // 这条判据还真抓到过一个东西：第一版把 `payload += String(len)` 写进了估算函数，
+  // `+=` 见到字符串就变成拼接，于是一条 6 字节的小消息被估成 3.1MB 而当场拦下。
+  // **算式要有人真的跑一遍**——盯着纸面上的算术是看不出 `+=` 那一行的。
+  const p = makePage()
+  const calls = stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1', inputText: '把这段代码贴给你看看：\n' + 'const x = 1\n'.repeat(2000) })
+  p.onSend()
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(calls.length, 1, `纯文字正文（${'const x = 1\n'.repeat(2000).length} 字符）被闸误拦了`)
+  assert.equal(p.data.inputText, '', '放行时输入框照常清空')
 })

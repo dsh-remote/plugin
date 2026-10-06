@@ -1,7 +1,130 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | **1.0.0-rc.1** | 已发 npm（`latest` 也指向它）；tag 与 GitHub Release 已建 |
-| dsh-remote-control/（单包） | **1.0.0-rc.1** | 已发 npm（`latest`）；Release 已建；**已装进 profile，重启 Harness 生效** |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | **1.0.0-rc.1** | 已发 npm（`latest` 也指向它）；tag 与 GitHub Release 已建。**⚠ 本地已改（`cmd.new_session` 加可选 `workspace`），未发版**——见 §0.10 |
+| dsh-remote-control/（单包） | **1.0.0-rc.1** | 已发 npm（`latest`）；Release 已建；**已装进 profile，重启 Harness 生效**。本地已改（新建会话落点），未发版 |
 | dsh-remote-server/ | **1.0.0-rc.1** | Release 已建（单文件产物）；**线上仍跑 1.0.6**（代码只差版本号，部署待用户决定）；不发 npm（包名被第三方占） |
 | dsh-remote-mp/ | **1.0.0-rc.1** | 已上传为开发版本，待「选为体验版」 |
+
+## 0.10 2026-10-06 深夜：串行深审一轮（发现问题 → 修 → 补判据）
+
+两条**用户实测报上来的必现故障**，六条代码/文档缺陷，加一条防再漂的机械闸门。
+全部先红后绿，四个改动做过变异验证。
+
+### 0.10.1 mp 文件附件：**每一个文件都读不出来**（用户报："txt，toast 提示这个文件读不出来"）
+
+**根因**：`_acceptPickedFiles` 读 `f.tempFilePath`，而 `wx.chooseMessageFile` 给的路径字段
+叫 **`path`**（`tempFilePath` 是 `chooseMedia`/`chooseImage` 的）。于是 `filePath` 恒为
+`undefined`，走 `if (!filePath) → toast`，**这条功能一次都没通过**。
+
+依据是官方类型定义 `miniprogram-api-typings` 的 `ChooseFile`（本轮从 npm 拉的 5.2.3 核过）：
+
+```ts
+interface ChooseFile {
+  name: string                      // 文件名（带扩展名）
+  path: string                      // ← 本地临时路径
+  size: number
+  time: number
+  type: 'video' | 'image' | 'file'  // ← **类别**，不是扩展名
+}
+```
+
+**第二个 bug 同源**：`type` 被当成扩展名用（`payloads.ts` 的注释与 e2e 夹具都这么写）。
+真机上一个 txt 会得到 `mediaType:'file'`。现改为从**文件名**取扩展名（新增 `extensionOf`）。
+
+**为什么判据一路绿灯**：`e2e/mp-chat-blocks.test.mjs` 的 `filePick()` 夹具当时照抄了
+`chooseMedia` 的形状（`tempFilePath` + `type:'pdf'`）——**假实现与实现同源出错**，
+比没有假实现更糟（它连"测的到底是哪条路径"都不再说得清）。
+现夹具逐字照 `ChooseFile` 写，并加了 2 条判据（真形状能读出来 / 扩展名四例）。
+
+### 0.10.2 用户问的"为什么要读，能不能直接传"
+
+不能，架构上只有这一条路。`path` 是 `wxfile://` **手机沙箱内**的临时路径，主机插件跑在 Mac 上；
+中继是零知识中继（全程只有密文、没有密钥）。Mac 上的 Agent 要看到内容，字节本身必须过一次
+载荷层（`cmd.send_prompt.files[].data`，base64），到主机再落盘换成路径
+（`shell/uploads.ts` 的 `saveFileAttachments`，且**不改扩展名**）。
+要让"直接传路径"成立就得把文件放到第三方服务器上让 Mac 去拉，那等于把零知识整个拆掉。
+所以这次修的是**读错了字段**，不是"读"这件事。
+
+### 0.10.3 新建会话落在 **未分组**（用户报）
+
+主机侧 `newSession` 的 cwd 推断只有一个退化版本：`listSessions(1)[0]`，而那份列表按
+**`createdAt`** 排。于是"最新建的那条"完全可能没有 cwd（它自己可能就是手机在旧版本里
+不带 cwd 建出来的那条）→ 推断落空 → `request` 是 `{}` → 内核退回 `process.cwd()`
+（真机上是 `/`）→ DSH 的会话列表里那条归到未分组。
+
+现三级取值（`carrier-services.newSession`）：
+
+1. `DRC_NEW_SESSION_CWD`（运维在配置文件里写下的一句钉，优先级最高）；
+2. **最后操作过的那条会话**的目录——主机自己从事件流观察到的（每条 `session/event` 都记
+   `lastTouchedSessionId`，目录取自 `listSessions` 填的 `sessionId → cwd` 表）；
+3. 往前扫 `NEW_SESSION_SCAN`(20) 条，找第一条带 cwd 的（`badWorkspace` 挡掉相对路径 /
+   NUL / Windows 形状 / 超长）。
+
+另外新建出来的那条会把 `cwd` 一起记进 `freshSessions`，列表摘要立刻带上 workspace——
+否则它落点对了、列表里却还是空的（"未分组"那条分组的另一种表现）。
+
+**"最后操作"为什么不用 createdAt 排的第一条**：上午建 10 条、下午一直在第 3 条里干活，
+`[0]` 会指向第 10 条（多半还是别的项目）。这条信号不需要任何新数据源。
+
+### 0.10.4 「在哪个分组新建」要手机参与 —— 已备好，等 wire 发版
+
+`cmd.new_session` 加了**可选** `workspace`（目录绝对路径，与 `SessionSummary.workspace`
+同一个字符串，逐字透传）。判据在 `dsh-remote-protocol/tests/wire/payloads.test.ts`。
+
+**但插件现在读不到它**：插件按精确版本钉着 npm 上的 `dsh-remote-wire@1.0.0-rc.1`，
+那份的 `cmdNewSession` 没有这个字段，而 `parseCmdPayload` 会把不认识的键 **strip** 掉。
+所以 `runtime.ts` 里刻意**没有**接线（写一段读不到值的代码不如先让主机自己推断），
+`runtime.ts` 与 `ports` 里都写了注释说明这一点。
+
+**发版后的接线顺序**（缺一步都不生效）：
+
+1. `dsh-remote-protocol` 发 `1.0.0-rc.2`（npm + tag + Release）；
+2. `dsh-remote-control/packages/plugin/package.json` 把钉改成 `1.0.0-rc.2`，
+   重跑 `pnpm install` 并提交新的 `pnpm-lock.yaml`；
+3. `runtime.ts` 的 `case 'cmd.new_session'` 改成 `create.call(this.kernel, cmd.workspace ? { workspace: cmd.workspace } : undefined)`，
+   `ports` 的 `newSession?()` 签名加回 `args?: { workspace?: string }`；
+4. mp 侧：`client.newSession(workspace)` 透传；`sessions.onNewSession` 默认带"当前分组"
+   （最后点开那条会话的 workspace → 列表里第一个非空分组的 workspace）；
+   再给「＋新建会话」加**长按 → 从已见过的分组里选**（用户提的"弹窗让自己选"）。
+   长按选择器**必须等第 3 步落地再做**——老主机 strip 掉这个字段，用户选了分组却
+   落在别处，比不提供这个入口更糟。
+5. `mock-kernel.newSession` 跟着记 workspace，e2e 断言"手机指定的分组真的生效了"。
+
+### 0.10.5 其余六条（都是"功能看着正常、其实那一步没生效"）
+
+| # | 缺陷 | 影响 | 判据 |
+|---|---|---|---|
+| 1 | `DeltaWindow.splitToCap` 按码元硬切，会把 **emoji 的代理对劈成两半** | 两片各带一个孤立代理出站；`utf8(JSON.stringify(...))` 把它转义成 `\udXXX`，手机收到两个豆腐块，表情凭空消失且**没有任何一层报错**。切点由流式节奏决定、完全随机，AI 输出里 emoji 又极常见 —— 长会话必然踩到 | `window.test.ts` +1（红→绿，变异验证过） |
+| 2 | `DRC_MAX_MSG_BYTES` 调到协议帧预算之下时**没有任何提示** | 合法的大密文帧被 ws 以 1009 关掉整条连接 = "流式输出说到一半就重连"。默认值两边同源，可它是环境变量；旧实现的 256KiB 正是那个事故的配置值 | `dsh-remote-server/tests/config.test.mjs` |
+| 3 | `loadConfig` 的 `integer()`/`portNumber()` **抛异常**，绕开了它自己承诺的诊断出口 | env 文件里一个拼写错误落到 `main()` 外层的 `fatal:` 兜底，打印一坨带 8 行栈的异常，而不是 SELF-HOSTING.md 第 2 节承诺的 `[drc-relay] error: DRC_XXX 必须是正整数，收到 "..."` | 同上（实测复现过那条栈输出） |
+| 4 | `resync` 只在 `dropped.length > 0` 时落盘，而注释写的是"两种都进盘" | 只打上 `emptySince` 的那次变更不写盘，重启后按"此刻起算"补计时，空会话回收被推迟整整一个 TTL | 已修（无条件落盘；主机每次启动只发一条 resync） |
+| 5 | 伞仓 `deploy/` 与中继仓 `deploy/` 是两份手工副本，**没有任何东西保证它们一致** | 照旧的那份部署就会重演 §0.1 的 EROFS（"功能看着正常、其实永远没落盘"） | `e2e/deploy-sync.test.mjs` +7（逐字节 + StateDirectory/ExecStart/nginx 三头） |
+| 6 | README「项数」漂了半年（92→106、448→457、255→262、对比度 302→304），且"小程序**三道**闸"实际是四道、"verify-miniprogram（32 项）"的 32 项其实属于 markdown 闸 | 假数字比没有数字更坏 | `scripts/report-gates.mjs`（见 §0.10.6） |
+
+### 0.10.6 防再漂：`pnpm gates`
+
+项数只有真跑过才知道，而跑一遍要四个仓各自 build+test —— 于是没人顺手做。
+新增 `scripts/report-gates.mjs`（伞仓 `pnpm gates`）：把六道闸门各跑一遍、打印实测值、
+与 README 逐格比对，**对不上就 exit 1**（锚点失效也红，并把失效的锚点打出来）。
+
+**刻意不进 `pnpm -r test`**——它自己就要跑那五道闸门，塞进去会递归。
+定位是"发版前 / 改完判据后跑一次"。本轮它已经把上面第 6 条的四组错数全指出来了。
+
+### 0.10.7 第二批（同轮续审，又发现 3 条）
+
+| # | 缺陷 | 影响 | 判据 / 验证 |
+|---|---|---|---|
+| 7 | 插件把那个 6 位配对码**原样写进 info 日志**（`pairing-window` 三处 + `index.ts` 的 `publishPairing` 一处），而同一个 stdout 上 `pill/routes.ts` 刻意只记 `tokenLength` + `epoch`，中继侧 D2 也为此把完整码降到 debug | 同一个 stdout **一半守纪律一半不守**；而 `routes.ts` 的注释白纸黑字写着"stdout 是会被翻出来贴进 issue 的那种地方" | 改记 `tokenHandle()`（码文本 sha256 前 8 位：可对账、推不回 10⁶ 里的任何一码）+ 1 条判据。**三条日志路径逐个变异验证**：各自改回 `token:` 都会红 |
+| 8 | mp 发送前不估**整帧**体积：附件那两道闸只算附件，正文长度没人管 | 附件顶格 512KB + 正文 ≥ ~88KB → 线上帧 > 中继 1MB `maxPayload` ⇒ **1009 关掉整条连接** = "发出去就掉线"。而这一页的注释里写着"绝不能让它变成莫名掉线"——闸在那里，只是不在这条路上 | `estimateWireFrameBytes`（载荷 JSON → 密封 ×4/3 → 信封），发送前拦、**拦在清空输入框之前**（否则用户要重打一遍）+ 3 条判据。变异：闸不生效 → 2 条红；估算高估 → 5 条红 |
+| 9 | 第 8 条的第一版自己踩了 `payload += String(len)` | `+=` 见到字符串就变成拼接：`821447` + `"16800"` → 字符串，于是一条 6 字节的小消息被估成 **3.1MB** 而当场拦下 | 判据「纯文字长消息必须照发」当场抓住。**教训：算式要有人真的跑一遍**——盯着纸面算术看不出 `+=` 那一行 |
+
+另把 `pairing-window.tick()` 里一条"会在此重算 expiresAt"的注释改成实际行为
+（重算在 `applyServerTtl` 里，刻意只做一处：同一个 ttlMs 算两遍迟早算出两个
+不同的 expiresAt，而那种分歧的表现是"手机上还剩很久、实际刚过期"）。
+
+### 0.10.8 本轮闸门
+
+`wire 107` / `server 132（1 skip）` / `control 464` / `伞仓 274` + 本地全链路 17 步 /
+`mp verify + md 32 + theme + 对比度 304` 全绿；三仓 `format:check` 全绿；
+`scripts/check-mp-ui.mjs` 通过。
 
 **四仓从今天起统一用这一个版本号**（`1.0.0-rc.1`）；此前的 1.9.0 / 2.0.x / 1.0.6 / 1.1.x
 是私有期编号，不再作为发版口径。

@@ -74,13 +74,13 @@
 
 ```sh
 # 逐仓装依赖 + 跑各自的闸门（都在仓根）
-cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 92
-cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 127（1 skip）
-cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 448
+cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 107
+cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 132（1 skip）
+cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 464
 cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
 
 # 伞仓：取证与运维
-env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（255）+ 本地全链路 17 步
+env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（274）+ 本地全链路 17 步
 env -u NODE_OPTIONS node e2e/run.mjs    # 只跑本地全链路
 ```
 
@@ -117,13 +117,13 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 
 | 命令 | 覆盖 | 项数 |
 |---|---|---|
-| `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 92 |
+| `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 107 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
-| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行） | 127（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 448 |
-| `npm --prefix dsh-remote-mp run check` | 小程序三道闸：verify-miniprogram（32 项）、theme:check、对比度（302 组） | 全过 |
+| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行） | 132（1 skip） |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**，以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 464 |
+| `npm --prefix dsh-remote-mp run check` | 小程序**四道闸**（`check` = verify + md + theme:check + contrast）：verify-miniprogram 结构自检（JSON / 页面 / 组件引用 / 自研 JS 的声明一致性）、markdown 规范（32 项）、theme:check（主题文件与生成器同步）、对比度（304 组） | 全过 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock）。**跑之前先过产物新鲜度闸门**（逐文件比对 src↔dist 的 mtime：改了 src 没 build 时直接红，测的不是旧产物） | 17 步 |
-| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 255 |
+| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 274 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
 | `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（**图片 PNG / 裸矩阵两条路径**；文本字形那条已随文本码一起删掉） | 28 组 ×2 |
 
@@ -143,6 +143,23 @@ CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22�
 以及"缺 token 必须拒绝启动"。装/查/打包固定走 Node 22（pnpm 11.7 要 node ≥22.13），
 只有 `node --test` 跑在矩阵版本上——细节见 `HANDOFF.md` §4 第 2 条。
 **伞仓没有 CI**：它没有 remote，而且 `e2e/` 需要四棵平行仓在场，GitHub 上拿不到。
+
+### 上面那张表怎么不漂
+
+「项数」那一列只在你真跑过之后才知道，而跑一遍要四个仓各自 build+test——所以它过去
+漂过好几次（92→106、448→457、255→262、对比度 302→304），每次都是"加了判据忘了改文档"。
+为此有一条命令：
+
+```sh
+env -u NODE_OPTIONS pnpm gates        # = node scripts/report-gates.mjs
+```
+
+它把上表六道闸门**各跑一遍**，打印实测值并与 README 逐格比对，对不上就 **exit 1**
+（锚点失效也会红，并把失效的锚点打出来）。所以：加完判据跑一次它，照着表里的数改
+「快速开始」那一节的行尾注释和测试表两处，然后它就是绿的。
+
+它**没有**进 `pnpm -r test`——它自己就要跑那五道闸门，塞进去会递归。定位是
+"发版前 / 改完判据后跑一次"。
 
 ## 防休眠
 
