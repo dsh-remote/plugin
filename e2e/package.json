@@ -4,7 +4,8 @@
   "type": "module",
   "description": "本地端到端与真实链路取证：真中继 + 真插件运行时（内核面 mock）+ 真小程序客户端代码。",
   "scripts": {
-    "test": "files=$(find . -maxdepth 1 -name '*.test.mjs' -print); [ -n \"$files\" ] || { echo 'e2e: 一个 *.test.mjs 都没匹配到——跑 0 个测试的绿不算绿' >&2; exit 1; }; echo \"$files\" | xargs node --test && node run.mjs",
+    "check:build": "node run.mjs --check-build-freshness",
+    "test": "node run.mjs --check-build-freshness && { count=$(find . -maxdepth 1 -name '*.test.mjs' | wc -l | tr -d ' '); [ \"$count\" -ge 1 ] || { echo 'e2e: 一个 *.test.mjs 都没匹配到——跑 0 个测试的绿不算绿' >&2; exit 1; }; find . -maxdepth 1 -name '*.test.mjs' -print0 | xargs -0 node --test && node run.mjs; }",
     "test:local-chain": "node run.mjs",
     "test:mp-client": "node --test mp-client.test.mjs",
     "test:mp-pages": "node --test mp-chat-blocks.test.mjs mp-sessions-list.test.mjs mp-pairing.test.mjs",

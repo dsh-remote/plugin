@@ -276,11 +276,11 @@ FAB 72rpx → 56rpx、贴右边缘、品牌色实心圆改成中性面 + 细边 
 
 - 所有 pnpm/node 命令带 env -u NODE_OPTIONS（子 shell 注入的 loader 会搞挂 ESM 解析）。
 - 装/查/打包走 Node 22（pnpm 11 要 22.13+）；pnpm/action-setup 不写 version；本家包在 minimumReleaseAgeExclude 写裸名。
-- node --test 统一 find 加 xargs，先断言文件数非零；跑的是 dist，先 build（build 先 clean）。
+- node --test 统一 find 加 xargs（e2e 用 `-print0 | xargs -0` 单次调用），先断言文件数非零；跑的是 dist，先 build（build 先 clean）。e2e 启动时（`e2e/run.mjs` 与 `e2e/package.json` 的 test）会先做 **src↔dist 新鲜度闸门**：任一 `.ts` 比它的 `dist/src/*.js` 新（或缺产物）就直接红并打印该跑哪条 build —— 闸门只报错、不替你 build。
 - 每仓一把 write deploy key，core.sshCommand 已钉好，直接 git push，别加 GIT_SSH_COMMAND。
 - profile 里 node_modules/dsh-remote-control 必须是真目录、无 file 依赖；改代码后重启 Harness + 重载页面。
 - 插件与 e2e 是两份物理 ws，按被测产物解析位置取副本，装不上就抛。
-- 探针 scripts/approval-probe.mjs 加 session 参数；取码走 POST /pairing/new + GET /pairing.png + zxing 解（不改 profile、不重启；umask 077，用完删）。
+- 探针 scripts/approval-probe.mjs 加 session 参数；取码**只读 `~/.dsh/dsh-remote-control/status.json` 里那张 `pairing.qr`**（没有码就打印 curl 指路并退出，脚本自己不发码：不改 profile、不重启、不生成/落盘二维码）。判据 ④ 按**本回合发出的 cmdId** 对账回执（全局计数会被配对那一刻的回执喂饱）。
 - 读宿主实现直接 grep 打 app.asar；status.json 按定时器刷，读数要轮询加基线。
 - 判据红了先查判据再查实现；变异验证要改成能编译的形状，否则测的是上一个产物。
 

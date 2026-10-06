@@ -86,7 +86,14 @@ function defaultDesc() {
     encoding: 'utf8',
   })
   const subject = (r.stdout || '').trim()
-  return subject || `小程序更新 ${new Date().toISOString().slice(0, 10)}`
+  // 退出码必须看：git 失败（不是 git 仓、没有提交、cwd 不对）时 stdout 是空的，
+  // 静默退回"日期当描述"会把一次失败伪装成一条正常描述——而描述是要发到后台的。
+  if (r.status !== 0 || !subject) {
+    const reason = r.error ? String(r.error.message) : `git 退出 ${r.status}${String(r.stderr || '').trim() ? `：${String(r.stderr).trim().split('\n')[0]}` : ''}`
+    console.error(`⚠ 取不到 dsh-remote-mp 的最近一条提交（${reason}），描述退回日期。要指定就加 --desc "…"`)
+    return `小程序更新 ${new Date().toISOString().slice(0, 10)}`
+  }
+  return subject
 }
 
 /**

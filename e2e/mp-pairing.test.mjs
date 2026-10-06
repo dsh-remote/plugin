@@ -9,7 +9,7 @@
  * 手法：假的 wx 载入真实页面代码（与 mp-chat-blocks 同一套）。
  */
 import { createRequire } from 'node:module'
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +57,17 @@ globalThis.Page = (cfg) => {
 require(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'))
 assert.ok(captured, 'Page() 没被调用 —— 页面代码没加载起来')
 
+/**
+ * 造出来的页面实例：`afterEach` 里要把它们起的计时器停掉。
+ *
+ * 为什么必须收：页面代码里有一个 15 秒的「· N 秒前有消息」计时器
+ * （`pages/sessions/sessions.js` 的 `_startLinkTick`），只在 `onHide`/`onUnload` 停。
+ * 本文件直接调页面方法、从不走小程序的生命周期，于是它会一直 ref 着事件循环 ——
+ * `node --test` 等这个文件进程退出时永远等不到（自检实测：19 条全过、进程挂死 5 分钟）。
+ * 这是**装置**没收拾干净，不是产品行为有问题；修在装置里，别去改小程序仓。
+ */
+const pageInstances = []
+
 /** 页面里的 client 换成可控的假货，避免真的去连网 */
 function makePage(overrides = {}) {
   const ctx = { ...captured }
@@ -80,6 +91,7 @@ function makePage(overrides = {}) {
     on: () => () => {},
     ...overrides,
   }
+  pageInstances.push(ctx)
   return ctx
 }
 
@@ -94,6 +106,18 @@ beforeEach(() => {
   calls = []
   scanImpl = null
   modalImpl = null
+})
+
+afterEach(() => {
+  // 停掉每个页面实例起的计时器（`_startLinkTick`）与事件订阅：留着它们，
+  // 这个测试文件的进程就永远不退出（`node --test` 会一直等）。
+  for (const page of pageInstances.splice(0)) {
+    if (typeof page._stopLinkTick === 'function') page._stopLinkTick()
+    if (typeof page._off === 'function') {
+      page._off()
+      page._off = null
+    }
+  }
 })
 
 // ── 扫码即连 ──────────────────────────────────────────────────────────

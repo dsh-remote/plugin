@@ -46,10 +46,10 @@ function resolveAutomator() {
     'miniprogram-automator',
     path.join(ROOT, 'node_modules/miniprogram-automator'),
     path.join(ROOT, 'e2e/node_modules/miniprogram-automator'),
-    // 本机全局 workspace 里的副本
+    // 本机全局 workspace 里的副本。别把某个人的家目录写死：MP_AUTOMATOR_HOME 可以指过去。
     path.join(
-      process.env.HOME || '',
-      '.workbuddy/binaries/node/workspace/node_modules/miniprogram-automator',
+      process.env.MP_AUTOMATOR_HOME || path.join(process.env.HOME || '', '.workbuddy/binaries/node/workspace'),
+      'node_modules/miniprogram-automator',
     ),
   ]
   for (const c of candidates) {
@@ -80,6 +80,17 @@ function probePort(port) {
   })
 }
 
+/**
+ * 证据图里的**示例数据**一律中性。
+ *
+ * 为什么：这些值会被渲染进 PNG（主机卡上的主机名、会话行的工作区路径），
+ * 写死本机用户名/主机名等于把某个人的环境当"产品截图"发出去。要真实感时用
+ * `MP_SHOT_HOST_LABEL` / `MP_SHOT_WORKSPACE_ROOT` 覆盖，别把路径写回源码。
+ */
+const SAMPLE_HOST_LABEL = process.env.MP_SHOT_HOST_LABEL || '演示主机'
+const SAMPLE_WORKSPACE_ROOT = process.env.MP_SHOT_WORKSPACE_ROOT || '/home/dev'
+const sampleWorkspace = (name) => `${SAMPLE_WORKSPACE_ROOT}/${name}`
+
 /** 一页可能有多个状态要留档（默认态 / 展开态 / 有输入态） */
 const SHOTS = {
   sessions: [
@@ -93,7 +104,7 @@ const SHOTS = {
       data: {
         paired: true,
         sessions: [],
-        hostLabel: 'Linbin 的 MacBook',
+        hostLabel: SAMPLE_HOST_LABEL,
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
@@ -107,7 +118,7 @@ const SHOTS = {
       data: {
         paired: true,
         sessions: [],
-        hostLabel: 'Linbin 的 MacBook',
+        hostLabel: SAMPLE_HOST_LABEL,
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
@@ -121,7 +132,7 @@ const SHOTS = {
         paired: true,
         hiddenArchived: 2,
         hiddenText: '已隐藏 2 个归档会话',
-        hostLabel: 'Linbin 的 MacBook',
+        hostLabel: SAMPLE_HOST_LABEL,
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
@@ -131,7 +142,7 @@ const SHOTS = {
           {
             id: 's-1',
             title: '重做小程序对话页信息流',
-            workspace: '/Users/linbin/dsh-remote-control',
+            workspace: sampleWorkspace('dsh-remote-control'),
             workspaceTag: 'dsh-remote-control',
             badgeText: '运行中',
             badgeTheme: 'primary',
@@ -141,7 +152,7 @@ const SHOTS = {
           {
             id: 's-4',
             title: '给配对码 TTL 分叉补回归',
-            workspace: '/Users/linbin/dsh-remote-control',
+            workspace: sampleWorkspace('dsh-remote-control'),
             workspaceTag: 'dsh-remote-control',
             badgeText: '待审批',
             badgeTheme: 'warning',
@@ -151,7 +162,7 @@ const SHOTS = {
           {
             id: 's-2',
             title: '排查 t-input 真机塌陷',
-            workspace: '/Users/linbin/dsh-remote-mp',
+            workspace: sampleWorkspace('dsh-remote-mp'),
             workspaceTag: 'dsh-remote-mp',
             badgeText: '空闲',
             badgeTheme: 'default',
@@ -161,7 +172,7 @@ const SHOTS = {
           {
             id: 's-3',
             title: '更新 HANDOFF 测试计数',
-            workspace: '/Users/linbin/dsh-remote-mp',
+            workspace: sampleWorkspace('dsh-remote-mp'),
             workspaceTag: 'dsh-remote-mp',
             badgeText: '空闲',
             badgeTheme: 'default',
@@ -219,7 +230,7 @@ const SHOTS = {
         paired: true,
         hiddenArchived: 2,
         hiddenText: '已隐藏 2 个归档会话',
-        hostLabel: 'Linbin 的 MacBook',
+        hostLabel: SAMPLE_HOST_LABEL,
         statusLabel: '在线',
         statusTheme: 'success',
         statusText: '已连接到主机',
@@ -227,7 +238,7 @@ const SHOTS = {
           {
             id: 's-1',
             title: '重做小程序对话页信息流',
-            workspace: '/Users/linbin/dsh-remote-control',
+            workspace: sampleWorkspace('dsh-remote-control'),
             workspaceTag: 'dsh-remote-control',
             badgeText: '运行中',
             badgeTheme: 'primary',
@@ -237,7 +248,7 @@ const SHOTS = {
           {
             id: 's-2',
             title: '排查 t-input 真机塌陷',
-            workspace: '/Users/linbin/dsh-remote-control',
+            workspace: sampleWorkspace('dsh-remote-control'),
             workspaceTag: 'dsh-remote-control',
             badgeText: '待审批',
             badgeTheme: 'warning',
@@ -247,7 +258,7 @@ const SHOTS = {
           {
             id: 's-3',
             title: '更新 HANDOFF 测试计数',
-            workspace: '/Users/linbin/dsh-remote-control',
+            workspace: sampleWorkspace('dsh-remote-control'),
             workspaceTag: 'dsh-remote-control',
             badgeText: '空闲',
             badgeTheme: 'default',
@@ -1048,61 +1059,84 @@ async function main() {
 
   const names = ONLY.length ? ONLY : Object.keys(SHOTS)
   let ok = 0
+  let failedShots = 0
+  const unknownPages = []
 
-  for (const key of names) {
-    const shots = SHOTS[key]
-    if (!shots) {
-      console.error(`跳过未知页面: ${key}（可选: ${Object.keys(SHOTS).join(', ')}）`)
-      continue
-    }
-    for (const shot of shots) {
-      try {
-        // 主题要在 reLaunch **之前**写好：onLoad 里 theme.applyTo 会从 storage 读，
-        // 写晚了这一轮就是浅色的（截图看起来"深色没生效"，其实是自己写晚了）。
-        if (shot.theme) {
-          miniProgram.evaluate(
-            (t) => wx.setStorageSync('drc.theme.v1', t),
-            shot.theme,
-          )
-        }
-        await miniProgram.reLaunch(shot.url)
-        await sleep(1500)
-        if (shot.data) {
-          // 直接改页面 data：省掉点击步骤，渲染路径与真实一致
-          const page = await miniProgram.currentPage()
-          await page.setData(shot.data)
-          // wait：setData 到截图之间的等待。默认 700ms 够渲染完；
-          // 想抓「占位组件还没被替换」的那一帧就调小（用时注入验证用）。
-          await sleep(shot.wait || 700)
-        }
-        // 走页面**自己的方法**（而不是 setData 摆状态）：只有这样验的才是那条真实路径。
-        // 摆状态只能证明 wxml 忠实渲染，证明不了"这条路径不再产生那个坏块"。
-        if (shot.calls) {
-          const page = await miniProgram.currentPage()
-          for (const [method, ...args] of shot.calls) {
-            if (method === 'flush') {
-              page.callMethod('_flushDelta')
-              continue
-            }
-            await page.callMethod(method, ...args)
+  try {
+    for (const key of names) {
+      const shots = SHOTS[key]
+      if (!shots) {
+        // 拼错页码也是一种失败：用户点名要这一页，结果一张都没出，不能算"完成"。
+        unknownPages.push(key)
+        console.error(`跳过未知页面: ${key}（可选: ${Object.keys(SHOTS).join(', ')}）`)
+        continue
+      }
+      for (const shot of shots) {
+        try {
+          // 主题要在 reLaunch **之前**写好：onLoad 里 theme.applyTo 会从 storage 读，
+          // 写晚了这一轮就是浅色的（截图看起来"深色没生效"，其实是自己写晚了）。
+          // 而且这一句**必须 await**：不 await 就 reLaunch，storage 还没落地，
+          // 这一轮读到的是上一轮的主题——与下面这句注释说的正好相反。
+          if (shot.theme) {
+            await miniProgram.evaluate(
+              (t) => wx.setStorageSync('drc.theme.v1', t),
+              shot.theme,
+            )
           }
-          await sleep(shot.wait || 700)
+          await miniProgram.reLaunch(shot.url)
+          await sleep(1500)
+          if (shot.data) {
+            // 直接改页面 data：省掉点击步骤，渲染路径与真实一致
+            const page = await miniProgram.currentPage()
+            await page.setData(shot.data)
+            // wait：setData 到截图之间的等待。默认 700ms 够渲染完；
+            // 想抓「占位组件还没被替换」的那一帧就调小（用时注入验证用）。
+            await sleep(shot.wait || 700)
+          }
+          // 走页面**自己的方法**（而不是 setData 摆状态）：只有这样验的才是那条真实路径。
+          // 摆状态只能证明 wxml 忠实渲染，证明不了"这条路径不再产生那个坏块"。
+          if (shot.calls) {
+            const page = await miniProgram.currentPage()
+            for (const [method, ...args] of shot.calls) {
+              if (method === 'flush') {
+                // 兄弟调用（下一行的 callMethod）是 await 的，这一条也得等：
+                // 不等就去截图，拍到的可能是 flush 之前那一帧。
+                await page.callMethod('_flushDelta')
+                continue
+              }
+              await page.callMethod(method, ...args)
+            }
+            await sleep(shot.wait || 700)
+          }
+          const file = path.join(OUT, `${shot.name}.png`)
+          await miniProgram.screenshot({ path: file })
+          console.log(`✓ ${shot.name}  ${file}  (${fs.statSync(file).size} B)`)
+          ok += 1
+        } catch (err) {
+          // 逐张失败必须计数：全部失败也要能报红（以前只 print 后 continue，
+          // 于是"完成 0 张"照样 exit 0 —— 绿得没有任何依据）。
+          failedShots += 1
+          console.error(`✗ ${shot.name}: ${err && err.message}`)
         }
-        const file = path.join(OUT, `${shot.name}.png`)
-        await miniProgram.screenshot({ path: file })
-        console.log(`✓ ${shot.name}  ${file}  (${fs.statSync(file).size} B)`)
-        ok += 1
-      } catch (err) {
-        console.error(`✗ ${shot.name}: ${err && err.message}`)
       }
     }
+  } finally {
+    // 异常路径也必须断：不断会在模拟器里留下一个 automator 会话，下一次 connect 撞上它。
+    await miniProgram.disconnect().catch((err) => console.error(`断开 automator 失败：${err && err.message}`))
   }
 
-  await miniProgram.disconnect()
-  console.log(`完成 ${ok} 张，输出目录 ${OUT}`)
-  if (errors.length) {
-    console.error(`\n捕获到 ${errors.length} 条运行时错误：`)
-    for (const e of [...new Set(errors)]) console.error(`  ${e}`)
+  console.log(`完成 ${ok} 张，失败 ${failedShots} 张，输出目录 ${OUT}`)
+  const fatal = []
+  if (failedShots > 0) fatal.push(`${failedShots} 张截图失败`)
+  if (unknownPages.length > 0) fatal.push(`点名了不存在的页：${unknownPages.join(', ')}（这些页一张都没截）`)
+  if (ok === 0) fatal.push('一张都没截成——"完成 0 张"的绿不算绿')
+  if (errors.length > 0) fatal.push(`${errors.length} 条运行时错误`)
+  if (fatal.length > 0) {
+    console.error(`\n✗ ${fatal.join('；')}`)
+    if (errors.length) {
+      console.error(`捕获到的运行时错误（去重）：`)
+      for (const e of [...new Set(errors)]) console.error(`  ${e}`)
+    }
     process.exit(1)
   }
 }

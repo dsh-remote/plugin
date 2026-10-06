@@ -35,8 +35,9 @@ describe('配对码 TTL 分叉：本地过期、中继还有效（180s > 本地�
   })
 
   after(async () => {
-    await shutdown({ host, relay })
+    const { relayExit } = await shutdown({ host, relay })
     rmSync(workDir, { recursive: true, force: true })
+    assert.equal(relayExit.code, 0, `中继必须优雅退出 0，实际 ${JSON.stringify(relayExit)}`)
   })
 
   test('本地过期之后点刷新：回答仍是完整的码（expiresInMs>0、token 非空），不是"码不完整"', async () => {

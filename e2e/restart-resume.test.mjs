@@ -200,8 +200,17 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
       assert.match(scene.phone.client.statusText, /会话已失效，请重新配对/, `文案必须逐字对号，收到 ${JSON.stringify(scene.phone.client.statusText)}`)
       assert.equal(scene.phone.client.convId, '', 'unknown_session 必须让手机清掉配对')
       // 连接不能因此被掐断：客户端要继续重连并提示输码（红线 7）。
-      const closed = controlFrames('phone', 'received', ['error'])
-      assert.ok(closed.length >= 1)
+      // 而且这条 error 帧必须落在**重启之后**：tap 是进程级累积的，
+      // 不套基线时">= 1"会被本用例前面那些帧（或别的用例）喂饱。
+      const errorFramesAfterRestart = tap.frames
+        .slice(framesAtRestart)
+        .filter((f) => f.side === 'phone' && f.dir === 'received')
+        .map((f) => safeJson(f.raw))
+        .filter((frame) => frame?.t === 'error')
+      assert.ok(
+        errorFramesAfterRestart.length >= 1,
+        `重启之后手机没收到任何 error 帧（本用例这一档之前的 error 帧数=${controlFrames('phone', 'received', ['error']).length}）`,
+      )
       const health = await second.health()
       assert.equal(health.conversations, 0, '新中继的路由表就该是空的（内存态、有意不持久化）')
       assert.equal(scene.phone.client.status, 'needs-pair', '手机必须停在 needs-pair 等用户，而不是继续转圈')
@@ -303,6 +312,10 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
       })
     } finally {
       scene.phone.close()
+      // ⚠️ 这里的 `second` 是**第二台主机**（bootHost），不是中继：`host.stop()` 是同步的
+      // 停机（走 disposers），没有退出码可查——别照抄 (b) 里那套 `await stop('SIGTERM')`，
+      // 那会把 undefined 当退出码读，抛在 finally 里 → 后面的 `relay.stop()` 不执行 →
+      // 中继子进程留着，整个测试进程被它的 stdio 钉住不退出（本次自检真踩过）。
       if (second) second.stop()
       scene.host.stop()
       const exit = await scene.relay.stop('SIGTERM')
@@ -386,6 +399,7 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
       assert.equal(health.conversations, 0, `会话最终必须被回收（留下没人接的会话就是黑洞），实际 ${health.conversations}`)
     } finally {
       scene.phone.close()
+      // 同 (c)：`second` 是主机，同步停机；中继的退出码在下面这一条上查。
       if (second) second.stop()
       scene.host.stop()
       const exit = await scene.relay.stop('SIGTERM')

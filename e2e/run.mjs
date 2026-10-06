@@ -24,7 +24,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -87,6 +87,117 @@ export async function pickFreePort() {
   const { port } = server.address()
   await new Promise((resolve) => server.close(resolve))
   return port
+}
+
+// ── 产物新鲜度闸门（P0-1）────────────────────────────────────────────
+
+/**
+ * 三棵被测仓的 **src ↔ dist 新鲜度**闸门（本文件只 import 它们的 dist 产物）。
+ *
+ * 为什么这道闸门必须有：整套 e2e 打的全是 dist（`RELAY_MAIN` / `PLUGIN_ENTRY`），
+ * 所以"改了 src 忘了 build"与"build 失败了"在判据上的表现**一模一样**——全绿，
+ * 而测的是旧产物。HANDOFF 里有真实事故：`pnpm build` 失败，判据却全绿。
+ *
+ * 判据是**逐文件**的：`src/**\/*.ts` 里每一个文件，都要有一份 mtime 不早于它的
+ * `dist/src/**\/*.js`（同相对路径；缺失也算过期）。为什么不只比"最新的那个"：
+ * 一次**中途失败**的 build（先写好的产物是新的、后面那个根本没写出来）能骗过
+ * "最新 dist ≥ 最新 src"这种整体比较，逐文件比不会。
+ *
+ * 闸门只报错，**绝不替这三个仓 build**：正在改它们源码的人（另开的 agent / 本人）
+ * 会被并发构建踩到，而且"谁来 build"是发布流程的决定，不是测试脚本的。
+ */
+export const BUILD_TARGETS = [
+  {
+    label: 'dsh-remote-protocol',
+    srcDir: path.join(ROOT, 'dsh-remote-protocol', 'src'),
+    distDir: path.join(ROOT, 'dsh-remote-protocol', 'dist', 'src'),
+    build: 'cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm build',
+  },
+  {
+    label: 'dsh-remote-control/packages/plugin',
+    srcDir: path.join(ROOT, 'dsh-remote-control', 'packages', 'plugin', 'src'),
+    distDir: path.join(ROOT, 'dsh-remote-control', 'packages', 'plugin', 'dist', 'src'),
+    build: 'cd dsh-remote-control && env -u NODE_OPTIONS pnpm -r build',
+  },
+  {
+    label: 'dsh-remote-server',
+    srcDir: path.join(ROOT, 'dsh-remote-server', 'src'),
+    distDir: path.join(ROOT, 'dsh-remote-server', 'dist', 'src'),
+    build: 'cd dsh-remote-server && env -u NODE_OPTIONS pnpm build',
+  },
+]
+
+/** 递归列出一个目录下指定后缀的文件（返回绝对路径；目录不存在返回 []）。 */
+function listFilesByExt(dir, ext) {
+  const out = []
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile() && full.endsWith(ext)) out.push(full)
+    }
+  }
+  walk(dir)
+  return out
+}
+
+/**
+ * 逐个源文件核对产物新鲜度。返回 `{ ok, problems, checked }`，不抛、不退出——
+ * `main()` 与 `e2e/package.json` 的 test 脚本各自决定怎么红。
+ */
+export function checkBuildFreshness({ targets = BUILD_TARGETS } = {}) {
+  const problems = []
+  const checked = []
+  for (const target of targets) {
+    if (!existsSync(target.srcDir)) {
+      problems.push(`${target.label}：源码目录不存在 ${target.srcDir}（工作区结构变了？）`)
+      continue
+    }
+    if (!existsSync(target.distDir)) {
+      problems.push(`${target.label}：产物目录不存在 ${target.distDir}（这个仓从没 build 过）`)
+      continue
+    }
+    // `.d.ts` 是声明文件、没有对应的 .js 产物，排除；其余每个 .ts 都必须有 dist/src 下同相对路径的 .js。
+    const sources = listFilesByExt(target.srcDir, '.ts').filter((file) => !file.endsWith('.d.ts'))
+    if (sources.length === 0) {
+      problems.push(`${target.label}：${target.srcDir} 下一个 .ts 都没有——闸门没有材料可查，这本身就是异常`)
+      continue
+    }
+    for (const source of sources) {
+      const rel = path.relative(target.srcDir, source)
+      const output = path.join(target.distDir, rel.replace(/\.ts$/, '.js'))
+      if (!existsSync(output)) {
+        problems.push(`${target.label}：${rel} 没有对应产物 ${path.relative(ROOT, output)}（缺失；build 中途失败就会长这样）`)
+        continue
+      }
+      const srcMs = statSync(source).mtimeMs
+      const distMs = statSync(output).mtimeMs
+      if (distMs < srcMs) {
+        const late = Math.round((srcMs - distMs) / 1000)
+        problems.push(
+          `${target.label}：${rel} 比产物新 ${late}s（src ${new Date(srcMs).toISOString()} 晚于 dist ${new Date(distMs).toISOString()}）`,
+        )
+      }
+    }
+    checked.push({ label: target.label, sources: sources.length })
+  }
+  return { ok: problems.length === 0, problems, checked }
+}
+
+/** 把新鲜度报告渲染成人能直接照做的一段话（红了的第一屏就该说清"跑哪条 build"）。 */
+export function formatBuildFreshnessReport(report) {
+  if (report.ok) {
+    return `产物新鲜度：${report.checked.map((entry) => `${entry.label}（${entry.sources} 个 .ts）`).join('、')} 的每个源文件都有不早于它的 dist 产物`
+  }
+  const lines = [
+    '✗ 产物新鲜度闸门未通过：下面这些 src 比 dist 产物新，或产物缺失。',
+    '  整套 e2e 只 import dist 产物，这一条不修，判据全绿也证明不了任何事（测的是旧产物）。',
+  ]
+  for (const problem of report.problems.slice(0, 16)) lines.push(`    · ${problem}`)
+  if (report.problems.length > 16) lines.push(`    · …还有 ${report.problems.length - 16} 条`)
+  lines.push('  逐仓重新构建（本闸门只报错，不替你 build——构建会与正在改这三个仓的人冲突）：')
+  for (const target of BUILD_TARGETS) lines.push(`    ${target.build}`)
+  return lines.join('\n')
 }
 
 /** 构建竞态兜底：另一个 agent 会同时重建 protocol/plugin 产物，可能把 dist 短暂清空。 */
@@ -319,9 +430,23 @@ export async function startRelay({ port, env = {}, label = '中继' } = {}) {
       assert.equal(response.status, 200, `${label} /healthz 应当返回 200`)
       return await response.json()
     },
-    stop(signal = 'SIGTERM') {
+    /**
+     * 停中继并等它退出——**带上限**。
+     *
+     * 不给上限的话，一个不肯退出的中继会把调用方永远钉住：它的 stdio 管子还开着，
+     * 测试进程根本退不出去（本次自检踩过一次 5 分钟零输出的挂死，起因是 finally 里
+     * 抛异常漏掉了 stop，但"stop 本身可能永远不返回"这个坑是独立的）。超时就 SIGKILL，
+     * 返回的 `{ code: null, signal: 'SIGKILL' }` 会让"必须优雅退出 0"那条判据照常红，
+     * 而不是把整套测试挂在这里。
+     */
+    async stop(signal = 'SIGTERM') {
       child.kill(signal)
-      return exit
+      const killTimer = setTimeout(() => child.kill('SIGKILL'), 5000)
+      try {
+        return await exit
+      } finally {
+        clearTimeout(killTimer)
+      }
     },
     exited: exit,
   }
@@ -455,6 +580,14 @@ export async function bootHost({
 
   return {
     hostId: id,
+    /**
+     * 这台主机写状态快照的**确切文件**。
+     *
+     * 为什么要把路径交出来：目录里的状态文件叫 `host-<pid>-<序号>.json`，同一个用例里
+     * 可能出现第二台主机（重启类用例）留下的另一份，而 `readdirSync(...)[0]` 拿到的
+     * 先后顺序没有任何保证——读错一台，判据会红在一个与它无关的地方。要读就读这个字段。
+     */
+    statusFile,
     state,
     /** 注册出去的命令个数：恒为 0（`/drc` 已删）。 */
     commandCount: () => commandCount,
@@ -843,6 +976,15 @@ export function assertListPushed({ resultPayload, sessionChangedPayload, cmdId, 
 // ── 主脚本 ───────────────────────────────────────────────────────────
 
 export async function main() {
+  // 产物新鲜度闸门放在**最前面**：它红了就不该跑任何一步——跑了也只会在旧产物上
+  // 得到一堆看着像"链路通"的绿。
+  const freshness = checkBuildFreshness()
+  if (!freshness.ok) {
+    process.stdout.write(`${formatBuildFreshnessReport(freshness)}\n`)
+    process.exitCode = 1
+    return
+  }
+  note(formatBuildFreshnessReport(freshness))
   const started = Date.now()
   const workDir = path.join(os.tmpdir(), `drc-e2e-run-${process.pid}`)
   mkdirSync(workDir, { recursive: true })
@@ -1362,6 +1504,12 @@ export async function main() {
 
 const executedDirectly = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
 if (executedDirectly) {
+  // 单独跑闸门（`e2e/package.json` 的 test 脚本用它做前置）。只查产物，不起任何进程。
+  if (process.argv.includes('--check-build-freshness')) {
+    const report = checkBuildFreshness()
+    process.stdout.write(`${formatBuildFreshnessReport(report)}\n`)
+    process.exit(report.ok ? 0 : 1)
+  }
   main().catch((error) => {
     process.stdout.write(`\n本地全链路异常：${String(error?.stack ?? error)}\n`)
     process.exitCode = 1

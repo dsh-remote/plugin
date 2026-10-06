@@ -14,7 +14,10 @@
  *
  * 两条顺序是硬要求：
  * 1. **先装 shim 再 import dsh-remote-mp/miniprogram/core**（否则 `wx` 未定义，模块加载即坏）；
- * 2. **绕过 require 缓存**（同一进程里多个测试用例要各自干净的 storage）。
+ * 2. **每个用例重新 `installWxShim()`**——storage 是每次装 shim 时新建的 `Map`，
+ *    所以要用例之间互不污染，靠的是重装 shim，而**不是**清 require 缓存
+ *    （`loadMpModules()` 走 `createRequire`，同一进程里模块只加载一次，模块级的
+ *    状态会跨用例留着；要干净就得连模块级状态一起想清楚，别指望这里删缓存）。
  */
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -35,11 +38,14 @@ export function createRecorder() {
     push(direction, raw, meta = {}) {
       frames.push({ direction, raw, at: Date.now(), ...meta })
     },
-    /** 只看发给中继的 enc 帧的密文字段（零知识断言的对象必须是"交给中继的那一帧"）。 */
+    /**
+     * 只看手机**交给中继**的 enc 帧密文字段（零知识断言的对象必须是"交给中继的那一帧"）。
+     *
+     * 方向命名是"从 socket 的角度看"的，很容易反：`direction: 'in'` = 手机发出去
+     * （`task.send`），`direction: 'out'` = 手机收到的（`onMessage`）。交给中继的那一份是 'in'。
+     */
     outboundCiphertexts() {
-      return frames
-        .filter((f) => f.direction === 'out' && f.raw.includes('"ciphertext"'))
-        .map((f) => f.raw)
+      return frames.filter((f) => f.direction === 'in' && f.raw.includes('"ciphertext"')).map((f) => f.raw)
     },
   }
 }

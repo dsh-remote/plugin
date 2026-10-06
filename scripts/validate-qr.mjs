@@ -16,7 +16,7 @@
  * 用法：node scripts/validate-qr.mjs
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { accessSync, constants, existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
@@ -31,11 +31,85 @@ if (!existsSync(qrModule)) {
   process.exit(2)
 }
 
-const PY = '/Users/linbin/.workbuddy/binaries/python/envs/default/bin/python'
-if (!existsSync(PY)) {
-  console.error(`✖ 找不到校验用的 venv：${PY}\n  创建：python3 -m venv <path> && <path>/bin/pip install zxing-cpp pillow segno`)
+/** 在 PATH 上找一个可执行的解释器（不依赖 `which`：换台机器不一定有它）。 */
+function findOnPath(name) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue
+    const full = path.join(dir, name)
+    try {
+      accessSync(full, constants.X_OK)
+      return full
+    } catch {
+      /* 继续找 */
+    }
+  }
+  return null
+}
+
+/**
+ * 校验用的 Python 解释器。**不许写死某台机器的 venv 绝对路径**——这个脚本是
+ * README 承诺的"改二维码必跑"闸门，写死路径换台机器就 exit 2（而那看起来像"校验失败"）。
+ *
+ * 查找顺序（每一档都记下来，找不到时把"试过谁"打给人看）：
+ *   1. 环境变量 `PYTHON`（可以是绝对路径，也可以是 PATH 上的名字）；
+ *   2. 仓库相对的隔离 venv：`.tmp/qr-venv`、`scripts/.venv`、`.venv`；
+ *   3. 本机那套 `.workbuddy` 里的默认 venv（**家目录相对**，不写死用户名）；
+ *   4. PATH 上的 `python3` / `python`。
+ * 找到的候选还要能 `import zxingcpp, PIL`，否则换下一个（全都不能就报可读的依赖缺失，
+ * 而不是等到解码时才给一段 Python traceback）。
+ */
+function resolvePython() {
+  const tried = []
+  const push = (source, candidate) => {
+    if (candidate) tried.push({ source, file: candidate })
+  }
+  const fromEnv = process.env.PYTHON
+  if (fromEnv) {
+    // PYTHON=python3 这种写法是"名字"而不是路径，得走 PATH 解析。
+    push('环境变量 PYTHON', fromEnv.includes(path.sep) ? fromEnv : findOnPath(fromEnv))
+  }
+  for (const rel of ['.tmp/qr-venv/bin/python', 'scripts/.venv/bin/python', '.venv/bin/python']) {
+    push(`仓库相对 venv（${rel}）`, path.join(root, rel))
+  }
+  // 这台开发机的默认 venv（原来是写死的绝对路径，换台机器就 exit 2）。
+  push(
+    '本机 .workbuddy 默认 venv',
+    path.join(process.env.HOME || '', '.workbuddy', 'binaries', 'python', 'envs', 'default', 'bin', 'python'),
+  )
+  push('PATH 上的 python3', findOnPath('python3'))
+  push('PATH 上的 python', findOnPath('python'))
+
+  for (const entry of tried) {
+    if (!existsSync(entry.file)) {
+      entry.missing = '文件不存在'
+      continue
+    }
+    try {
+      execFileSync(entry.file, ['-c', 'import zxingcpp, PIL'], { stdio: 'pipe' })
+      // 显式给的 PYTHON 用不了却静默换人，是最容易让人误判的一种"绿"：先说一声。
+      const firstFailure = tried.find((item) => item.missing)
+      if (firstFailure?.source === '环境变量 PYTHON') {
+        console.error(`⚠ 环境变量 PYTHON 指的 ${firstFailure.file} 用不了（${firstFailure.missing}），已回退到 ${entry.file}`)
+      }
+      return { ...entry, tried }
+    } catch (error) {
+      entry.missing = `起不来或缺依赖（${String(error.stderr ?? error.message).trim().split('\n').pop()?.slice(0, 120)}）`
+    }
+  }
+  return { file: null, tried }
+}
+
+const python = resolvePython()
+if (!python.file) {
+  console.error('✖ 找不到可用的校验用 Python（要能 import zxingcpp 与 PIL）。试过：')
+  for (const entry of python.tried) console.error(`    · ${entry.source} → ${entry.file}${entry.missing ? `（${entry.missing}）` : ''}`)
+  console.error('  三种出路：')
+  console.error('    1) PYTHON=/path/to/python node scripts/validate-qr.mjs          # 显式指定')
+  console.error('    2) python3 -m venv .tmp/qr-venv && .tmp/qr-venv/bin/pip install zxing-cpp pillow segno   # 建仓库相对 venv（默认就找它）')
+  console.error('    3) pip3 install zxing-cpp pillow segno                          # 装进 PATH 上的 python3')
   process.exit(2)
 }
+const PY = python.file
 
 const { qrMatrix, qrPng } = await import(pathToFileURL(qrModule).href)
 
@@ -116,6 +190,17 @@ try {
   process.exit(2)
 }
 
+// 返回条数先对账再做逐条判断：少返一条时 `decoded[i]` 是 undefined，
+// 直接读 `r.ok` 会抛 `TypeError: Cannot read properties of undefined`——
+// 栈指向本文件第 N 行，完全看不出"是 Python 那边少返了结果"。
+if (!Array.isArray(decoded) || decoded.length !== request.length) {
+  console.error(
+    `✖ 解码器返回的结果条数不对：请求 ${request.length} 组，拿到 ${Array.isArray(decoded) ? decoded.length : `不是数组（${typeof decoded}）`}。`,
+  )
+  console.error('  条数对不上就不许继续：错位会把前一组的结果记到后一组头上，报出来的失败指不到真正的用例。')
+  process.exit(2)
+}
+
 const KINDS = [
   ['png', '图片 PNG（配对唯一的出口）'],
   ['matrix', '裸矩阵'],
@@ -127,6 +212,12 @@ for (let i = 0; i < request.length; i++) {
   const { text, ecc } = request[i]
   const r = decoded[i]
   checked++
+  if (r === undefined || r === null) {
+    // 上面的条数对账已经拦住这种情况；留着是防线（改成 Python 端流式输出时它还有用）。
+    failed++
+    console.error(`✖ 解码器没给第 ${i + 1} 组的结果：${JSON.stringify(text.slice(0, 24))} ecc=${ecc}`)
+    continue
+  }
   if (!r.ok) {
     failed++
     console.error(`✖ 解码器异常：${JSON.stringify(text.slice(0, 24))} ecc=${ecc}: ${r.error}`)
@@ -142,6 +233,7 @@ for (let i = 0; i < request.length; i++) {
 
 console.log('')
 console.log(`真实解码校验（zxing-cpp）：${checked} 组用例 × ${KINDS.length} 种产物，${failed} 项失败`)
+console.log(`  校验用的解释器：${python.source} → ${PY}`)
 if (failed > 0) {
   console.error('✖ 校验失败')
   process.exit(1)

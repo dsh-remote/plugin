@@ -32,6 +32,15 @@ describe('多张配对码并存：按所用码取 PSK（旧事故回归）', () 
   let phone = null
   let earlier = null
   let later = null
+  /**
+   * 本用例这台手机的 tap 基线（配对**之前**那一瞬）。
+   *
+   * `tap` 是进程级累积的：不记基线就取 `tappedFrames('phone','received')` 的全量历史，
+   * 样本里会混进与本轮无关的帧（本文件里是配对前的控制帧；判据里那句"主机发来的每一帧"
+   * 也就没有明确的时间起点）。基线取在配对前，是因为 join 时那两帧
+   * （`ev.session_changed` / `ev.keep_awake_state`）正是下面要验的对象。
+   */
+  let framesBaseline = 0
 
   before(async () => {
     mkdirSync(workDir, { recursive: true })
@@ -64,6 +73,7 @@ describe('多张配对码并存：按所用码取 PSK（旧事故回归）', () 
   })
 
   test('2. 用**较早那张**配对：paired 与 peer-joined 都必须指向它', async () => {
+    framesBaseline = tappedFrames('phone', 'received').length
     const { pairing } = await pairPhone(host, phone, { pairing: earlier, expectedRelayUrl: relay.url })
     assert.equal(pairing.token, earlier.token, '本用例必须用较早那张码')
     const claim = controlFrames('phone', 'sent', ['pair-begin-client']).pop()
@@ -95,7 +105,9 @@ describe('多张配对码并存：按所用码取 PSK（旧事故回归）', () 
     await phone.waitForPayload('ev.message_delta', '回合收尾（done:true）', { where: (p) => p.done === true, timeoutMs: 12_000 })
     await delay(200)
 
+    // 样本 = 「配对（含 join 那两帧）→ 这一次 prompt 回合结束」这一段。
     const down = tappedFrames('phone', 'received')
+      .slice(framesBaseline)
       .map((f) => ({ raw: f.raw, frame: JSON.parse(f.raw) }))
       .filter((entry) => entry.frame.t === 'enc' || entry.frame.t === 'enc-batch')
     assert.ok(down.length >= 8, `主机一共只发来 ${down.length} 帧密文，样本太少不足以证明"每一帧"`)

@@ -69,7 +69,20 @@ const PILL_PORT =
     }
   })()
 
-const readStatus = () => JSON.parse(readFileSync(STATUS_FILE, 'utf8'))
+/** 读主机状态文件：失败时给**可读**的错误，不留裸栈（ENOENT 的栈指不到"插件没在跑"）。 */
+const readStatus = () => {
+  let raw
+  try {
+    raw = readFileSync(STATUS_FILE, 'utf8')
+  } catch (error) {
+    throw new Error(`读不到主机状态文件 ${STATUS_FILE}：${error.message}（插件在跑吗？carrier 是真内核吗？）`)
+  }
+  try {
+    return JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`${STATUS_FILE} 不是合法 JSON（插件正写到一半？）：${error.message}`)
+  }
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 let failures = 0
@@ -79,7 +92,14 @@ function check(name, ok, detail = '') {
   return ok
 }
 
-const status0 = readStatus()
+let status0
+try {
+  status0 = readStatus()
+} catch (error) {
+  console.error(`⛔ ${error.message}`)
+  console.error('   这个文件由插件按定时器刷新；先确认插件在跑（status.json 的路径是上面那一个）。')
+  process.exit(1)
+}
 check('主机在跑且是真内核', status0.carrier === 'services' && status0.relay === 'online', `carrier=${status0.carrier} relay=${status0.relay}`)
 if (!status0.pairing?.qr) {
   console.log('  ⛔ status.json 里没有 pairing.qr：先 `curl -X POST -H "x-drc-pair: 1" http://127.0.0.1:<port>/plugins/dsh-remote-control/pairing/new`，')
@@ -90,7 +110,12 @@ if (!status0.pairing?.qr) {
 installWxShim({ recorder: createRecorder() })
 const { codec, client: clientModule } = loadMpModules()
 const parsed = codec.parsePairingQr(status0.pairing.qr)
-check('解析出中继地址与 PSK', !!parsed?.psk, `server=${parsed?.server}`)
+// 这一条的返回值必须看：解析不出来时下面 `client.connect({ server: parsed.server })` 会抛
+// `Cannot read properties of null`，报错完全指不到真正的原因（"这张码不是配对码"）。
+if (!check('解析出中继地址与 PSK', !!parsed?.psk && !!parsed?.server, `server=${parsed?.server ?? '(空)'}`)) {
+  console.error('  ⛔ 这张码里没有 PSK 或没有中继地址，配不出去。先确认 status.json 里的 pairing.qr 是完整的 `dshr:/p?...`。')
+  process.exit(1)
+}
 
 const client = new clientModule.DrcClient().hydrate()
 const trail = traceOf(client)
@@ -102,7 +127,11 @@ let callsBefore = 0
 /** 提问那一面的基线（这一轮等到的是哪张卡，事先不知道，所以两套都记）。 */
 let qCallsBefore = 0
 /** 卡片**之后**收到的 `ev.run_state`：手机上那张卡的作废帧就在这一列里（判据 ⑦）。 */
-const seen = { toolEvents: 0, results: 0, voidBeats: [], resolvedFrames: [] }
+const seen = { toolEvents: 0, results: 0, voidBeats: [], resolvedFrames: [], resultFrames: [] }
+/** 本回合那一条决定的 cmdId（判据 ④ 要按它对账，不能拿"配对以来的任意一条回执"充数）。 */
+let decisionCmdId = null
+/** 发出决定**之前**的 `ev.result` 计数（判据 ④ 的基线）。 */
+let resultsBeforeDecision = 0
 /** `--interrupt-after`：卡片到达后 N 秒发 `cmd.interrupt`，用来验"主机收场 → 手机卡片作废"那一半（判据 ⑧）。 */
 const INTERRUPT_AFTER = Number(getFlag('--interrupt-after') ?? 0)
 const NO_ANSWER = args.includes('--no-answer') || INTERRUPT_AFTER > 0
@@ -112,7 +141,10 @@ client.on((event) => {
   const p = event?.payload
   if (!p) return
   if (p.t === 'ev.tool_event') seen.toolEvents += 1
-  if (p.t === 'ev.result') seen.results += 1
+  if (p.t === 'ev.result') {
+    seen.results += 1
+    seen.resultFrames.push(p)
+  }
   if (p.t === 'ev.run_state' && (request || qrequest)) seen.voidBeats.push(p)
   // 精确帧只有主机那一段代码会发（内核不会），所以它是"别的端收场 → 这张卡作废"唯一的无歧义证据。
   if ((p.t === 'ev.permission_resolved' || p.t === 'ev.question_resolved') && (request || qrequest)) {
@@ -129,6 +161,36 @@ client.on((event) => {
     console.log(`  📥 ev.permission_request ${JSON.stringify(p)}`)
   }
 })
+
+/**
+ * 抓**下一个**被分配的 cmdId。
+ *
+ * 为什么需要它：`resolvePermission` / `answer` 的 cmdId 是客户端自己分配的
+ * （`miniprogram/core/client.js:513-531` 里 `cmdId: this.newCmdId()`），调用点拿不到；
+ * 而判据 ④ 要按**本回合发出的那条命令**对账，不能拿"配对以来的任意一条 ev.result"充数
+ * （配对成功本身就会触发 `cmd.list_sessions` 的回执，于是 `seen.results > 0` 恒真）。
+ *
+ * 只观察、不改行为：拿到 id 立刻还原（原来是原型方法就删掉这次挂上去的自有属性）。
+ */
+function captureNextCmdId(fn) {
+  const hadOwn = Object.prototype.hasOwnProperty.call(client, 'newCmdId')
+  const original = client.newCmdId
+  let captured = null
+  client.newCmdId = function (...args) {
+    const id = original.apply(this, args)
+    if (captured === null) captured = id
+    return id
+  }
+  try {
+    // ⚠️ 顺序：必须先调 fn() 再看 captured。写成 `{ cmdId: captured, sent: fn() }`
+    // 会先求值 cmdId（此刻还是 null）——对象字面量的属性是按书写顺序求值的。
+    const sent = fn()
+    return { cmdId: captured, sent }
+  } finally {
+    if (hadOwn) client.newCmdId = original
+    else delete client.newCmdId
+  }
+}
 
 client.connect({ server: parsed.server, psk: parsed.psk, token: status0.pairing.token || undefined })
 const paired = await until(() => (client.status === 'online' ? client : null), { trail, label: '配对进入 online', timeoutMs: 30_000 }).catch(() => null)
@@ -203,20 +265,27 @@ if (got) {
         : '  ✋ --no-answer：这一张不点（等主机自己收场，见判据 ⑦）',
     )
   } else if (kind === 'question') {
-    answered = client.answer(qrequest.sessionId, qrequest.requestId, qanswers)
+    // 基线先记：回执是异步来的，但基线必须在**发出决定之前**取值。
+    resultsBeforeDecision = seen.results
+    const decision = captureNextCmdId(() => client.answer(qrequest.sessionId, qrequest.requestId, qanswers))
+    answered = decision.sent
+    decisionCmdId = decision.cmdId
     // 同一条判据，只是读的是**提问那一面**的字段（两条 waterfall 各有一套读数，
     // 混着看会把"审批没弹"错读成"提问没弹"）。
     voidedBefore = Number(readStatus().kernel?.questionsDesktopVoided ?? 0)
     handoffAtAnswer = String(readStatus().kernel?.questionsSignalHandoff ?? '?')
-    console.log(`  📤 cmd.answer requestId=${qrequest.requestId} answers=${JSON.stringify(qanswers)}`)
+    console.log(`  📤 cmd.answer requestId=${qrequest.requestId} answers=${JSON.stringify(qanswers)} cmdId=${decisionCmdId}`)
   } else {
-    answered = client.resolvePermission(request.sessionId, request.requestId, option?.id ?? 'approve')
+    resultsBeforeDecision = seen.results
+    const decision = captureNextCmdId(() => client.resolvePermission(request.sessionId, request.requestId, option?.id ?? 'approve'))
+    answered = decision.sent
+    decisionCmdId = decision.cmdId
     // 「桌面那张卡有没有被关掉」这件事在这台机器上没有第二双眼睛能自证
     // （宿主渲染端的 AX 树只交出菜单栏），所以把它压成主机侧那两个字段：
     // 换成功 = fused，手机先答之后计数的**这一次**才加。先取基线。
     voidedBefore = Number(readStatus().kernel?.approvalDesktopVoided ?? 0)
     handoffAtAnswer = String(readStatus().kernel?.approvalSignalHandoff ?? '?')
-    console.log(`  📤 cmd.resolve_permission requestId=${request.requestId} decision=${option?.id ?? 'approve'}`)
+    console.log(`  📤 cmd.resolve_permission requestId=${request.requestId} decision=${option?.id ?? 'approve'} cmdId=${decisionCmdId}`)
   }
 }
 
@@ -311,8 +380,21 @@ if (!check(`① 手机真的收到了${K.label}卡`, !!got, got ? `${K.label ===
   check(`③ 卡上有到期时间（${K.label}卡上那颗倒计时要用）`, typeof card.expiresAt === 'string' && !Number.isNaN(Date.parse(card.expiresAt)), String(card.expiresAt))
   if (!NO_ANSWER) {
     await Promise.resolve(answered).catch(() => {})
-    await until(() => (seen.results > 0 ? true : null), { trail, label: '决定得到回执', timeoutMs: 20_000 }).catch(() => null)
-    check('④ 决定回传后主机给了回执（cmdId 对答链路活着）', seen.results > 0, `ev.result ${seen.results} 条`)
+    // 判据 ④ 的老写法是 `seen.results > 0`——**恒真**：配对成功本身就会触发一条
+    // `cmd.list_sessions` 并拿到回执，于是"决定回传后主机给了回执"根本不需要这次决定成立。
+    // 现在按**本回合发出的那个 cmdId** 收：等它，并且要求总数确实比发之前的基线多。
+    const receipt = await until(() => seen.resultFrames.find((frame) => frame.cmdId === decisionCmdId) ?? null, {
+      trail,
+      label: `决定（cmdId=${decisionCmdId ?? '(没抓到)'}）的回执`,
+      timeoutMs: 20_000,
+    }).catch(() => null)
+    check(
+      '④ 决定回传后主机给了回执（按本回合发出的 cmdId 对账，不是"配对以来的任意一条"）',
+      Boolean(receipt) && seen.results > resultsBeforeDecision,
+      receipt
+        ? `cmdId=${decisionCmdId} ← ${JSON.stringify(receipt).slice(0, 140)}（发之前 ${resultsBeforeDecision} 条 / 现在 ${seen.results} 条）`
+        : `等不到 cmdId=${decisionCmdId ?? '(没抓到)'} 的回执；这一轮收到的 ev.result 尾部：${JSON.stringify(seen.resultFrames.slice(-3)).slice(0, 240)}`,
+    )
   } else {
     console.log('  （④ 跳过：--no-answer 这条不点卡，没有回传也就没有回执）')
   }

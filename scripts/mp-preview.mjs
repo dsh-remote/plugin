@@ -84,6 +84,30 @@ if (r.status !== 0) {
 }
 console.log(out)
 
+/**
+ * 退出码 0 **不等于**二维码出来了。
+ *
+ * 这条校验是补上去的：CLI 有几种情况会 0 退出却没有可扫的码（登录态掉了、项目状态不对、
+ * 只回了一句提示），而调用方以为"预览好了"就去让用户扫码——用户扫不到任何东西，
+ * 于是问题被记在"用户手机"头上。证据按"像二维码"扫：一条 URL、一个图片路径、
+ * 或"二维码 / qr"字样；一条都没有就当失败，并把原始输出打出来。
+ */
+const QR_EVIDENCE = [
+  ['URL', /https?:\/\/\S+/i],
+  ['图片路径', /\.(png|jpe?g)\b/i],
+  ['"二维码"字样', /二维码/],
+  ['qr 字样', /\bqr\b/i],
+]
+const evidence = QR_EVIDENCE.filter(([, pattern]) => pattern.test(out)).map(([label]) => label)
+if (evidence.length === 0) {
+  console.error('✖ auto-preview 退出 0，但输出里没有任何二维码证据（没 URL、没图片路径、没"二维码"字样）。')
+  console.error('  这通常意味着这次"预览"其实没出码（登录态 / 项目状态 / IDE 未就绪），而不是二维码已经生成。')
+  console.error(`  原始输出：\n${out || '(空)'}`)
+  console.error('  请在开发者工具的「预览 / 自动预览」面板里确认二维码真的出现，再让用户扫。')
+  process.exit(1)
+}
+console.log(`  （二维码证据：${evidence.join(' / ')}）`)
+
 // 版本号只用来在终端里告诉人「预览的是哪一版」，不影响传给工具的调用
 try {
   const v = JSON.parse(fs.readFileSync(path.join(MP_DIR, 'package.json'), 'utf8')).version

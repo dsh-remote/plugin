@@ -43,8 +43,20 @@ function flag(name, fallback) {
   return true
 }
 
-const PORT = Number(flag('port', process.env.MP_AUTO_PORT || 9420))
+const PORT_RAW = flag('port', process.env.MP_AUTO_PORT || 9420)
+const PORT = Number(PORT_RAW)
 const ONLY = String(flag('case', '')).trim()
+
+// 端口先验：`NaN` 走到 `http.get({port: NaN})` 会抛 ERR_SOCKET_BAD_PORT，
+// 栈里全是 node 内部帧，指不到"你那个 --port 拼错了"。
+if (typeof PORT_RAW === 'boolean' || !Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(
+    `✖ 端口不合法：${JSON.stringify(PORT_RAW)}\n` +
+      (typeof PORT_RAW === 'boolean' ? '  --port 后面要跟端口号（不是空着）。\n' : '') +
+      '  用 --port <1..65535> 或环境变量 MP_AUTO_PORT 指定（默认 9420）。',
+  )
+  process.exit(1)
+}
 
 function resolveAutomator() {
   const candidates = [
@@ -825,11 +837,15 @@ async function resetThemeLight(mini) {
  * 深色下逐个读文字节点的实际 color，与所在卡片底色比亮度。
  * 挑的每个类名都是**故意没写 color** 的（靠继承），也就是这个 bug 的受害者；
  * 一旦有人在这些类上补了显式 color，判据依然成立（读了真值再比），不会假红。
+ *
+ * 返回值是 `[ok, label]`：`ok === null` 表示**跳过**（判据这一轮不成立），
+ * 它与 `true` 是两回事——调用的 main() 把跳过单列出来、不计入通过数。
  */
 async function darkInkChecks(page) {
-  // 主机名与列表标题只有在已配对、有会话时才渲染得出；没有就跳过（不判 ≠ 判过）
+  // 主机名与列表标题只有在已配对、有会话时才渲染得出；没有就跳过。
+  // **不许写成 [true, '跳过…']**：那是把"没判"记成"判过"（上一行注释自己写着"不判 ≠ 判过"）。
   const data = await page.data()
-  if (!data.paired) return [[true, '未配对，跳过字色判据（这一组只在有主机卡时成立）']]
+  if (!data.paired) return [[null, '未配对，跳过字色判据（这一组只在有主机卡时成立）']]
 
   const lum = (c) => {
     const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(String(c))
@@ -902,20 +918,35 @@ async function main() {
   }
 
   const miniProgram = await automator.connect({ wsEndpoint: `ws://127.0.0.1:${PORT}` })
-  miniProgram.on('exception', (err) => console.error('页面异常:', err.message))
+  /**
+   * 页面异常是**硬失败**，与 mp-shots 同一档：截图看不出运行时报错，
+   * 「占位组件替换失败」「组件未声明」这类真机问题只会从这里出来。
+   * 以前只 `console.error` 一句，从来不计入 failed，于是报错了一路照样 exit 0。
+   */
+  const pageErrors = []
+  miniProgram.on('exception', (err) => {
+    pageErrors.push(String(err?.message ?? err))
+    console.error('页面异常（计入失败）:', err?.message ?? err)
+  })
   let failed = 0
   let total = 0
+  let skipped = 0
   try {
     for (const name of names) {
       await miniProgram.reLaunch(`/pages/chat/chat?id=probe-${name}`)
       const page = await miniProgram.currentPage()
       await page.waitFor(500)
       const checks = await CASES[name](page, miniProgram)
-      total += checks.length
-      const bad = checks.filter(([ok]) => !ok)
+      // `ok === null` 是**跳过**：单列出来，既不计入通过、也不计入失败
+      // （把跳过记成通过就是空判定；记成失败又会在"这一组本来就不适用"时假红）。
+      const judged = checks.filter(([ok]) => ok !== null)
+      const skips = checks.filter(([ok]) => ok === null)
+      const bad = judged.filter(([ok]) => !ok)
+      total += judged.length
       failed += bad.length
-      console.log(`${bad.length ? '✗' : '✓'} ${name}  ${checks.length - bad.length}/${checks.length}`)
-      for (const [ok, label] of checks) console.log(`   ${ok ? '·' : '✗'} ${label}`)
+      skipped += skips.length
+      console.log(`${bad.length ? '✗' : '✓'} ${name}  ${judged.length - bad.length}/${judged.length}${skips.length ? `（另有 ${skips.length} 条跳过）` : ''}`)
+      for (const [ok, label] of checks) console.log(`   ${ok === null ? '⤼' : ok ? '·' : '✗'} ${label}`)
       // ⚠️ 每组跑完把**全局状态**归位，不靠各组自觉。
       // 主题存在 `wx` 本地存储里、同一台模拟器上共享：不归位的话，下一组
       // 任何"默认浅色"的判据都会一片红，而那些红与它们要验的代码毫无关系
@@ -930,7 +961,20 @@ async function main() {
   } finally {
     await miniProgram.disconnect()
   }
-  console.log(`\n探针 ${names.length} 组，判据 ${total - failed}/${total} 成立`)
+  // 断开之后再收一次尾：异常事件是异步到的，刚 disconnect 就来一条也不能漏。
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  for (const message of pageErrors) {
+    failed += 1
+    total += 1
+    console.log(`   ✗ 页面异常：${message}`)
+  }
+  // 一条都没判（全被跳过）也是一种假绿："0/0 成立"什么都证明不了。
+  if (total === 0) {
+    console.log('   ✗ 一条判据都没判成（全部跳过）——"0/0 成立"的绿不算绿')
+    failed += 1
+    total += 1
+  }
+  console.log(`\n探针 ${names.length} 组，判据 ${total - failed}/${total} 成立${skipped ? `（${skipped} 条跳过，不计入通过）` : ''}`)
   process.exit(failed ? 1 : 0)
 }
 

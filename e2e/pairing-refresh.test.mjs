@@ -23,7 +23,7 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
-import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { bootHost, shutdown, startRelay, untilAsync, newPhone, pairPhone } from './run.mjs'
 
@@ -46,16 +46,18 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
   })
 
   after(async () => {
-    await shutdown({ host, relay })
+    const { relayExit } = await shutdown({ host, relay })
     rmSync(workDir, { recursive: true, force: true })
+    assert.equal(relayExit.code, 0, `中继必须优雅退出 0，实际 ${JSON.stringify(relayExit)}`)
   })
 
   /** status.json 里那张（= 状态栏二维码那张、外部脚本照抄的那张）。 */
   function shownPairing() {
-    const file = readdirSync(workDir).filter((f) => /^host-.*\.json$/.test(f))[0]
-    if (!file) return null
+    // 读**这台主机自己**的状态文件（`host.statusFile`，bootHost 交出来的确切路径）。
+    // 老写法是 `readdirSync(workDir).filter(...)[0]`：目录里可能有另一台主机留下的
+    // `host-*.json`，而 readdir 的顺序没有保证 —— 读到哪一份全看文件系统心情。
     try {
-      return JSON.parse(readFileSync(path.join(workDir, file), 'utf8')).pairing ?? null
+      return JSON.parse(readFileSync(host.statusFile, 'utf8')).pairing ?? null
     } catch {
       return null
     }
