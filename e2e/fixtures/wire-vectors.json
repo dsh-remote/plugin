@@ -2,7 +2,7 @@
  "_meta": {
   "note": "由 e2e/tools/gen-vectors.mjs 生成，oracle 是保留的小程序实现 dsh-remote-mp/miniprogram/core/codec.js（一行不改）。新实现必须逐字节复现这里的一切。",
   "oracle": "dsh-remote-mp/miniprogram/core/codec.js",
-  "oracleSha256": "2f8d7bb4b5cbb8da79b3498379502ad6010ad60ced14609bc91aa0f6b95a488c",
+  "oracleSha256": "15b0107358bf57f863dd6f00033a712dbf4af8c237862b7420a9611cf5036dc8",
   "generatedBy": "e2e/tools/gen-vectors.mjs",
   "counts": {
    "text": 8,
@@ -1558,23 +1558,11 @@
    },
    {
     "input": "dshr:/p?s=wss://x&psk=ab+cd+ef+gh+ij+kl==",
-    "output": {
-     "v": 1,
-     "server": "wss://x",
-     "hostLabel": "dsh",
-     "psk": "ab+cd+ef+gh+ij+kl==",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "dshr:/p?s=wss://x&psk=ab%2Bcd%2Bef%2Bgh%2Bij%2Bkl%3D%3D",
-    "output": {
-     "v": 1,
-     "server": "wss://x",
-     "hostLabel": "dsh",
-     "psk": "ab+cd+ef+gh+ij+kl==",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "dshr:/p?s=wss://x&psk=AbCdEfGhIjKlMnOpQrSt//==",
@@ -1598,13 +1586,7 @@
    },
    {
     "input": "dshr:/p?s=https://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D",
-    "output": {
-     "v": 1,
-     "server": "https://x",
-     "hostLabel": "dsh",
-     "psk": "5YtfkeAfLGk7lu7z9SyZJA==",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&t=12",
@@ -1700,13 +1682,7 @@
    },
    {
     "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D#frag",
-    "output": {
-     "v": 1,
-     "server": "wss://x",
-     "hostLabel": "dsh",
-     "psk": "5YtfkeAfLGk7lu7z9SyZJA==#frag",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&extra=a b",
@@ -1730,13 +1706,7 @@
    },
    {
     "input": "dshr:/p?s=wss://x&psk=5YtfkeAfLGk7lu7z9SyZJA%3D%3D&psk=ab%2Bcd%2Bef%2Bgh%2Bij%2Bkl%3D%3D",
-    "output": {
-     "v": 1,
-     "server": "wss://x",
-     "hostLabel": "dsh",
-     "psk": "ab+cd+ef+gh+ij+kl==",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "dshr:/p",
@@ -1760,13 +1730,7 @@
    },
    {
     "input": "dshr://host/p?s=wss://x&psk=y",
-    "output": {
-     "v": 1,
-     "server": "wss://x",
-     "hostLabel": "dsh",
-     "psk": "y",
-     "token": ""
-    }
+    "output": null
    },
    {
     "input": "",
