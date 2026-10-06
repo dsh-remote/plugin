@@ -17,7 +17,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -280,4 +280,23 @@ test('PRODUCT.md 不再把已实现的东西列为"明确不做"或"待办"（G1
   for (const n of ['1', '2', '3', '4', '5']) {
     assert.ok(rules.includes(n), `PRODUCT.md §3 少了第 ${n} 条判据（§5 的表按编号引用它）`)
   }
+})
+
+test('docs/ 下每一份文档都被 README 的「文档」小节链接到（孤儿文档会静默烂掉）', () => {
+  // 伞仓没有 CI，而"没人找得到"是文档腐烂最常见的原因：仓库里躺着两份没人链接的文档
+  // （BOOTSTRAP-ASSESSMENT 与 HOST-CAPABILITIES），它们一旦过期就没有任何人会发现。
+  // 判据：新加一份 docs/*.md 必须同时在 README 里给它一个位置。
+  const docsDir = path.join(ROOT, 'docs')
+  const files = readdirSync(docsDir).filter((name) => name.endsWith('.md')).sort()
+  assert.ok(files.length >= 7, `docs/ 下只扫到 ${files.length} 份文档：目录结构变了？`)
+
+  const section = /\n## 文档\n([\s\S]*?)\n## /.exec(README)?.[1] ?? ''
+  assert.ok(section, 'README 里找不到「## 文档」小节')
+  const orphans = files.filter((name) => !section.includes(`docs/${name}`))
+  assert.deepEqual(
+    orphans,
+    [],
+    `docs/ 下这些文档没有出现在 README 的「文档」小节里：${orphans.join(', ')}。` +
+      '没人找得到的文档会静默烂掉——要么给它一个位置，要么移进 docs/legacy-spec/',
+  )
 })
