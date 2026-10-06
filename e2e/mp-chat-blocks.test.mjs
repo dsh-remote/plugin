@@ -2554,3 +2554,85 @@ test('提问：本会话的提问帧照常弹卡（别把上面那条改过头�
   assert.ok(p.data.pendingQuestion, '本会话的提问必须弹出来')
   assert.equal(p.data.pendingQuestion.questions[0].question, '要继续吗')
 })
+
+// ── 重试 / 压缩的瞬时提示（2026-10-06：主机 2.0.11 已发，mp 侧补上） ──
+//
+// 为什么值得测：`llm/retry` 与 `compaction/*` 期间手机原来是一片空白 ——
+// 用户看到"模型卡住了"就手动中断，而宿主其实正在重试/压缩。
+// 提示是顶栏下一行的一句瞬时话（`notice`），不是块流：半小时后再看
+// "正在重试 2/5"毫无意义，所以它不进历史，run-state 回到 idle 就清掉。
+// `failed` 与 `ended` 是两件事，绝不合并（上下文烂了还说正常，比看不见更糟）。
+
+test('重试：ev.retry 在顶栏下给一句瞬时提示（第几次/共几次/原因）', () => {
+  const p = readyAtBottom()
+  assert.equal(p.data.notice, '', '夹具自检：初始没有提示')
+  send(p, { t: 'ev.retry', sessionId: p.data.sessionId, attempt: 2, max: 5, reason: 'TRANSPORT' })
+  assert.equal(p.data.notice, '正在重试 2/5 · TRANSPORT')
+})
+
+test('重试：别的会话的重试帧不许污染本页（与其它事件同一条会话过滤）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.retry', sessionId: 'other_session', attempt: 1, max: 3 })
+  assert.equal(p.data.notice, '', '别的会话在重试不关这一页的事')
+})
+
+test('压缩：started 给提示，ended 当场清，failed 留原因且不与 ended 合并', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.compaction', sessionId: p.data.sessionId, state: 'started' })
+  assert.equal(p.data.notice, '正在压缩上下文')
+  send(p, { t: 'ev.compaction', sessionId: p.data.sessionId, state: 'ended' })
+  assert.equal(p.data.notice, '', '压缩结束了就没什么好说的')
+  send(p, { t: 'ev.compaction', sessionId: p.data.sessionId, state: 'started' })
+  send(p, {
+    t: 'ev.compaction',
+    sessionId: p.data.sessionId,
+    state: 'failed',
+    error: 'summarization produced no text summary content',
+  })
+  assert.match(p.data.notice, /^压缩没成功：/, 'failed 必须说失败，不能当成 ended 清掉')
+  assert.match(p.data.notice, /summarization/, '失败原因要留下来，否则用户不知道上下文已经烂了')
+})
+
+test('瞬时提示：run-state 回到 idle 就清掉（不把上一轮的话留到下一轮）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.retry', sessionId: p.data.sessionId, attempt: 2, max: 5, reason: 'TIMEOUT' })
+  assert.ok(p.data.notice, '运行时有提示')
+  send(p, { t: 'ev.run_state', sessionId: p.data.sessionId, state: 'idle' })
+  assert.equal(p.data.notice, '', '这一轮结束了，提示必须走')
+})
+
+test('瞬时提示：running 不清（别把刚收到的提示当场掐掉）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.compaction', sessionId: p.data.sessionId, state: 'started' })
+  send(p, { t: 'ev.run_state', sessionId: p.data.sessionId, state: 'running' })
+  assert.equal(p.data.notice, '正在压缩上下文', '还在跑就说明压缩还没完，提示要留着')
+})
+
+// PRODUCT.md G2 的另一半：审批跨会话原来是彻底静默（提问至少还有一句 toast）。
+// 主机阻塞等决定、180 秒超时自动拒绝，而手机毫无痕迹 —— 与提问对称处理。
+
+test('审批：不是本会话的审批帧不许静默吞掉（与提问对称）', () => {
+  const p = readyAtBottom()
+  const toasts = []
+  const original = wx.showToast
+  wx.showToast = (opts) => toasts.push(opts.title)
+  try {
+    p._onEvent({
+      kind: 'payload',
+      payload: { t: 'ev.permission_request', sessionId: 'other_session', requestId: 'rq_other' },
+    })
+    assert.equal(p.data.pendingPermission, null, '本会话不该收到别人的卡')
+    assert.equal(toasts.length, 1, '静默吞掉了：主机白等 180 秒，用户却完全不知道有审批在等')
+  } finally {
+    wx.showToast = original
+  }
+})
+
+test('审批：本会话的审批帧照常弹卡（别把上面那条改过头）', () => {
+  const p = readyAtBottom()
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.permission_request', sessionId: p.data.sessionId, requestId: 'rq_mine' },
+  })
+  assert.ok(p.data.pendingPermission, '本会话的审批必须弹出来')
+})
