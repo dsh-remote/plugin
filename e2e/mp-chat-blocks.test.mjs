@@ -2438,14 +2438,24 @@ test('FAB：锚在视口（fixed）而不是 .chat-wrap——height:100% 没解�
   assert.doesNotMatch(CHAT_WXSS, /\.chat-wrap\s*\{[^}]*transform/, '.chat-wrap 不能有 transform，否则 fixed 也会漂')
 })
 
-test('FAB：不与输入框重叠（输入区高 122rpx + 安全区 inset）', () => {
-  // 用户拍板：「不要与输入文本框重叠，往上一点」。用百分比而不是 rpx 常数：
-  // 输入区要占到视口 46% 需要屏幕矮到约 210px，所有现实机型都不可能。
-  const m = /\.jump\s*\{[^}]*bottom:\s*(\d+)%/.exec(CHAT_WXSS)
-  assert.ok(m, '.jump 必须按视口百分比定位（写死 rpx 会在不同机型上重新压到输入区）')
-  const pct = Number(m[1])
-  assert.ok(pct >= 40 && pct <= 55, `bottom 应落在屏幕中段（40–55%），实际 ${pct}%`)
-  assert.ok(pct >= 20, `${pct}% 在矮屏上可能落进输入区`)
+test('FAB：贴在输入区上方（按输入区高度算，不按视口百分比）', () => {
+  // 用户拍板：「放在下面，不要垂直居中」。上一版 bottom:46% 在一切高屏上都飘在
+  // 屏幕中段——看着像屏幕正中长的东西。用输入区高度定位才恒成立：
+  // 输入区 122rpx（padding 16/16+inset + pill 88rpx + 2rpx 边）+ 24rpx 间隙，
+  // 再加 env(safe-area-inset-bottom) 兜手势条/小黑条。
+  const m = /\.jump\s*\{[^}]*bottom:\s*calc\((\d+)rpx\s*\+\s*env\(safe-area-inset-bottom\)\)/.exec(CHAT_WXSS)
+  assert.ok(m, '.jump 的 bottom 必须是 calc(<输入区+间隙>rpx + env(safe-area-inset-bottom))')
+  const offset = Number(m[1])
+  assert.ok(offset >= 130 && offset <= 170, `bottom 偏移应≈146rpx（122 输入区 + 24 间隙），实际 ${offset}rpx`)
+  assert.match(CHAT_WXSS, /\.jump\s*\{[^}]*right:\s*24rpx/, '.jump 贴右，与输入区左右 padding 对齐')
+})
+
+test('FAB：有附件行时整个不渲染（按钮按输入区定位，会压住附件行）', () => {
+  const wxml = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  assert.match(wxml, /wx:if="\{\{!atBottom && !pendingPermission && !pendingQuestion && !attachCount\}\}"/)
 })
 
 test('FAB：点完「回到最新」，向下滚的中间帧不许把它重新挂上（deltaY > 0）', () => {
