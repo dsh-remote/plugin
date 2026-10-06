@@ -19,24 +19,37 @@
  * + 真小程序客户端代码。判据只可能这样写——单测里的假发码器不会告诉你
  * "那张码中继根本不认"。
  *
- * ## 已知不稳定：中继日志级别会决定它红不红（2026-10-06 实测）
+ * ## 第 2 条曾间歇性红（约 25%），抓到过现场，但**没有证明已修好**
  *
- * 下面第 2 条在 `DRC_LOG_LEVEL=warn` 下**间歇性**红：连跑 8 次红 2 次（约 25%）。失败形态
- * 固定是「扫屏幕上那张码失败：等不到配对完成（手机 status=online）」，事件轨迹
- * `connecting → pairing → needs-pair` —— 即中继回了 `pair-fail`。
+ * 抓到的形态固定：`connecting → pairing → needs-pair`，而中继日志里**有** `paired`。
+ * 2026-10-07 一次带证据的复现给出确切 reason：
  *
- * 改成 `info` 之后（见 before() 的注释）连跑 **22 次全绿**，一次没复现。`warn` 档恰好把
- * 唯一能回答「这张码为什么没配上」的那条 `pair failed {reason}` 藏掉了，所以这个对照
- * 也正好解释了当初为什么查不出来。
+ *     … 39.385  paired        sessionId=c_117c6a4440ba  detachedFrom:1
+ *     … 39.396  client online
+ *     … 39.396  pair failed   reason=already_used
  *
- * **机制没有定位，所以不敢说"修好了"**：按 25% 的发生率，22 次全绿在统计上很有说服力，
- * 但 `pair-fail` 的三个 reason（码过期 / 已用过 / 主机 socket 不在 OPEN）指向三条完全
- * 不同的路，而"日志级别能影响配对成功率"这件事本身还没有解释——它可能是巧合，也可能是
- * 写日志带来的时序变化恰好躲开了一个竞态。**如果以后又红，先看失败消息里附带的那几行
- * 中继日志**，那里面有 reason。**
+ * 也就是说：这一轮 `peer-joined` 刚被中继处理完（39.385），**11 毫秒后**本用例又调了一次
+ * `/pairing/new`，拿到的是**刚被花掉的那张码**；手机扫它 → `already_used`。
  *
- * 刻意**不加重试**：这条判据要证明的正是「屏幕上那张码**真的**能配上」，
- * 加重试等于把它变成测不出东西的判据。
+ * 机理上说得通：`/pairing/new` 是**幂等**的（"已经有一张能用的就给那张"，为的是防多码事故），
+ * 而"还能用"这个判断查的是 `currentPairing()` 里的 `spentTokens` —— 那份集合要等主机处理完
+ * `peer-joined` 才更新，也就是**一个往返**。真机上这个窗口要求用户在配对完成的十几毫秒内
+ * 点「刷新」，可以忽略。
+ *
+ * ### 改了什么、没改什么（如实说）
+ *
+ * `codeOnScreen({avoid})` 现在会**等**状态栏真的换了一张，而不是假定 `/pairing/new`
+ * 一定给一张没花过的——这条改动本身是对的（这条判据要的正是"没花过的码"）。
+ *
+ * **但它没有被证明修好了这个 flake**：把 `avoid` 的判断去掉（回到旧行为）再连跑 6 次，
+ * **同样全绿**。也就是说，在当前环境里这个 flake 已经不再复现，而我无法说清是
+ * 「改测试」起的作用，还是此前做的另外两处改动（把中继日志级别从 `warn` 提到 `info`、
+ * `startRelay` 加了端口碰撞重试）改变了时序。**所以这里不写"已修复"。**
+ *
+ * 要复现请注意：连续 6 次全绿**说明不了任何事**（本轮已经在这个判断上栽过一次——
+ * 曾据"改成 info 之后连跑 22 次全绿"推断日志级别是诱因，之后在 `info` 下照样红过）。
+ * 失败消息里现在自带中继那几行日志（`paired` / `pair failed reason` / `client online`），
+ * 复现时不必再为了看一行日志去翻档。
  */
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -55,6 +68,8 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
   const workDir = path.join(os.tmpdir(), `drc-e2e-pairfresh-${process.pid}`)
   let relay = null
   let host = null
+  /** 本文件里已经被花掉的码：`codeOnScreen({avoid})` 用它避免拿到刚用掉的那张。 */
+  const spentSoFar = []
 
   before(async () => {
     mkdirSync(workDir, { recursive: true })
@@ -96,27 +111,50 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
    * 二维码落盘 → 返回它。pairOnStartSec=0 时点之前屏幕上本来就没有码，
    * 所以"屏幕上有没有"这件事必须由 `/pairing/new` 主动触发。
    */
-  async function codeOnScreen(what) {
-    const reply = await host.callPill(NEW, { method: 'POST', headers: marker })
-    assert.equal(reply.status, 200, JSON.stringify(reply.body))
-    assert.ok(reply.body.token, `${what}：/pairing/new 必须给得出码`)
-    await untilAsync(
-      () => {
-        const p = shownPairing()
-        return Boolean(p && p.token === reply.body.token)
-      },
-      { timeoutMs: 8000, intervalMs: 200, label: `${what}（二维码落到 status.json）` },
-    )
-    return shownPairing()
+  async function codeOnScreen(what, { avoid = [] } = {}) {
+    /**
+     * `avoid` = 已经花掉的码。必须等：**等来一张新的，而不是假设这张路由会给一张新的**。
+     *
+     * 2026-10-07 定位到的间歇性失败（≈25%）：`/pairing/new` 是**幂等**的——
+     * "已经有一张能用的就给那张"（`ensureFreshPairing` 的注释写明这是为了防多码事故）。
+     * 而"能用的"这个判断依赖 `spentTokens`，那份集合要等主机处理完 `peer-joined`
+     * 才更新——那是**一个回环往返**（实测约 11 ms）。于是：
+     *
+     *   上一条刚配对成功（中继 39.385 paired）→ 本用例 39.396 调 /pairing/new
+     *   → 主机还没处理 peer-joined → 把它当成"还能用"递回来
+     *   → 手机扫它 → 中继 `pair failed reason=already_used`
+     *
+     * 真机上这个窗口要求用户在配对完成的十几毫秒内点「刷新」，可以忽略；
+     * 而**测试**恰好总在这个窗口里调（上一条配对刚结束就调下一条）。
+     * 所以修在测试：等状态栏真的换了一张，而不是假定它已经换了。
+     */
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const reply = await host.callPill(NEW, { method: 'POST', headers: marker })
+      assert.equal(reply.status, 200, JSON.stringify(reply.body))
+      assert.ok(reply.body.token, `${what}：/pairing/new 必须给得出码`)
+      await untilAsync(
+        () => {
+          const p = shownPairing()
+          return Boolean(p && p.token === reply.body.token)
+        },
+        { timeoutMs: 8000, intervalMs: 200, label: `${what}（二维码落到 status.json）` },
+      )
+      const shown = shownPairing()
+      if (!avoid.includes(shown.token)) return shown
+      // 拿到的是刚花掉的那张：等主机把 peer-joined 处理完（status.json 会换成新的），再点一次。
+      await delay(300)
+    }
+    throw new Error(`${what}：连点 ${6} 次 /pairing/new 都只拿回已经花掉的码（${avoid.join(', ')}）`)
   }
 
   /** 用屏幕上那张码真配一次手机：成没成不看主机怎么说，看手机有没有 online。 */
-  async function scanShown(tag) {
-    const pairing = await codeOnScreen(tag)
+  async function scanShown(tag, opts = {}) {
+    const pairing = await codeOnScreen(tag, opts)
     assert.ok(pairing && pairing.qr, `${tag}：屏幕上必须有一张码`)
     const phone = newPhone(tag)
     try {
       const { parsed } = await pairPhone(host, phone, { pairing })
+      spentSoFar.push(pairing.token)
       return { phone, parsed, token: pairing.token }
     } catch (error) {
       await shutdown({ phone })
@@ -160,7 +198,7 @@ describe('屏幕上那张配对码：花掉了就必须换掉，不许递给用�
   })
 
   test('2. 退出配对：当场换一张能用的码，而不是让用户干等 TTL（用户：要等下次刷新）', async () => {
-    const { phone, token: scanned } = await scanShown('先配一部')
+    const { phone, token: scanned } = await scanShown('先配一部', { avoid: spentSoFar })
 
     // 先把 status.json 的 3 秒节拍等过去：配对成功那一刻花掉的码已从 active 里摘掉，
     // 但文件可能还停在配对前那一版。不等就會读到陈旧内容，会把后面的判据变成假的。

@@ -116,3 +116,40 @@ test('恢复期间新建会话立刻失败，而不是干等 12 秒超时', asyn
   assert.equal(res.ok, false, '主机没确认过会话就不该假装能新建')
   assert.ok(waited < 2000, `应该立刻返回，实际等了 ${waited}ms（真机上这是 12 秒）`)
 })
+
+
+test('回归：nonce 计数器落盘失败时必须**拒绝发送**，不许拿一条没落盘的 nonce 去发（2026-10-06 审计）', () => {
+  // `session-store.nextNonceFor()` 原来把 `savePairing()` 的返回值丢掉了，于是
+  // "写不进盘"这条路没有任何人看见：内存里的计数器往前走，盘上的还停在旧值
+  // → app 一重启，计数器从旧值接着数 → **同一个 key 下重复 nonce** → 密钥流复用。
+  // 而那正是那个函数自己头一句注释承诺的不变量（"app 重启不能在同一 key 下重复 nonce"）。
+  //
+  // 现在写失败返回 null，`sendCmd` 见到 null 就**拒绝发送**——与插件侧同一条纪律
+  // （`transport/relay.ts`：缺 `_resume` 就拒绝，宁可失败也不复用 nonce）。
+  const failWrites = { on: true }
+  const prevSet = globalThis.wx.setStorageSync
+  globalThis.wx.setStorageSync = (k, v) => {
+    if (failWrites.on) throw new Error('setStorageSync:fail exceed storage quota')
+    return prevSet(k, v)
+  }
+  try {
+    const c = pairedClient()
+    const errors = []
+    c.on((e) => errors.push(e))
+
+    const sent = c.sendCmd({ t: 'cmd.list_sessions', cmdId: 'c1' })
+    assert.equal(sent, false, 'nonce 没能落盘还把这条发出去了：重启之后就是同一个 nonce 用第二次')
+    assert.equal(c._resume.nonceCounter, 0, `计数器被推到了 ${c._resume.nonceCounter}：发不出去就不该往前走（否则重启后从这里接着数就跳号了）`)
+    assert.ok(
+      errors.some((e) => /存储/.test(String(e.message || ''))),
+      `必须给用户一句说清原因的话（实际：${JSON.stringify(errors)}）`,
+    )
+
+    // 写恢复正常之后必须立刻能用——不许因为上一次失败就永久卡住。
+    failWrites.on = false
+    assert.equal(c.sendCmd({ t: 'cmd.list_sessions', cmdId: 'c2' }), true, '存储恢复后还是发不出去：失败一次就永久卡住了')
+    assert.equal(c._resume.nonceCounter, 1, '恢复正常后应恰好用掉第 1 个 nonce')
+  } finally {
+    globalThis.wx.setStorageSync = prevSet
+  }
+})
