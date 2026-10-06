@@ -92,17 +92,29 @@ globalThis.wx = {
   downloadFile: (opts) =>
     opts.success({ statusCode: 200, tempFilePath: globalThis.__drcDownloaded || '' }),
   // 画布那一链：两平台都算数的那一步（Android 上 compressImage 的 quality 被忽略）。
-  // exec 回一个假 canvas 节点，字段与真 API 对齐（node）。
+  //
+  // ⚠️ `exec` 的回调**必须异步**（`setTimeout(...,0)`）：真机上是逻辑层→渲染层一个
+  // 来回，同步回调会把"紧接 exec() 读结果"这条错路掩盖掉 —— 页面旧实现就是这么把
+  // null 缓存进 `_canvasNode`、整页生命周期一次都没缩过图，而判据全绿。
+  // `boundingClientRect(cb)` 的回调仍按老夹具同步给（量视口高度那条路与本页判据的
+  // 时序无关，保持既有用例确定性）；要验的异步是 **exec 这一层**。
   createSelectorQuery: () => {
     const q = {
+      _fields: false,
       select: () => q,
       boundingClientRect: (cb) => {
         if (cb) cb({ height: 600 })
         return q
       },
-      fields: () => q,
+      fields: () => {
+        q._fields = true
+        return q
+      },
       exec: (cb) => {
-        if (cb) cb([{ node: fakeCanvasNode() }])
+        const res = q._fields ? [{ node: fakeCanvasNode() }] : [{ height: 600 }]
+        setTimeout(() => {
+          if (cb) cb(res)
+        }, 0)
       },
     }
     return q
@@ -313,15 +325,62 @@ test('提问卡带 expiresAt 就走表；老宿主不发时不显示也不报错
 })
 
 
-test('ev.run_state 仍然是粗收单：两张卡一起收，并把还在走的表停掉', () => {
+test('ev.run_state 回到 idle 才是粗收单：两张卡一起收，并把还在走的表停掉', () => {
   const ctx = makePage()
   send(ctx, { t: 'ev.permission_request', sessionId: 's1', requestId: 'ap_c', action: 'bash', expiresAt: new Date(Date.now() + 60_000).toISOString() })
   send(ctx, { t: 'ev.question_request', sessionId: 's1', requestId: 'q_c', questions: [{ id: 'x', question: '要哪个' }] })
   assert.ok(ctx.data.pendingPermission && ctx.data.pendingQuestion, '夹具自检：两张卡没同时挂上')
-  send(ctx, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
-  assert.equal(ctx.data.pendingPermission, null, '粗收单那一帧失效了：老版本手机上两张卡会一直挂着')
+  send(ctx, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.equal(ctx.data.pendingPermission, null, '这一轮结束了，挂着的卡都不该留着（老宿主只发这一帧）')
   assert.equal(ctx.data.pendingQuestion, null)
   assert.equal(ctx._cardTimer, null, '卡片都收了而那条表还在走：它会一直 setData 到天荒地老')
+})
+
+
+/**
+ * running 那一帧**不是**粗收单信号（2026-10-06 修复的 P1）。
+ *
+ * 主机"只作废其中一张"时也发 `run_state`：桌面先把审批答掉，`voidStaleCard` 广播
+ * `runState(state:'running')`。旧写法把这一帧当粗收单，两张卡一起清 ——
+ * 还挂着的提问卡在手机上直接消失，而主机继续阻塞等回答，直到 300 秒超时
+ * 按"没答上"结掉。用户完全不知道自己错过了一次提问。
+ * 所以：running 里"哪张没了"只认精确帧。
+ *
+ * 判据在旧代码上必红：那时 running 会把两张卡一起清。
+ */
+test('ev.run_state{running} 不许粗清两张卡：主机只作废其中一张时也发这一帧', () => {
+  const ctx = makePage()
+  send(ctx, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'ap_r',
+    action: 'bash',
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
+  })
+  send(ctx, {
+    t: 'ev.question_request',
+    sessionId: 's1',
+    requestId: 'q_r',
+    expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    questions: [{ id: 'x', question: '要哪个' }],
+  })
+  assert.ok(ctx.data.pendingPermission && ctx.data.pendingQuestion, '夹具自检：两张卡没同时挂上')
+
+  // 桌面先答掉审批（精确帧），主机随后广播 running —— 提问那张还在等回答。
+  send(ctx, { t: 'ev.permission_resolved', sessionId: 's1', requestId: 'ap_r', by: 'desktop' })
+  send(ctx, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
+  assert.equal(ctx.data.pendingPermission, null, '桌面答掉的那张要收')
+  assert.equal(
+    ctx.data.pendingQuestion && ctx.data.pendingQuestion.requestId,
+    'q_r',
+    'running 帧把还挂着的提问卡一起清了：主机仍阻塞等回答，而用户看不到任何东西',
+  )
+  assert.ok(ctx._cardTimer, '提问卡还挂着，倒数表必须继续走（不能冻在那一刻）')
+
+  // 回到 idle 才粗清剩下那张（这一轮结束了）
+  send(ctx, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.equal(ctx.data.pendingQuestion, null, 'idle 是"这一轮结束"，挂着的卡随之作废')
+  assert.equal(ctx._cardTimer, null)
 })
 
 
@@ -1289,7 +1348,7 @@ test('审批：点了按钮就回传逐字的 option id，并停掉那个还在�
 })
 
 
-test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停', () => {
+test('审批：ev.run_state 回到 idle 时收走挂着的审批卡，倒计时也一起停', () => {
   const p = makePage()
   send(p, {
     t: 'ev.permission_request',
@@ -1300,8 +1359,9 @@ test('审批：ev.run_state 收走挂着的审批卡时，倒计时也一起停'
   })
   assert.ok(p.data.pendingPermission)
 
-  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'running' })
-  assert.equal(p.data.pendingPermission, null, '运行态一恢复，挂着的审批就作废')
+  // running **不**收卡（主机也用它广播"只作废了另一张"，见那条判据）；idle 才是粗收单。
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.equal(p.data.pendingPermission, null, '一轮结束（idle）时挂着的审批就作废')
   assert.equal(p._cardTimer, null, '作废的卡不该还留着一个在走的表')
 
   p._stopThinkTick()
@@ -2107,12 +2167,15 @@ test('加号 -> 选图片：走 chooseMedia，落成 image 附件', async () => 
 })
 
 
-test('加号：满了不弹选择，直接说满（不浪费一次点击）', () => {
+test('加号：满了不弹选择，直接说满（不浪费一次点击）', async () => {
   const p = makePage()
-  // 先填满（每次点加号都走一遍选择 -> 选图）
+  // 先填满（每次点加号都走一遍选择 -> 选图）。
+  // ⚠️ 必须逐次 await：缩图画布那个节点是**异步**回来的（真机也一样，
+  // 见夹具 createSelectorQuery 的注释），第一次不进画布的结果要下一拍才落进 attachments。
   for (let i = 0; i < 4; i++) {
     globalThis.__drcSheetTap = 0
     p.onAttach()
+    await settleAttach()
   }
   assert.equal(p.data.attachments.length, 4, '先确认真的满了')
   // 再点一次：这次不许弹选择，直接告诉用户满了
@@ -2788,4 +2851,346 @@ test('重连成功拉一次挂起卡（断链期间挂上的那一帧已经过�
   p._wasOffline = true
   p._onEvent({ kind: 'status', status: 'online' })
   assert.deepEqual(pulled, [p.data.sessionId], '重连后必须重新问一次')
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// rc1 前的缺陷修复判据（2026-10-06 晚）—— 每一条都在旧实现上先验过会红
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * 一段"典型长回复"：标题 / 段落 / 行内代码 / 粗体 / 列表都占全，
+ * markdown 排出来的 nodes 是原文的 **14.2 倍**（实测 19900 字符 → 281687 字符 JSON，
+ * 与真机取证的 13.7 倍同一个量级）。纯 `'x'.repeat(n)` 是压不出这个倍数的 ——
+ * 那样 nodes 里就一个 text 节点，套不出"单次 setData 顶过 1MB"这件事。
+ */
+function longMarkdown(chars) {
+  const lines = []
+  for (let i = 0; lines.join('\n').length < chars; i++) {
+    lines.push('### 第 ' + i + ' 节：`core/client.js` 里的 **' + i + '** 号问题')
+    lines.push('')
+    lines.push('这一节说明第 ' + i + ' 个改动点，涉及 `store.nextNonceFor()` 与 `_resume` 的关系，以及为什么不能回退计数器。')
+    lines.push('')
+    lines.push('- 第一条：**必须**保留 ' + i)
+    lines.push('- 第二条：`code-' + i + '` 的语义')
+    lines.push('')
+  }
+  return lines.join('\n').slice(0, chars)
+}
+
+/** 记下页面每一次 setData 的负载（判据读的是"渲染层真正收到的那一份"） */
+function recordPatches(p) {
+  const patches = []
+  const orig = p.setData
+  p.setData = (patch, cb) => {
+    patches.push(patch)
+    orig(patch, cb)
+  }
+  return patches
+}
+
+test('缩图画布：exec 的回调是异步的 —— 第一次就要拿到节点，null 不许被缓存死', async () => {
+  // 旧实现把节点赋在 exec 的回调里、却在 exec() 之后同步读它：读到的永远是 null，
+  // 而且这个 null 被缓存进 `_canvasNode`（首行 `!== undefined` 直接返回），
+  // 于是**整页生命周期一次都没缩过图**。夹具旧写法（同步回调）恰好掩盖了它。
+  const p = makePage()
+  const got = []
+  p._shrinkCanvas((n) => got.push(n ? 'node' : null))
+  assert.deepEqual(got, [], '夹具自检：exec 的回调必须是异步的（同步就说明这条判据验不到时序）')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.deepEqual(got, ['node'], '异步回调里必须把节点交出来；读到 null 就是"永远拿不到画布"')
+
+  // 第二次走缓存，也要给得出来（缓存的是**节点**，不是首帧那个 null）
+  p._shrinkCanvas((n) => got.push(n ? 'node' : null))
+  assert.deepEqual(got, ['node', 'node'], '缓存里必须是节点：缓存了 null 就等于整页禁用缩图')
+})
+
+test('图片附件：异步画布下"钉死长边"这一步真的跑了（Android 只靠这一步压体积）', async () => {
+  const p = makePage()
+  globalThis.__drcPick = { width: 3000, height: 4000 }
+  globalThis.__drcShrunk = undefined
+  p.setData({ sessionId: 's1' })
+  p.onAttach()
+  await settleAttach()
+  assert.deepEqual(
+    globalThis.__drcShrunk,
+    { w: 1200, h: 1600, quality: 0.6, fileType: 'jpg' },
+    '3000x4000 的图必须过画布缩到 1600 长边；不做这一步，Android 上 quality 被忽略 → 压完还是几 MB',
+  )
+  assert.match(p.data.attachments[0].path, /^tmp-shrunk-/, '进附件的必须是缩完那个文件')
+})
+
+test('容器没有 compressImage：加号选图不许抛 TypeError，要一路降级到画布/原文件', async () => {
+  const p = makePage()
+  const env = require(path.join(ROOT, 'dsh-remote-mp/miniprogram/core/env.js'))
+  const real = globalThis.wx.compressImage
+  globalThis.wx.compressImage = undefined
+  env.probe(true) // 能力探测带缓存：必须强制重采（与 mp-pairing 里那条 scanCode 判据同一套手法）
+  try {
+    globalThis.__drcPick = { width: 3000, height: 4000 }
+    globalThis.__drcShrunk = undefined
+    p.setData({ sessionId: 's1' })
+    assert.doesNotThrow(() => p.onAttach(), '老容器上没有 compressImage：硬调就是一句 TypeError，用户看到的是"加不进来"')
+    await settleAttach()
+    assert.equal(p.data.attachments.length, 1, '降级之后图照样要能加进来')
+    assert.ok(globalThis.__drcShrunk, '降级路径是"直接进画布"，不是"什么都不做"')
+  } finally {
+    globalThis.wx.compressImage = real
+    env.probe(true)
+  }
+})
+
+test('setData 负载：块上不许带第二份 markdown nodes，且长正文的一次提交要有界', () => {
+  const p = makePage()
+  p.setData({ sessionId: 's1' })
+  const patches = recordPatches(p)
+  const body = longMarkdown(19000)
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: body, done: true })
+  p._flushDelta()
+
+  // ⚠️ 末条 patch 是 `_commit` 之后那次 `toView`（滚到底的锚点翻面），
+  // 所以取"最后一次带块流的提交"。
+  const patch = patches.filter((x) => x.blocks).pop()
+  assert.ok(patch, '夹具自检：这一拍必须是一次块流提交')
+  const blocksJson = JSON.stringify(patch.blocks)
+  assert.ok(
+    !blocksJson.includes('"_md"'),
+    '块流里还带着 `_md`：同一份 nodes 进了两次 setData（一条 20000 字正文约 550KB）',
+  )
+  assert.ok(
+    blocksJson.length < body.length + 2000,
+    `块流本身不该因为 nodes 膨胀：${blocksJson.length} 字符 vs 正文 ${body.length}`,
+  )
+  assert.equal(Object.keys(patch.mdBodies || {}).length, 1, '渲染层要的那份 nodes 必须在 mdBodies 里')
+  assert.ok(
+    JSON.stringify(patch).length < 700 * 1024,
+    `单次 setData 的负载要有界（硬上限 1MB，超了静默丢弃）：实得 ${JSON.stringify(patch).length}`,
+  )
+})
+
+test('正文总量封顶：四条 20000 字回复不许把 setData 顶过 1MB，被截的段要明说', () => {
+  // 块数上限（MAX_BLOCKS）管不到字节：400 块正文能到好几 MB。这条按"新内容优先"
+  // 从旧到新截断，最新那段永远完整，旧的换成一句明说被省略的提示。
+  const p = makePage()
+  p.setData({ sessionId: 's1' })
+  const patches = recordPatches(p)
+  const body = longMarkdown(19900)
+  for (let i = 0; i < 4; i++) {
+    send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm' + i, delta: body, done: true })
+    p._flushDelta()
+  }
+  const patch = patches.filter((x) => x.blocks).pop()
+  assert.ok(patch, '夹具自检：必须有块流提交')
+  const texts = patch.blocks.filter((b) => b.kind === 'text')
+  assert.equal(texts.length, 4, '夹具自检：四条正文都在块流里')
+  const total = texts.reduce((n, b) => n + b.text.length, 0)
+  assert.ok(total <= 30000 + 4 * 200, `正文总量必须封顶，实得 ${total} 字符`)
+  assert.ok(
+    texts.filter((b) => /已省略/.test(b.text)).length >= 1,
+    '被截断的段必须换成一句明说的提示（静默丢内容比不显示更糟）',
+  )
+  assert.equal(texts[3].text, body, '最新那段必须完整（用户正在读的就是它）')
+  assert.ok(
+    JSON.stringify(patch).length < 700 * 1024,
+    `四条长正文的一次提交必须仍在半程以内：实得 ${JSON.stringify(patch).length}`,
+  )
+})
+
+test('裁剪：省略提示块不参与计数（否则每帧都报同一条数，且条数永远不收敛）', () => {
+  const p = makePage()
+  for (let i = 0; i < 400; i++) {
+    p._commit(p._append(p.data.blocks, { key: 'x' + i, kind: 'text', msgId: 'g' + i, text: 'x', done: true }))
+  }
+  assert.equal(p.data.blocks.length, 400, '夹具自检：刚好到上限')
+  p._commit(p._append(p.data.blocks, { key: 'x400', kind: 'text', msgId: 'g400', text: 'x', done: true }))
+  assert.equal(p.data.blocks.length, 401, '裁剪到上限 + 1 条说明')
+  assert.match(p.data.blocks[0].text, /已省略较早的 1 个片段/)
+  // 第 402 条：真实被挤掉的**内容**是第 2 条。旧实现把上一轮那条提示也算进 dropped，
+  // 于是这里报的还是 2 而且永远停在 2（用户看不出到底省了多少）。
+  p._commit(p._append(p.data.blocks, { key: 'x401', kind: 'text', msgId: 'g401', text: 'x', done: true }))
+  assert.equal(p.data.blocks.length, 401, '长度必须收敛在 MAX_BLOCKS + 1')
+  assert.match(p.data.blocks[0].text, /已省略较早的 2 个片段/, '提示块自己不参与计数')
+  for (let i = 402; i < 407; i++) {
+    p._commit(p._append(p.data.blocks, { key: 'x' + i, kind: 'text', msgId: 'g' + i, text: 'x', done: true }))
+  }
+  assert.equal(p.data.blocks.length, 401, '再来五条，长度照旧')
+  assert.match(p.data.blocks[0].text, /已省略较早的 7 个片段/, '每多一条内容只多省略一条：不许停在 2')
+})
+
+test('用户回显：主机把一条长消息切成多帧回传时，屏幕上只能有一块', () => {
+  const p = makePage()
+  stubReceipt(p, { ok: true })
+  const whole = 'A'.repeat(9000)
+  p.setData({ sessionId: 's1', inputText: whole })
+  p.onSend()
+  assert.equal(p.data.blocks.filter((b) => b.kind === 'user').length, 1, '夹具自检：本地立刻回显一整条')
+
+  // 主机按合帧窗口切帧（>4096 字符必切），最后一片才带 done；
+  // 旧实现把**半截缓冲**就拿去匹配，永远对不上 → 追加成第二、第三条用户块。
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'mu', role: 'user', delta: whole.slice(0, 4096), done: false })
+  p._flushDelta()
+  assert.equal(
+    p.data.blocks.filter((b) => b.kind === 'user').length,
+    1,
+    '半截缓冲不许落成新块（同一条消息会出现两三条半截的用户块）',
+  )
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'mu', role: 'user', delta: whole.slice(4096), done: true })
+  p._flushDelta()
+  const users = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users.length, 1, '整条到齐之后仍然只有一块')
+  assert.equal(users[0].text, whole, '匹配的是整条原文')
+  assert.equal(users[0].confirmed, true, '要标成已确认')
+})
+
+test('历史回放：与屏幕上已有内容交错时，按页内锚点对齐（不许 m3 排到 m1 前面）', async () => {
+  // 现场形状：会话正在跑，屏幕上已经有实时来的 m1 与 c2；历史第一页里
+  // 既有更早的 c1（没渲染过），也有更晚的 m3（也没渲染过）。
+  // 旧实现把这批"新块"整批拼在 `this.data.blocks` 之前 → c1/m3 跑到 m1/c2 前面。
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '第一段。', role: 'assistant', done: true })
+  p._flushDelta()
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c2', tool: 'Bash', phase: 'completed', resultPreview: 'ok2' })
+  stubClient(p, () =>
+    Promise.resolve({
+      sessionId: 's1',
+      cmdId: 'c1',
+      items: [
+        { t: 'ev.tool_event', callId: 'c1', tool: 'Read', phase: 'completed', resultPreview: 'ok1' },
+        { t: 'ev.message_delta', messageId: 'm1', delta: '第一段。', role: 'assistant', done: true },
+        { t: 'ev.tool_event', callId: 'c2', tool: 'Bash', phase: 'completed', resultPreview: 'ok2' },
+        { t: 'ev.message_delta', messageId: 'm3', delta: '第三段。', role: 'assistant', done: true },
+      ],
+    }),
+  )
+  p._maybeLoadHistory()
+  await flush()
+
+  const seq = p.data.blocks.map((b) => {
+    if (b.kind === 'text') return b.msgId
+    if (b.kind === 'steps') return 'steps:' + b.items.map((it) => it.callId).join(',')
+    return b.kind
+  })
+  const at = (needle) => seq.findIndex((s) => String(s).includes(needle))
+  assert.ok(at('m1') >= 0 && at('m3') >= 0, `夹具自检：两块正文都要在：${JSON.stringify(seq)}`)
+  assert.ok(at('c1') < at('m1'), `更早的工具组 c1 必须排在 m1 之前：${JSON.stringify(seq)}`)
+  assert.ok(at('c2') < at('m3'), `页内更晚的 m3 必须排在 c2 之后（旧实现会排到最前面）：${JSON.stringify(seq)}`)
+  assert.equal(seq.filter((s) => s === 'm1').length, 1, '与实时重复的那条不许变成两块')
+})
+
+test('历史读不到：loadHistory 抛错也要把 loading 复位（不许永远转圈）', async () => {
+  const p = makePage()
+  stubClient(p, () => Promise.reject(new Error('页形状不对')))
+  await p._loadHistory(null)
+  await flush()
+  assert.equal(p.data.historyState, 'error', 'then 里抛错而没 catch：historyState 永远停在 loading，只能退出重进')
+  assert.equal(p._historyBusy, false, '忙标志也必须复位，否则之后每次重连都被它挡在门外')
+})
+
+test('卡片倒数：onHide 停表、onShow 必须重启（否则回前台是停住的旧秒数）', () => {
+  const p = makePage()
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq_show',
+    action: 'Bash',
+    expiresAt: new Date(Date.now() + 90_000).toISOString(),
+  })
+  assert.ok(p._cardTimer, '夹具自检：卡挂了就该有表')
+  p.onHide()
+  assert.equal(p._cardTimer, null, 'onHide 要停表（定时器不许带到别的页）')
+  p.onShow()
+  assert.ok(p._cardTimer, '还有卡挂着就必须重启表：老宿主下从后台回来是停住的旧秒数')
+  assert.ok(p.data.pendingPermission.remainSec > 0, '重启之后立刻算出当前剩余秒数')
+  p._stopCardTick()
+})
+
+test('审批答掉时那表只停"两张卡都没了"：提问卡还挂着就继续走秒', async () => {
+  const p = makePage()
+  const sent = []
+  p.client = { resolvePermission: (...a) => sent.push(a), interrupt() {} }
+  send(p, {
+    t: 'ev.permission_request',
+    sessionId: 's1',
+    requestId: 'rq_p',
+    action: 'Bash',
+    options: [{ id: 'approve', label: '允许' }],
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })
+  send(p, {
+    t: 'ev.question_request',
+    sessionId: 's1',
+    requestId: 'q_p',
+    expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    questions: [{ id: 'x', question: '要哪个' }],
+  })
+  p.onPermissionTap({ currentTarget: { dataset: { decision: 'approve' } } })
+  assert.equal(sent.length, 1)
+  assert.ok(p.data.pendingQuestion, '夹具自检：提问卡还在')
+  assert.ok(p._cardTimer, '两张卡共用一条表：审批答掉不该把提问卡的倒计时冻住')
+  // 提问卡也没了之后，表由 tick 自己收（下一次醒来发现没有活着的卡就停）
+  p.setData({ pendingQuestion: null })
+  await new Promise((r) => setTimeout(r, 1200))
+  assert.equal(p._cardTimer, null, '两张都没了才停表（表自己收，不许提前冻住另一张）')
+})
+
+test('退页（onUnload）也要清掉待刷的 delta 定时器：不许 setData 到已销毁的页面', async () => {
+  const p = makePage()
+  const patches = recordPatches(p)
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm_late', delta: '还差一秒就 flush', done: false })
+  assert.ok(p._deltaTimer, '夹具自检：定时器排上了')
+  const before = patches.length
+  p.onUnload()
+  assert.equal(p._deltaTimer, null, 'onUnload 必须与 onHide 一样清掉它')
+  await new Promise((r) => setTimeout(r, 160))
+  assert.equal(patches.length, before, '退页之后还有 setData 落到已销毁的页面上')
+})
+
+test('点消息区收键盘：catchtap 截断了冒泡，onCollapseTodos 必须自己接上', () => {
+  const p = makePage()
+  p.setData({ inputFocus: true })
+  p.onCollapseTodos()
+  assert.equal(p.data.inputFocus, false, '消息区是最常点的空白：收键盘不能只靠外层冒泡（它被 catchtap 截断了）')
+  // 待办面板那半件事照旧
+  p.setData({ todosOpen: true, inputFocus: true })
+  p.onCollapseTodos()
+  assert.equal(p.data.todosOpen, false)
+  assert.equal(p.data.inputFocus, false)
+})
+
+test('vendor/marked：UMD 导出键必须是合法标识符，walkTokens 不许被打成 walkTokens}', () => {
+  // 文件头曾经指向一个不存在的 scripts/check-marked-vendor.mjs。这条判据就是那个脚本
+  // 要守的东西：导出键写坏时 `require` 得到的是 `walkTokens}` 这种键，
+  // `marked.walkTokens` 是 undefined —— 调用方只会看到一句 not a function。
+  const target = path.join(ROOT, 'dsh-remote-mp/miniprogram/core/vendor/marked.js')
+  const marked = require(target)
+  const bad = Object.keys(marked).filter((k) => !/^[A-Za-z_$][\w$]*$/.test(k))
+  assert.deepEqual(bad, [], `导出键里有非法标识符：${bad.join(',')}（marked 升级时 UMD 尾巴要重打）`)
+  assert.equal(typeof marked.walkTokens, 'function', 'walkTokens 缺失：导出键被打坏过（walkTokens}）')
+  assert.equal(typeof marked.lexer, 'function', 'markdown.js 只调 lexer()，它必须在')
+  assert.equal(typeof marked.parse, 'function')
+  // 版本号要对得上：文件头写的 v18.0.14 与产物里自带的那行注释必须是同一个版本
+  const src = fs.readFileSync(target, 'utf8')
+  const versions = [...src.matchAll(/marked v(\d+\.\d+\.\d+)/g)].map((m) => m[1])
+  assert.ok(versions.length >= 2, `版本号至少要出现两次（文件头 + 产物注释），实得 ${JSON.stringify(versions)}`)
+  assert.equal(new Set(versions).size, 1, `文件头与产物的版本号不一致：${JSON.stringify(versions)}`)
+})
+
+test('正文 nodes 要在后续提交里活下来（块上那份 _md 已经不进 setData 了）', () => {
+  // 这是"剥掉 `_md`"这个修法的**配套护栏**：nodes 现在缓存在页面实例的 `_mdNodes`
+  // 上，而收卡 / 工具事件 / 运行态这些提交走的是 `this.data.blocks`（里面已经没有
+  // `_md` 了）。缓存掉了的话，正文会在下一次无关提交时**整段从界面上消失**
+  // —— data 里 mdBodies 空掉，wxml 退回纯文本那一支，而判据若不看后续提交就全绿。
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '**结论**：没问题。', role: 'assistant', done: true })
+  p._flushDelta()
+  const block = p.data.blocks.find((b) => b.kind === 'text' && b.msgId === 'm1')
+  assert.ok(block && !('_md' in block), '夹具自检：块上不许再带 _md')
+  const nodesBefore = p.data.mdBodies[block.key]
+  assert.ok(nodesBefore, '夹具自检：这一拍应该有 nodes')
+
+  // 一次与正文无关的提交（工具事件 → run_state idle），正文必须原样还在
+  send(p, { t: 'ev.tool_event', sessionId: 's1', callId: 'c9', tool: 'Bash', phase: 'completed', resultPreview: 'ok' })
+  assert.deepEqual(p.data.mdBodies[block.key], nodesBefore, '工具事件提交之后正文 nodes 丢了（段落会退回纯文本）')
+  send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
+  assert.deepEqual(p.data.mdBodies[block.key], nodesBefore, '运行态提交之后正文 nodes 丢了')
+  assert.equal(p.data.blocks.find((b) => b.msgId === 'm1').text, '**结论**：没问题。', '正文原文也不能被动过')
 })

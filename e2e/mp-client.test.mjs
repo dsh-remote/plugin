@@ -470,7 +470,7 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     // 真机上的对应场景：正在读历史时用户点了「解除配对」，或链接掉了触发 _resetPairing ——
     // 两条路都走 _forgetPairing → _settleHistory。那里若"先换表再回调"，回调会在
     // done() 的幂等守卫处全部早退，挂起的请求既拿不到结果、也不会超时。
-    const solo = newPhone('历史断线手机')
+    const solo = newSoloPhone('历史断线手机')
     await pairPhone(host, solo, { expectedRelayUrl: relay.url })
     const pending = solo.client.loadHistory(MOCK_SESSION_ID, { limit: 3 })
     assert.equal(
@@ -498,7 +498,7 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
      *
      * 为什么用独立一台手机：解配是不可逆的，会打掉共享装置。
      */
-    const solo = newPhone('解配告别手机')
+    const solo = newSoloPhone('解配告别手机')
     await pairPhone(host, solo, { expectedRelayUrl: relay.url })
 
     // 先发一帧，让主机把这部手机记进成员表。
@@ -561,6 +561,197 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
       0,
       `手机已经解配、convId 也清掉了，主机却还留着这条会话（读到 ${host.state().conversations}）：它永远清不掉`,
     )
+  })
+
+
+  /* ── rc1 前的缺陷修复判据（2026-10-06 晚）─────────────────────────────
+     都在**真 client** 上验：这几条的病根都在 client.js/session-store.js 自己，
+     桩掉它们等于把要测的东西桩掉。每条都先确认过在旧实现上会红。 */
+
+  /**
+   * 造一台**有独立 installId** 的手机。
+   *
+   * 为什么不能直接用 `newPhone()`：夹具里所有"手机"共用同一个 wx storage，
+   * 于是 `hydrate()` 读出的 installId 也一样 —— 而中继按 clientId 保证
+   * "同 id 唯一活动连接"（`state.attachClient` 的顶号语义）。那会让新手机
+   * 一配对就把**共享 rig 那条连接顶掉**，共享手机随后重连、撞 unknown_session、
+   * 掉配对 —— 判据红在一个跟被测行为无关的抢注上（本次真踩到）。
+   * 真机上每台设备的 storage 是独立的，所以这里必须显式给一个不同的 id。
+   */
+  function newSoloPhone(label) {
+    const KEY = 'drc.installId'
+    const previous = globalThis.wx.getStorageSync(KEY)
+    globalThis.wx.setStorageSync(KEY, 'e2e-solo-' + encodeURIComponent(label) + '-' + Math.random().toString(36).slice(2, 8))
+    const solo = newPhone(label)
+    globalThis.wx.setStorageSync(KEY, previous)
+    return solo
+  }
+
+  test('12c. 退避重连期解配也要断得掉：不许留下会自我重连的孤儿 socket', async () => {
+    const solo = newSoloPhone('退避期解配手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+    const sock = solo.client.sock
+    const task = sock._task
+    assert.ok(sock && task, '夹具自检：配好之后要有活的 socket')
+
+    // 摆出"重连退避期"的样子：连接已经没了，重连排在定时器上。
+    // 这就是 `sendThenClose` 会直接 return false 的那种状态。
+    sock._task = null
+    sock._retry = 0
+    sock._scheduleReconnect()
+    assert.ok(sock._reconnectTimer, '夹具自检：重连已经排上')
+
+    const hellosBefore = solo.sent.filter((s) => s.frame.t === 'hello').length
+    solo.client.unpair()
+    assert.equal(solo.client.status, 'needs-pair')
+    assert.equal(solo.client.statusText, '已解除配对')
+    assert.equal(sock._manualClose, true, '断不掉就还有一条活着的重连链')
+    assert.equal(sock._reconnectTimer, null, '重连定时器是那个孤儿 socket 的全部动力，必须清掉')
+    assert.equal(solo.client._pendingToken, null, '正在配对中的那半程也要一起作废')
+
+    // 等过一个重连窗口（首次退避 1000~1500ms）。旧实现这里会自己连回来，
+    // 随后 hello-ok 把"已解除配对"改写成"请输入主机上的 6 位配对码"（探针实测）。
+    await delay(1800)
+    const hellosAfter = solo.sent.filter((s) => s.frame.t === 'hello').length
+    assert.equal(hellosAfter, hellosBefore, '解配之后又开了一条连接：孤儿 socket 自己重连了')
+    assert.equal(solo.client.statusText, '已解除配对', 'hello-ok 把"已解除配对"改写掉了')
+    task.close() // 收尾：把那条真实连接关掉（页面已经不再持有它）
+  })
+
+  test('12d. 配对记录缺失时拒绝发送（绝不回退 nonce 计数器：那会复用 nonce 与密文）', async () => {
+    const solo = newSoloPhone('nonce 探针手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+    const saved = solo.client._resume
+
+    // 不变式本身：同一条明文连发两次，nonce 计数器递增 → 密文必须不同。
+    const plain = () => ({ t: 'cmd.list_sessions', cmdId: 'probe_same_plaintext' })
+    const before = solo.sent.length
+    assert.equal(solo.client.sendCmd(plain()), true)
+    assert.equal(solo.client.sendCmd(plain()), true)
+    const cts = solo.sent.slice(before, before + 2).map((s) => s.frame.ciphertext)
+    assert.equal(cts.length, 2, '夹具自检：两条密文帧都要在')
+    assert.notEqual(cts[0], cts[1], '同明文两次发送得到同一个密文：nonce 被复用了（密钥流复用）')
+
+    // 缺 `_resume`：旧实现兜底 `{nonceCounter: 0}`，每条命令都从 0 起算 ——
+    // 上面那条不变式立刻被打破。正确做法是**拒绝发送**。
+    solo.client._resume = null
+    const errors = []
+    const off = solo.client.on((e) => {
+      if (e.kind === 'error') errors.push(e)
+    })
+    assert.equal(
+      solo.client.sendCmd({ t: 'cmd.list_sessions', cmdId: 'probe_no_resume' }),
+      false,
+      '缺配对记录时必须拒绝发送，而不是拿一个从 0 起算的兜底计数器发出去',
+    )
+    off()
+    assert.equal(solo.sent.length, before + 2, '拒绝发送就不该有新的密文帧')
+    assert.match(
+      errors.map((e) => e.message).join('|'),
+      /配对记录/,
+      `拒绝时要给一句人话原因，收到 ${JSON.stringify(errors.map((e) => e.message))}`,
+    )
+    solo.client._resume = saved
+    solo.close() // 收尾：这条连接还活着，不关掉会把进程挂在事件循环上
+  })
+
+  test('12e. 存储里的配对记录坏了：hydrate 不许抛（App.onLaunch 会因此白屏），要清掉并要求重扫码', () => {
+    const KEY = 'drc.pairing.v1'
+    const previous = globalThis.wx.getStorageSync(KEY)
+    // 非 base64 的 psk：旧实现裸调 derivePskKey → js-base64 抛 InvalidCharacterError，
+    // 而 getClient() 就在 App.onLaunch 里 —— 小程序启动即失败且无提示、无法自愈。
+    globalThis.wx.setStorageSync(KEY, {
+      server: 'wss://relay.example/ws',
+      psk: 'not base64!!',
+      convId: 'c_0123456789ab',
+      nonceCounter: 3,
+    })
+    let client = null
+    assert.doesNotThrow(() => {
+      client = new phone.mp.client.DrcClient().hydrate()
+    }, 'hydrate 在启动路径上，绝不许抛')
+    assert.equal(client.status, 'needs-pair', '坏记录要落到"需要配对"，用户才知道该扫码')
+    assert.match(String(client.statusText), /重新扫码/, '要给一条能走的出路')
+    assert.equal(client.isPaired(), false, '坏记录不许算作已配对')
+    assert.equal(globalThis.wx.getStorageSync(KEY), '', '坏记录必须就地清掉，否则每次启动都再坏一次')
+    if (previous) globalThis.wx.setStorageSync(KEY, previous) // 别污染共享装置的存储
+  })
+
+  test('12f. pair-fail 必须清掉旧配对：界面 needs-pair 而 isPaired() 还 true 是自相矛盾的', async () => {
+    const solo = newSoloPhone('配对失败手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+    const KEY = 'drc.pairing.v1'
+    const previous = globalThis.wx.getStorageSync(KEY)
+    // 模拟"用户又扫了一张新码"：connect({psk}) 会把 this.psk 换成新密钥，
+    // 旧 convId 的两把密钥再也派生不出来 —— 而旧实现不清配对，isPaired() 还是 true。
+    solo.client.psk = Buffer.alloc(16, 5).toString('base64')
+    solo.client._onFrame(JSON.stringify({ t: 'pair-fail', reason: 'invalid_or_expired' }))
+    assert.equal(solo.client.status, 'needs-pair')
+    assert.match(solo.client.statusText, /配对失败/)
+    assert.equal(solo.client.isPaired(), false, '旧配对必须一起丢掉（psk 已经换了，那对密钥再也派生不出来）')
+    assert.equal(globalThis.wx.getStorageSync(KEY), '', '存储里的旧配对也要清掉，否则下次启动又"配着"')
+    if (previous) globalThis.wx.setStorageSync(KEY, previous)
+    solo.close() // 收尾：socket 还在（pair-fail 只清配对，不关连接）
+  })
+
+  test('12g. 配对入口的校验：非 ws 地址 / 非 base64 密钥 / 非 16 字节密钥 / 非 6 位配对码都就地拒绝', () => {
+    const { codec } = phone.mp
+    const psk16 = Buffer.alloc(16, 9).toString('base64')
+
+    // ① 二维码解析：非法输入拒（合法的解析结果一个字段都不许变）
+    assert.equal(codec.parsePairingQr('dshr:/p?s=https://x&psk=' + psk16), null, 'http(s) 的地址连不上，不该放过去')
+    assert.match(codec.pairingQrError('dshr:/p?s=https://x&psk=' + psk16), /ws/, '要说清是哪一项不对')
+    assert.equal(codec.parsePairingQr('dshr:/p?s=wss://x&psk=not-base64!!'), null, '非 base64 的密钥放进去会在 derivePskKey 抛英文异常')
+    assert.match(codec.pairingQrError('dshr:/p?s=wss://x&psk=not-base64!!'), /base64/)
+    assert.deepEqual(
+      codec.parsePairingQr(
+        'dshr:/p?v=1&s=' + encodeURIComponent('wss://relay.example/ws') + '&psk=' + encodeURIComponent(psk16) + '&t=123456',
+      ),
+      { v: 1, server: 'wss://relay.example/ws', hostLabel: 'dsh', psk: psk16, token: '123456' },
+      '合法二维码的解析结果必须逐字段不变（protocol.test.mjs 与 Node 侧对拍）',
+    )
+
+    // ② 真正的配对入口（connect）—— 校验不过就不许建连接
+    const c = new phone.mp.client.DrcClient()
+    c.connect({ server: 'wss://relay.example/ws', psk: 'QUJDREVGRw==', token: '123456' }) // 7 字节
+    assert.equal(c.status, 'needs-pair')
+    assert.match(c.statusText, /16 字节/, `psk 长度不对要说清是 16 字节，收到 ${JSON.stringify(c.statusText)}`)
+    assert.equal(c.sock, null, '校验没过就不该建 socket')
+    c.connect({ server: 'http://relay.example/ws', psk: psk16, token: '123456' })
+    assert.match(c.statusText, /ws:\/\//, '地址形状不对要说清')
+    assert.equal(c.sock, null)
+    c.connect({ server: 'wss://relay.example/ws', psk: psk16, token: 'abcdef' })
+    assert.match(c.statusText, /6 位/, '配对码形状不对要说清')
+    assert.equal(c.sock, null)
+  })
+
+  test('12h. peer-left 只认本会话：别的会话散了不许把这次配对踢掉', async () => {
+    const solo = newSoloPhone('peer-left 手机')
+    await pairPhone(host, solo, { expectedRelayUrl: relay.url })
+    solo.client._onFrame(JSON.stringify({ t: 'peer-left', sessionId: 'c_otherconversation', clientId: solo.client.clientId }))
+    assert.equal(solo.client.status, 'online', '别的会话没了与本机这次配对无关，不许把用户无端踢回扫码页')
+    assert.equal(solo.client.isPaired(), true)
+    solo.client._onFrame(JSON.stringify({ t: 'peer-left', sessionId: solo.convId, clientId: solo.client.clientId }))
+    assert.equal(solo.client.status, 'needs-pair', '本会话的主机走了才是真的要走')
+    assert.equal(solo.client.isPaired(), false)
+    solo.close() // 收尾：这条连接还开着，不关掉会把进程挂在事件循环上
+  })
+
+
+  test('12i. 夹具复原：共享手机会被"只允许一台"踢掉，重新配回来给后面的用例', async () => {
+    /**
+     * 这不是被测行为，是**装置约束**：宿主插件对 `peer-joined` 的策略是"只允许一台"
+     * （index.ts 的 `onPeerJoined`：新设备一进来就把其它通道 `voidConversation`），
+     * 于是上面每配一台 solo 手机，共享这台就会被主机踢掉（手机侧收到 peer-left
+     * →「主机已断开，请重新配对」，这是设计如此）。
+     * 原来那两条 solo 用例靠"共享手机的 socket 恰好被同 clientId 顶掉"侥幸没暴露，
+     * 而 12c 的 1.8 秒等待把它变成了必现。后面的用例（13）建立在共享装置仍配对之上，
+     * 所以这里显式配回来 —— 藏着一个"恰好还行"比写明白更贵。
+     */
+    if (!phone.client.isPaired()) {
+      await pairPhone(host, phone, { expectedRelayUrl: relay.url })
+    }
+    assert.ok(phone.client.isPaired(), '共享装置必须回到已配对：后面的用例都建立在它之上')
   })
 
   test('13. 解密失败两次就永久掉配对（§3.2）：这条约束对中继是硬要求', async () => {

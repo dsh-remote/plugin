@@ -373,3 +373,68 @@ test('G1：没有在等的，优先区整块不占地方', () => {
     p._stopLinkTick()
   }
 })
+
+// ═══════════════════════════════════════════════════════════════════════
+// rc1 前的缺陷修复判据（2026-10-06 晚）—— 每条都在旧实现上先验过会红
+// ═══════════════════════════════════════════════════════════════════════
+
+/** 一个够用的假 client：状态帧的处理会用到 listSessions / connect。 */
+function fakeClient(over = {}) {
+  return {
+    status: 'idle',
+    statusText: '',
+    sessions: [],
+    hostLabel: '',
+    server: '',
+    psk: '',
+    isPaired: () => false,
+    connect: () => {},
+    unpair: () => {},
+    listSessions: () => {},
+    on: () => () => {},
+    getPending: () => {},
+    newSession: () => Promise.resolve({ ok: false }),
+    ...over,
+  }
+}
+
+test('解配/断线收尾：ev.keep_awake_state 没有渲染方也不许抛（旧代码调了一个不存在的方法）', () => {
+  // 旧实现在这一支调 `this._renderKeepAwake(...)`，而全文件没有这个方法定义 ——
+  // 异常被 client.emit 的 try/catch 吞掉，于是每一帧 keep_awake_state 都是
+  // 一次**静默 TypeError**：防休眠控件虽然下线了，这一支却一直"看起来在处理"。
+  const p = makePage()
+  p.client = fakeClient()
+  p.setData({ status: 'online' }) // 链路活跃度只在在线时显示（与那条 G5 判据同一前提）
+  assert.equal(p._renderKeepAwake, undefined, '夹具自检：这个方法本来就不存在')
+  assert.doesNotThrow(() => {
+    p._onEvent({ kind: 'payload', payload: { t: 'ev.keep_awake_state', enabled: true, active: true, platform: 'darwin', backend: 'caffeinate' } })
+  }, '防休眠这一支不许再调不存在的方法')
+  // 同一帧的簿记照旧：它是载荷，就要盖 G5 的戳
+  assert.equal(p.data.linkAgeText, ' · 刚刚有消息', '这一帧仍然是载荷：链路活跃度照常更新')
+  p._stopLinkTick()
+})
+
+test('首页扫码当场配对成功也要起 G5 的表（onShow 时还没配对，那条路只 refresh）', () => {
+  // onShow 里 `_startLinkTick()` 在 `!isPaired()` 那一支就 return 了；扫码是**在页面
+  // 已经显示之后**才配上的，状态变 online 是这条路上唯一能起表的时刻 ——
+  // 漏了它，"· N 秒前有消息"从第一帧起就冻着（tick 永不启动）。
+  const p = makePage()
+  const listed = []
+  p.client = fakeClient({ listSessions: () => listed.push(1) })
+  assert.equal(p._linkTimer, undefined, '夹具自检：还没起表')
+  p._onEvent({ kind: 'status', status: 'online', text: '已配对到主机' })
+  assert.ok(p._linkTimer, '配上了却没人起表：主机卡那行"几秒前有消息"会永远停在第一帧')
+  assert.equal(listed.length, 1, '配对成功照旧要刷新一次列表')
+  p._stopLinkTick()
+})
+
+test('app.json 的 darkmode 必须是 false：主题是自管的，不吃系统 prefers-color-scheme', () => {
+  // theme.js 的文件头写明：`darkmode:true` 会打开 TDesign 的
+  // `@media (prefers-color-scheme:dark)` 分支，而我们的浅色变量表是从 @media 里
+  // 解放出来的 —— 系统深色时，深色分支里那些**浅色表没有的变量**（例如
+  // --td-button-primary-disabled-color，button.wxss 在用）会漏进浅色模式，
+  // 于是浅色下禁用主按钮的文字近不可见。我们的主题只由 class 决定。
+  const appJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/app.json'), 'utf8'))
+  assert.equal(appJson.darkmode, false, 'darkmode 必须关掉（主题自管，见 core/theme.js 的文件头）')
+  assert.equal('themeLocation' in appJson, false, '没有 theme.json 就不该声明 themeLocation')
+})
