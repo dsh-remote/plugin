@@ -296,3 +296,80 @@ test('列表页：审批帧与提问对称（不许静默吞掉）', () => {
     wx.showToast = original
   }
 })
+
+// ── G5 链路活跃度（2026-10-06 下午）：最近一帧什么时候到的 ──
+//
+// 只说时间不说内容（零知识承诺）。每一帧载荷盖戳，15 秒 tick 重算显示，
+// 状态走掉清掉——frozen 的"5 秒前"等于假事实。
+
+test('G5：收到载荷就盖戳，主机卡那行拼出"刚刚有消息"', () => {
+  const p = makePage()
+  p.setData({ status: 'online' })
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.question_request', sessionId: 's1', requestId: 'r1' } })
+  try {
+    assert.equal(p.data.linkAgeText, ' · 刚刚有消息')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('G5：离线清掉（frozen 的"几秒前"等于假事实）', () => {
+  const p = makePage()
+  p.setData({ status: 'online', linkAgeText: ' · 刚刚有消息' })
+  p._onEvent({ kind: 'status', status: 'idle' })
+  try {
+    assert.equal(p.data.linkAgeText, '', '断了还留着"刚刚有消息"，用户会以为链路还活着')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('G5：tick 只在页内跑（onHide/onUnload 必须停掉，否则带到别的页）', () => {
+  const p = makePage()
+  p._startLinkTick()
+  assert.ok(p._linkTimer, 'tick 没起来')
+  p.onHide()
+  assert.equal(p._linkTimer, null, 'onHide 不停表，定时器会带到别的页继续 setData')
+})
+
+// ── G1 待办优先（2026-10-06 下午）：挂起的审批/提问抢首屏 ──
+//
+// 首屏必须是"有什么在等你"，不是"上次聊到哪儿"。awaiting 的会话在列表上方
+// 另起「等你处理」区，每件带是哪条会话，点开即进（onOpen 同一套）。
+// 下面完整列表照旧，两边是同一批数据。
+
+test('G1：awaiting 的会话进"等你处理"区，完整列表照旧', () => {
+  const p = makePage()
+  p._renderSessions([
+    { id: 's1', title: '跑着的活', state: 'running', updatedAt: '2026-10-06T10:00:00' },
+    { id: 's2', title: '等你批', state: 'awaiting-permission', updatedAt: '2026-10-06T11:00:00' },
+    { id: 's3', title: '等你答', state: 'awaiting-answer', updatedAt: '2026-10-06T12:00:00' },
+    { id: 's4', title: '归档', state: 'archived', updatedAt: '2026-10-06T09:00:00' },
+  ])
+  try {
+    assert.equal(p.data.pendingCount, 2, '两件在等的必须进优先区')
+    assert.deepEqual(
+      p.data.pending.map((r) => r.id),
+      ['s3', 's2'],
+      '优先区与列表同一套排序（新的在前）',
+    )
+    assert.equal(p.data.pending[1].badgeText, '待审批')
+    assert.equal(p.data.pending[0].badgeText, '待回答')
+    assert.equal(p.data.sessions.length, 3, '完整列表照旧（归档隐藏，其余都在）')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('G1：没有在等的，优先区整块不占地方', () => {
+  const p = makePage()
+  p._renderSessions([{ id: 's1', title: '空闲', state: 'idle', updatedAt: '2026-10-06T10:00:00' }])
+  try {
+    assert.equal(p.data.pendingCount, 0)
+    assert.deepEqual(p.data.pending, [])
+    const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
+    assert.match(wxml, /wx:if="\{\{pendingCount\}\}"/, '优先区必须按 pendingCount 整块开关')
+  } finally {
+    p._stopLinkTick()
+  }
+})

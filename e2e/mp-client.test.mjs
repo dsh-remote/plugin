@@ -277,6 +277,40 @@ describe('真 dsh-remote-mp/miniprogram/core/client.js × 真中继 × 真插件
     assert.equal('custom' in settled.answers[0], false)
   })
 
+  test('6b. cmd.get_pending：挂起的提问按原帧重发（同一 requestId）+ 回执说清张数', async () => {
+    // 背景：审批/提问卡是"一次性"的一帧，退后台/断线/停列表页时错过就没了。
+    // peer-joined 重发只发生在重配对；普通重连主机收不到信号，手机主动拉一次。
+    const questionBefore = phone.count('ev.question_request')
+    const asked = host.kernel().askQuestion(MOCK_SESSION_ID, [
+      { id: 'q1', question: '哪个版本上线？', options: [{ id: 'v1', label: 'v1' }] },
+    ])
+    const request = await phone.waitForPayload('ev.question_request', '提问卡到达', { after: questionBefore, timeoutMs: 12_000 })
+    const dupBefore = phone.count('ev.question_request')
+    // fire-and-forget：老主机不认会静默丢，新主机重发 + 回执。先断言发得出去。
+    assert.equal(phone.client.getPending(MOCK_SESSION_ID), true, 'get_pending 没发出去')
+    // cmdId 是 client 内部现编的，回执对答靠它——从实际发出的帧取，不自己编一串。
+    const sent = phone.cmds.filter((c) => c.cmd.t === 'cmd.get_pending').pop()
+    assert.ok(sent, '发出的命令没被记下来')
+    const cmdId = sent.cmd.cmdId
+    const dup = await phone.waitForPayload('ev.question_request', '重发到达', {
+      after: dupBefore,
+      where: (p) => p.requestId === request.requestId,
+      timeoutMs: 10_000,
+    })
+    assert.equal(dup.questions[0].question, '哪个版本上线？', '重发必须原样（同一 requestId、同一题目）')
+    assert.equal(dup.expiresAt, request.expiresAt, '到期时刻不许顺延')
+    const result = await phone.waitForPayload('ev.result', 'get_pending 回执', {
+      where: (p) => p.cmdId === cmdId,
+      timeoutMs: 10_000,
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.data.replayed, 1, '挂着一张就该报 1')
+    // 收尾：答掉它，否则挂起的提问会污染后面的用例（超时也要 300 秒）。
+    phone.client.answer(request.sessionId, request.requestId, [{ questionId: 'q1', selected: ['v1'] }])
+    const settled = await Promise.race([asked, delay(12_000).then(() => null)])
+    assert.ok(settled, '答案没结算回内核')
+  })
+
   test('7. cmd.keep_awake → ev.keep_awake_state{enabled,active,platform,backend}（关时不带 idleReleaseSec）', async () => {
     const beforeOn = phone.count('ev.keep_awake_state')
     phone.client.setKeepAwake(true, 600)

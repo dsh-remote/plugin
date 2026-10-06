@@ -871,6 +871,8 @@ function stubClient(p, handler) {
       return handler(sessionId, opts || {})
     },
     listSessions: () => {},
+    getPending: () => {},
+    on: () => () => {},
     sendPrompt: () => {},
     sendPromptReceipt: () => Promise.resolve({ ok: true }),
   // dropQueued: delete a queued message. __drcDropFail non-empty = host refuses
@@ -2695,4 +2697,95 @@ test('步骤：行首渲染的是 cat（老数据没有 cat 才回退英文名�
     'utf8',
   )
   assert.match(wxml, /\{\{it\.cat \|\| it\.tool\}\}/, '行首必须是 cat 优先')
+})
+
+// ── 瞬时提示的过期清理 + 与待办条合并（2026-10-06 下午用户实测三连） ──
+//
+// 1. retry 成功后提示既不更新也不消失：run_state 的 idle 是跳变帧，退后台期间
+//    错过就没了，提示永远挂着。列表（全量快照，每 15 秒一推）说没跑，提示就是过期遮罩。
+// 2. 顶部 retry 行与待办条叠在一起互相抢：一屏一次只说一件事，有待办时提示进待办条的状态位。
+
+test('瞬时提示：列表说这条会话没跑了，提示必须走（错过的 idle 帧由快照兜底）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.retry', sessionId: p.data.sessionId, attempt: 2, max: 5, reason: 'TIMEOUT' })
+  assert.ok(p.data.notice, '夹具自检：提示在')
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.session_changed', sessions: [{ id: p.data.sessionId, running: false }] },
+  })
+  assert.equal(p.data.notice, '', '列表说没跑了，挂着的"正在重试"就是过期遮罩')
+})
+
+test('瞬时提示：列表说还在跑，不清（别把真提示当过期掐掉）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.compaction', sessionId: p.data.sessionId, state: 'started' })
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.session_changed', sessions: [{ id: p.data.sessionId, running: true }] },
+  })
+  assert.equal(p.data.notice, '正在压缩上下文', '还在跑就说明压缩还没完')
+})
+
+test('瞬时提示：断链重连后清掉（断链期间世界可能变了，真相由列表与历史重建）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.retry', sessionId: p.data.sessionId, attempt: 1, max: 3 })
+  assert.ok(p.data.notice, '夹具自检：提示在')
+  p._wasOffline = true
+  p._onEvent({ kind: 'status', status: 'online' })
+  assert.equal(p.data.notice, '', '重连后旧提示必须走，还在跑的话新帧会再来')
+})
+
+test('顶栏合并：有待办时提示进待办条的状态位，不单独占一行', () => {
+  const wxml = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  assert.match(wxml, /wx:if="\{\{notice && !todos\.length\}\}"/, '独立提示行只在没有待办时渲染')
+  assert.match(wxml, /wx:if="\{\{notice\}\}".*todo-running/, '待办条状态位优先显示提示')
+})
+
+test('顶栏合并：提示不碰待办数据（显示合并，数据各管各的）', () => {
+  const p = readyAtBottom()
+  p._onEvent({
+    kind: 'payload',
+    payload: {
+      t: 'ev.todo',
+      sessionId: p.data.sessionId,
+      todos: [{ content: '做一件事', status: 'in_progress' }],
+    },
+  })
+  send(p, { t: 'ev.retry', sessionId: p.data.sessionId, attempt: 2, max: 5 })
+  assert.equal(p.data.todos.length, 1, '提示来了待办不能动')
+  assert.equal(p.data.todoRunningText, '进行中 做一件事', '待办派生值不受提示影响')
+  assert.equal(p.data.notice, '正在重试 2/5', '提示正常落位')
+})
+
+// ── get_pending 调用点（2026-10-06 下午）：进会话与重连各拉一次 ──
+//
+// peer-joined 重发只发生在重配对；普通重连主机收不到信号。手机拉（fire-and-forget，
+// 老主机静默丢）。不断言帧内容（那是主机测的 + 真链路 6b 测的），只断言拉了。
+
+test('进会话拉一次挂起卡（onShow → getPending，带本会话 id）', () => {
+  const p = readyAtBottom()
+  stubClient(p, () => Promise.resolve(null))
+  const pulled = []
+  p.client.getPending = (sessionId) => {
+    pulled.push(sessionId)
+    return true
+  }
+  p.onShow()
+  assert.deepEqual(pulled, [p.data.sessionId], '进会话必须问一次主机还有什么挂着')
+})
+
+test('重连成功拉一次挂起卡（断链期间挂上的那一帧已经过去了）', () => {
+  const p = readyAtBottom()
+  stubClient(p, () => Promise.resolve(null))
+  const pulled = []
+  p.client.getPending = (sessionId) => {
+    pulled.push(sessionId)
+    return true
+  }
+  p._wasOffline = true
+  p._onEvent({ kind: 'status', status: 'online' })
+  assert.deepEqual(pulled, [p.data.sessionId], '重连后必须重新问一次')
 })
