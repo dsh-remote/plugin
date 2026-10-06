@@ -2502,3 +2502,55 @@ test('待办：空数组**要**置闩锁（内核清空清单是真数据，用�
   assert.equal(p._todoLive, true, '空清单是"此刻清单为空"，是真数据')
   assert.equal(p.data.todos.length, 0)
 })
+
+// ── 提问卡：别的会话在提问时不许静默吞掉（2026-10-06）────────────────────
+//
+// 现场（用户确认）：2026-10-06 10:16:12 主机问了一个真问题（2 道题），
+// 10:21:30 被桌面答掉。期间手机端**什么都没有**——不是"闪一下被撤卡"，
+// 是整段时间没出现过。运行时计数证明帧确实出去了（outbound.question_request=1，
+// 且没有 question_request_no_peer，即主机认为手机在线）。
+//
+// 结构性原因：提问卡是「一次性、单会话、只在 chat 页、永不重放」的面。
+// 其中一个放大器是 `chat.js:545/553` 的会话过滤——用户不在提问那条会话的
+// chat 页（甚至停在列表页）就**无声吞掉**，连一句提示都没有。
+
+test('提问：不是本会话的提问帧不许静默吞掉（要提示，否则用户以为没这回事）', () => {
+  const p = readyAtBottom()
+  const toasts = []
+  const original = wx.showToast
+  wx.showToast = (opts) => toasts.push(opts.title)
+  try {
+    p._onEvent({
+      kind: 'payload',
+      payload: {
+        t: 'ev.question_request',
+        sessionId: 'other_session',
+        requestId: 'rq_other',
+        questions: [{ id: 'q1', question: '在另一条会话里问的', options: [{ id: 'a', label: 'A' }] }],
+      },
+    })
+    assert.equal(p.data.pendingQuestion, null, '本会话不该收到别人的卡')
+    assert.equal(
+      toasts.length,
+      1,
+      '静默吞掉了：用户在手机上什么都看不到，却完全不知道主机正在等他回答（2026-10-06 现场）',
+    )
+  } finally {
+    wx.showToast = original
+  }
+})
+
+test('提问：本会话的提问帧照常弹卡（别把上面那条改过头）', () => {
+  const p = readyAtBottom()
+  p._onEvent({
+    kind: 'payload',
+    payload: {
+      t: 'ev.question_request',
+      sessionId: p.data.sessionId,
+      requestId: 'rq_mine',
+      questions: [{ id: 'q1', question: '要继续吗', options: [{ id: 'a', label: 'A' }] }],
+    },
+  })
+  assert.ok(p.data.pendingQuestion, '本会话的提问必须弹出来')
+  assert.equal(p.data.pendingQuestion.questions[0].question, '要继续吗')
+})
