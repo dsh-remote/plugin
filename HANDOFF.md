@@ -313,6 +313,24 @@ Android 上图片实际不可用。
 `clients:0` 是小程序退到后台，不是故障：`conversations:1` 仍在（配对长存，D3），
 回前台自动重连，不需要重扫。
 
+### 0.9 真机验收：提问闭环（2026-10-06 19:28，第一个在真机上过的 rc1 功能）
+
+宿主 `ask_user_question` 触发 → 手机弹出提问卡 → 用户点选 → 主机侧收账：
+
+```
+kernel.questionsCalls   = 1
+kernel.questionsLast    = answered-by-phone(1 项)   ← 答案来自手机，不是桌面
+kernel.questionsDesktopVoided = 1                   ← 桌面那张卡当场作废
+outbound.question_request = 1（无 _no_peer）        ← 卡片帧确实发给了在听的手机
+relay: clients 1 / droppedFrames 0 / rejectedPairs 0
+```
+
+这条一次验掉了四件事：卡片能弹、`cmd.answer` 能回来、`ev.question_resolved` 能把
+桌面那张收掉、以及中继这一程没有丢帧。仍是 `1.0.0-rc.1` + 体验版。
+
+**还没在真机验的**（都要人手点，做不了就明说没做）：审批卡闭环、`unpair` 后 pill
+变「未配对」、切后台再回来不重扫、长会话正文不再卡在 1MB 闸门。
+
 ## 2. 环境坑（还有效的）
 
 - 所有 pnpm/node 命令带 env -u NODE_OPTIONS（子 shell 注入的 loader 会搞挂 ESM 解析）。
