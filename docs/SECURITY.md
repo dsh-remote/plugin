@@ -384,7 +384,8 @@ pong 就 `terminate()`）。改判应用层心跳会周期性踢掉空闲客户�
   （`packages/plugin/src/index.ts:313`，`describeActivePairing`），
   这正是 `pairOnStartSec > 0` 会被 warn 的原因（`shell/config.ts:176-181` 一带的告警、
   `packages/plugin/tests/config.test.ts:122`）。`pairOnStartSec` 默认 **0=关**
-  （`shell/config.ts:71`），关掉时这里不会长期挂着码。
+  （`shell/config.ts:71`），但"关"只表示**启动时不自动发**：点一下状态栏 pill 发的那张码
+  在有效期内同样挂在这个字段里（花掉/过期即消失，`spentTokens` 还会挡住已经用掉的那张）。
 - **配对二维码不落磁盘**（2026-10-03 起）。它只有一条出口：状态栏那颗 pill 点开后，
   `<img>` 走同域 `GET /plugins/dsh-remote-control/pairing.png`，宿主**按需现渲染**、
   回 `Cache-Control: no-store` + `ETag: "<epoch>"`，全程不落文件。

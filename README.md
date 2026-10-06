@@ -124,7 +124,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock） | 17 步 |
 | `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复 | 229 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock | 18 项/轮 |
-| `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（网页图片 / 文本字形还原 / 裸矩阵三条路径） | 28 组 ×3 |
+| `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（**图片 PNG / 裸矩阵两条路径**；文本字形那条已随文本码一起删掉） | 28 组 ×2 |
 
 ```sh
 node e2e/live-e2e.mjs                       # 默认打生产入口
@@ -133,8 +133,9 @@ DRC_LIVE_RELAY=ws://127.0.0.1:8787 node e2e/live-e2e.mjs   # 打本地中继
 node e2e/live-e2e.mjs --session <id>        # 指定会话（可验归档自动恢复）
 ```
 
-> `pairOnStartSec` 默认是 `0`（不自发出码），所以裸跑会报"没有 pairing.qr"——先在 DSH 里
-> 点一下状态栏那颗 pill（或临时开 `pairOnStartSec` 从 `status.json` 读），再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
+> `pairOnStartSec` 默认是 `0`（**启动时不自动发码**；点 pill 发的那张照样会写进 `status.json` 的
+> `pairing`），所以裸跑会报"没有 pairing.qr"——先在 DSH 里点一下状态栏那颗 pill
+> （或临时开 `pairOnStartSec` 让它启动就发一张），再用 `--pair <6位> --qr '<dshr:/p?...>'` 把码喂进去。
 
 CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22（typecheck + test + 产物校验），
 另一个作业在 Node 20 上从**空目录**起单文件产物，验 `/healthz` 的 version、优雅停机 exit 0、
@@ -161,7 +162,7 @@ cat ~/.dsh/dsh-remote-control/status.json
 ```
 
 值得看的字段：`carrier`（`services`=真内核 / `mock`=内存替身 / `none`=没起来）、
-`relay` + `relayProblem`、`outbound`（按载荷类型的出站计数）、`pairing`（开 `pairOnStartSec` 时才有）、
+`relay` + `relayProblem`、`outbound`（按载荷类型的出站计数）、`pairing`（**只要屏幕上挂着一张码就有**：点 pill 发的那张同样会写进去，`pairOnStartSec` 只决定"启动时要不要自动发一张"）、
 `kernel.eventTypes` / `kernel.unmappedEventTypes`（分清"内核没发"还是"我们没认"）、
 `kernel.listenerErrors`、`kernel.approvalFace` / `questionsFace`（人工交互两面到底登记上没有）。
 

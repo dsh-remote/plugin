@@ -87,14 +87,13 @@ patch 里，改名等于让线上配置静默失效。
 | `hostId` | `''` | `DRC_HOST_ID` | 见下面那条实测 |
 | `hostLabel` | `dsh-host` | `DRC_HOST_LABEL` | 日志与 `hello` 里的显示名 |
 | `pairTtlMs` | `120000` | — | 只是**向中继申请**的值；服务端 `pair-ready.ttlMs` 才是准的 |
-| `pairOnStartSec` | `0`（关） | `DRC_PAIR_ON_START_SEC` | >0 时启动即发一张码并把 QR 写进 `status.json`。**开了就把"仍然有效的配对码 + PSK"放进 0600 文件**，配置校验专门 warn；`Infinity`/负数/非有限值一律折回 0 |
+| `pairOnStartSec` | `0`（关） | `DRC_PAIR_ON_START_SEC` | >0 时**启动即发一张码**。⚠️ 它只决定"启动时要不要自动发"：**任何一次发码（含点 pill 那四条路由发的）都会把"仍然有效的配对码 + PSK"写进 0600 的 `status.json`**，与这个开关无关；配置校验的 `warn:pairOnStartSec` 只是为"开机就长期挂着一张码"这件事专门留的痕。`Infinity`/负数/非有限值一律折回 0 |
 | `pill.enabled` | `true` | `DRC_PILL=0/1` | 状态栏那颗 pill = **配对的唯一入口**。关掉它这台主机就没有配对入口，`status.json` 会留一条 `warn:pill` 与 `pill:"disabled"`。这个键**只 warn 不 error**（error 会让主插件整个不启动，等于把界面功能变成配对链路的单点） |
 | `keepAwake.enabled` / `.idleReleaseSec` / `.keepDisplay` | `true` / `300` / `false` | — | 只在"会话运行中 / 有审批或提问挂起"时持锁 |
 | `unarchiveOnPrompt` | `true` | — | 对归档会话下发指令时自动恢复 |
 | `takeOverQuestions` | `false` | `DRC_TAKE_OVER_QUESTIONS=1` | 会剥夺桌面 UI 的提问能力（`ctx.userQuestions` 只允许一个活跃 provider），所以默认关 |
 | `approvalTimeoutSec` | `180` | — | 审批卡超时 |
 | `listingRefreshSec` | `15` | — | 会话列表刷新周期 |
-| `carrierGraceMs` | `5000` | — | 强 carrier 未到多久后落弱 carrier |
 | `conversationIdleTtlSec` | `86400` | — | 配对通道空闲剪枝（0/非法值**不表示永不剪枝**，会夹回默认） |
 | `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里 stdout 没人看，这是唯一排错入口） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
@@ -135,7 +134,10 @@ cat ~/.dsh/dsh-remote-control/status.json
   **`approvalFace=registered` 不等于"能弹卡"**——它只证明挂上去了；派发按作用域过滤、
   又按 waterfall 顺序排队，所以"没弹"有三种形状，靠这四条读数才分得开（取证见 HANDOFF §9.10）。
 - `probe`：`applyCount`（同一进程内 `apply` 被调了几次——bundle 被重复挂载能看出来）、`injectChildren`、`fiberStates`。
-- `pairing`：只有开了 `pairOnStartSec` 才有（`token`/`psk`/`expiresAt` ISO/`qr`/`ageSec`）。
+- `pairing`：**只要屏幕上挂着一张能用的码就有**——`pairOnStartSec>0` 启动自动发的那张、以及
+  点状态栏 pill 发的那张（`/pairing/new`）都在内；没有活动码时是 `null`。
+  字段：`token`/`psk`/`expiresAt` ISO/`qr`/`ageSec`。**这份快照里有 PSK 明文**，所以它固定 0600，
+  而且 `pairOnStartSec` 默认是 0（见下面 §7 的还原纪律）。
 
 `hostToken` **永远不出现真值**，只有 `hostTokenShape` 的脱敏形态（前 4 + `…` + 后 2 + 长度），这条有测试锁住。
 写文件是 0600 + 临时文件改名原子替换。 **[已验证 2026-10-03：本机快照 `carrier=services`、
@@ -339,7 +341,8 @@ env -u NODE_OPTIONS node e2e/live-e2e.mjs --pair <6位码> --qr 'dshr:/p?…'
 
 ⚠️ 方案 (b) 里完整 URI **只能从 pill 之外的地方拿**：那四条路由的回答里刻意不含 `psk`，
 所以要么开 (a) 从 `status.json` 读，要么在本机 `curl` 发码后从主机内部对——
-`status.json` 的 `pairing.qr` 在 `pairOnStartSec>0` 时才有这一项。
+`status.json` 的 `pairing.qr` 在**当前屏幕上挂着一张码**时就有这一项（开 `pairOnStartSec` 会自动发一张，
+点 pill 也会发一张 —— 与那个开关无关）。
 
 **改配置要成对还原**：开着 `pairOnStartSec` 就等于把仍然有效的配对码 + PSK 留在 0600 文件里，
 它默认关正是这个原因。 **[已验证 2026-10-03：方案 (a) 跑通 `--rounds 2` = 36 项检查 36 项通过，
