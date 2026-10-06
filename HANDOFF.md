@@ -1,7 +1,7 @@
 | dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction）；CHANGELOG 补到 1.8.1（2026-10-06） |
-| dsh-remote-control/（单包） | 2.0.11 | **已发版**：v2.0.11 tag 已推，Release 工作流跑 npm publish（此前是"只装进 Harness、未发版"）；CHANGELOG 补到 2.0.11 |
+| dsh-remote-control/（单包） | 2.0.12 | **已发版**（npm 2.0.12 可见；2.0.12 加 `replayPending`，见 §0.5）；CHANGELOG 补到 2.0.12 |
 | dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；v1.0.6 tag 已推，Release 产单文件；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
-| dsh-remote-mp/ | 1.1.25 | §1.6 已做进 1.1.25（重试/压缩瞬时提示 + 审批跨会话提示），**1.1.25 已上传为开发版本**，待「选为体验版」；CHANGELOG 记到 1.1.25 |
+| dsh-remote-mp/ | 1.1.26 | 1.1.26 已上传为开发版本（含列表页跨会话提示 + 空 status 分支修复），待「选为体验版」；CHANGELOG 记到 1.1.26 |
 
 三条不许再错：
 
@@ -14,7 +14,35 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 92/92、server 102 条里 101 过 1 skip（原有的）、control 381/381、伞仓 210/210、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+闸门（干净工作树）：wire 92/92、server 102 条里 101 过 1 skip（原有的）、control 385/385、伞仓 212/212、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+
+## 0.5 弹框缺口修复（2026-10-06 下午，本轮）
+
+中午用户实测：主机问了问题，`outbound.question_request=1`（无 `_no_peer`，
+帧确实发出去了），手机上什么都没弹，最后 `questionsLast=no-answer` 超时。
+根因是卡的结构性脆弱：审批/提问卡是"一次性、单会话、只在 chat 页"的一帧，
+手机退后台、断线、停在列表页或别的会话时，这一帧过去就没了（chat 页跨会话在
+1.1.25 才有 toast，列表页在 1.1.26 之前彻底静默），而主机还阻塞着等决定。
+
+修了两处（先红后绿，变异验证过）：
+
+1. **主机 `peer-joined` 重发挂起卡**（control 2.0.12，已发 npm 并装进 profile，
+   重启 Harness 生效）：`pending` 里还挂着的按原样重发，同一 `requestId`
+   （手机按它覆盖不翻倍）、到期时刻用最初那一帧（不顺延）、已结算的不复活、
+   永不抛。判据 `runtime.test.ts` +4。
+2. **列表页跨会话提示**（mp 1.1.26，已覆盖上传，待选体验版）：停在列表页时 chat
+   页不在，卡无处可弹，给一句与 chat 页同文案的 toast。判据
+   `mp-sessions-list.test.mjs` +2。
+
+修的时候自己造了一个新 bug：往 `_onEvent` 加分支时把 `status` 分支复制成两份，
+第一份是空的，把配对状态事件全吞了（`mp-pairing` 2 条红，伞仓全量套件抓到的）。
+删掉空的那份，212/212 全绿，1.1.26 重新覆盖上传。教训与 §0.3 第 1 条是同一条：
+改分发链时必须数分支，不能只看自己那两行。
+
+还没做的：普通 socket 重连（不断配对的那种）中继不通知主机，主机收不到任何信号，
+所以重发只发生在重配对；手机前台回来那一程要靠将来的 `cmd.get_pending`（手机拉），
+协议要加命令，三仓一起动，今天没做。普通重测（前台、正确的会话页、1.1.26）走
+单发路径，不需要等它。
 
 ## 0.4 开源发布前整备（2026-10-06 中午，本轮）
 
@@ -30,20 +58,21 @@ hosts 1——落盘在写，重启只会制造一次本可避免的断链。
    `failed` 与 `ended` 绝不合并。提交 `71b1205`（mp 1.1.25），判据在
    `e2e/mp-chat-blocks.test.mjs` 末尾 7 条（旧代码上 6 条红，变异验证过）。
    顺手还补了 PRODUCT.md G2 的另一半：审批跨会话原来彻底静默（提问至少还有 toast），
-   现与提问对称处理（`主机在另一条会话里等审批`）。主机侧重放（peer-joined 补发挂着的
-   提问）与 inbox 完整接线**仍没做**（风险中偏高，见 §0.3"还没做的"）。
+   现与提问对称处理（`主机在另一条会话里等审批`）。inbox 完整接线**仍没做**
+   （见 §0.3"还没做的"）。主机侧重放当时没做，后来在 §0.5 做了（2.0.12）。
    另删掉 `_onEvent` 里一段逐字重复的死代码（跨会话提问 toast 写了两遍，第二遍不可达）。
 2. **CHANGELOG 全部补齐**：protocol 补 1.6.0–1.8.1（含 1.7.0 立 tag 未发包的注记）、
-   control 补 2.0.6–2.0.11（2.0.8 未立 tag/未发包，折入 2.0.9 并注记；与 v2.0.8
-   缺 tag 的处理一致）、server 补 1.0.5、mp 记到 1.1.25。
+   control 补 2.0.6–2.0.12（2.0.8 未立 tag/未发包，折入 2.0.9 并注记）、server 补 1.0.5、
+   mp 记到 1.1.26。
 3. **文档与现状对齐**：伞仓 README（生产实例 v1.0.1→1.0.6 + 落盘五字段、测试项数
-   92/102/381/210/verify32+对比度302、部署路径去 monorepo 残留、env 示例加
+   92/102/385/212/verify32+对比度302、部署路径去 monorepo 残留、env 示例加
    DRC_STATE_FILE、重启丢配对加"未配落盘时"限定）、server SELF-HOSTING（§2/§4/§6 +
    compare 链）、control README（wire ^1.8.0）、mp README（`/drc pair` 已删）。
    伞仓 `deploy/systemd` 与 server 仓单元对齐（含 StateDirectory——之前那份没有，
    照它部署会重演 §0.1 的 EROFS）。
-4. **发版**：四仓分支全推；`v2.0.11`（control→npm）与 `v1.0.6`（server→Release 单文件）
-   两个 tag 已推，GitHub Actions 在跑。protocol 1.8.1 已在 npm 上，无需新动作。
+4. **发版**：四仓分支全推；`v2.0.11`/`v2.0.12`（control→npm）与 `v1.0.6`（server→Release
+   单文件）三个 tag 已推，Release 全绿，npm 上 2.0.12 可见。protocol 1.8.1 已在 npm
+   上，无需新动作。
 
 之后的手动项（都要真人/真机，e2e 覆盖不了）：
 mp 1.1.25 重新上传开发版本 → 选为体验版 → 真机复验 §1.2（unpair 变"未配对"、
@@ -126,8 +155,9 @@ ssh 进去 `touch` 又成功，因为那是另一个 mount namespace。
 
 ### 还没做的（别当已完成）
 
-- **主机侧重放挂着的提问**：手机退后台/断线期间挂着的提问，回来后永远收不到；
-  300s 超时后还会被 `voidStaleCard` 主动擦掉。治本要改 `peer-joined` 后的补发，风险中偏高。
+- **主机侧重放挂着的提问**：✅ 2026-10-06 下午已做（control 2.0.12 `replayPending`，
+  见 §0.5）。剩普通 socket 重连那一程（不断配对的那种中继不通知主机）：要靠将来的
+  `cmd.get_pending`（手机拉），协议要加命令，三仓一起动。
 - **inbox 的完整接线**：协议加载荷（wire 发版）+ mp 加处理器 + 改回映射表。现在只做了
   「让证据说真话」。
 - **FAB 是否真的"跑到屏幕正中间"**：`fixed` + 46% 解决的是"沉进输入区"（已实测确认）。
@@ -284,15 +314,8 @@ P0-1/P0-2 的"没挂"指的是**这个 profile 的组合**。宿主发布清单�
 | 6 | 模型下拉能用（`llm.discoverModels` 等） | 🟡 **待验**。`agentDefaultModel` 那侧确认只有 `currentSelection`，但 `llm` 服务本身已加载，有没有可用枚举入口要单独验 |
 | 7 | `workspaceFiles.*` 手机看文件 | ❌ **没挂** |
 
-### P0-3 / P0-4 的 mp 侧显示**还没做**（下一步）
+### P0-3 / P0-4 的 mp 侧显示 ✅ 2026-10-06 已做进 mp 1.1.25（§0.4），待选体验版
 
-事件已经从主机到中继、到 mp 的 `_onEvent` 了，但 mp 的 chat.js 里**没有** `ev.retry` /
-`ev.compaction` 的处理器，所以界面上还是不会出现。
-
-要做的：顶栏那行加一句瞬时提示，与现有运行态提示放一起。建议文案：
-
-- `ev.retry` → 「正在重试 2/5 · TRANSPORT」（attempt/max/reason 都有）
-- `ev.compaction started` → 「正在压缩上下文」
-- `ev.compaction failed` → 「压缩没成功：<error>」**别与 ended 合并** —— 上下文已经烂掉而用户以为正常，比看不见更糟
-
-wire 1.8.1 与 control 2.0.11 都已就位；control 2.0.11 已装进 Harness，重启后才生效。
+当时写的是"mp 的 chat.js 里没有处理器"，现已补上（`_onRetry` / `_onCompaction`，
+顶栏下一行瞬时话，run-state 回 idle 清掉，failed 与 ended 不合并）。
+control 侧已到 2.0.12（2.0.11 只装进 Harness 未发版的历史见 §0.4）。

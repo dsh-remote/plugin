@@ -250,3 +250,49 @@ test('死规则不许留下：没人引用的 .pulse 规则要删掉', () => {
   const app = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/app.wxss'), 'utf8')
   assert.match(app, /@keyframes dot-blink/, 'dot-blink 是共享关键帧，要留在 app.wxss')
 })
+
+// ── 列表页的跨会话提示（2026-10-06：停在列表页时 chat 页不在，卡无处可弹） ──
+//
+// 现场：主机提问/等审批时用户停在会话列表，ev.question_request /
+// ev.permission_request 到达后没有任何表现——主机阻塞等决定，手机毫无痕迹。
+// chat 页跨会话已有 toast（另一条会话），列表页对称处理：不弹卡（卡属于某条会话），
+// 但必须让人知道，点进对应会话即收原卡（原卡还在主机 pending 里，重配对还会重发）。
+
+test('列表页：提问帧不许静默吞掉（给提示，点进会话即收原卡）', () => {
+  const p = makePage()
+  const toasts = []
+  const original = wx.showToast
+  wx.showToast = (opts) => toasts.push(opts.title)
+  try {
+    p._onEvent({
+      kind: 'payload',
+      payload: {
+        t: 'ev.question_request',
+        sessionId: 'ses_other',
+        requestId: 'rq_other',
+        questions: [{ id: 'q1', question: '要继续吗', options: [{ id: 'a', label: 'A' }] }],
+      },
+    })
+    assert.equal(toasts.length, 1, '静默吞掉了：主机等着回答，停在列表页的用户完全不知道')
+    assert.match(toasts[0], /提问/, '提示必须说清是什么事')
+  } finally {
+    wx.showToast = original
+  }
+})
+
+test('列表页：审批帧与提问对称（不许静默吞掉）', () => {
+  const p = makePage()
+  const toasts = []
+  const original = wx.showToast
+  wx.showToast = (opts) => toasts.push(opts.title)
+  try {
+    p._onEvent({
+      kind: 'payload',
+      payload: { t: 'ev.permission_request', sessionId: 'ses_other', requestId: 'rq_other' },
+    })
+    assert.equal(toasts.length, 1, '静默吞掉了：主机白等 180 秒')
+    assert.match(toasts[0], /审批/, '提示必须说清是什么事')
+  } finally {
+    wx.showToast = original
+  }
+})
