@@ -1,12 +1,15 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.9.0 | 已发 npm（1.9.0 加 `cmd.get_pending`）；CHANGELOG 到 1.9.0 |
-| dsh-remote-control/（单包） | 2.0.13 | **已发版**（2.0.13：`cmd.get_pending` 主机侧 + inbox 接线 + 历史第一页恒带待办；npm 可见后见 §0.6）；CHANGELOG 到 2.0.13 |
-| dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；v1.0.6 tag 已推，Release 产单文件；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
-| dsh-remote-mp/ | 1.1.27 | 1.1.27 已上传为开发版本（FAB 底部/中文类别/提示合并/getPending/G5/G1），待「选为体验版」；CHANGELOG 到 1.1.27 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | **1.0.0-rc.1** | 已发 npm（`latest` 也指向它）；tag 与 GitHub Release 已建 |
+| dsh-remote-control/（单包） | **1.0.0-rc.1** | 已发 npm（`latest`）；Release 已建；**已装进 profile，重启 Harness 生效** |
+| dsh-remote-server/ | **1.0.0-rc.1** | Release 已建（单文件产物）；**线上仍跑 1.0.6**（代码只差版本号，部署待用户决定）；不发 npm（包名被第三方占） |
+| dsh-remote-mp/ | **1.0.0-rc.1** | 已上传为开发版本，待「选为体验版」 |
+
+**四仓从今天起统一用这一个版本号**（`1.0.0-rc.1`）；此前的 1.9.0 / 2.0.x / 1.0.6 / 1.1.x
+是私有期编号，不再作为发版口径。
 
 三条不许再错：
 
 1. 仓名 ≠ 包名：仓库 dsh-remote-protocol，npm 包 dsh-remote-wire。
-2. 协议是 npm 依赖（^1.8.0），不是 git/file 依赖。
+2. 协议是 npm 依赖（rc 起**精确钉** `1.0.0-rc.1`），不是 git/file 依赖——caret 会解析到更高的 1.9.0，那就不是 rc 了。
 3. 判据是版本号 + 文案，不是字节哈希：esbuild 内嵌模块路径标签，同源码换次构建哈希就变。
 4. **图片不进 uploads.ts**：图片走宿主原生的 {type:image,data,mimeType} 内容块，
    正文不出现路径（2026-10-05 用户要求）。落盘 + 路径那套**只留给文件**——
@@ -14,7 +17,7 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 93/93、server 102 条里 101 过 1 skip（原有的）、control 391/391、伞仓 229/229、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+闸门（rc1 干净工作树）：wire **106/106**、server **127 条里 126 过 1 skip**、control **448/448**、伞仓 **255/255** + 本地全链路 17 步、mp 32/32 + 对比度 304 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
 
 ## 0.6 用户三连 bug + 没做的清零（2026-10-06 下午，本轮）
 
@@ -271,6 +274,31 @@ FAB 72rpx → 56rpx、贴右边缘、品牌色实心圆改成中性面 + 细边 
 - 提示要有清除时机：run-state 回到 idle 时清掉，否则会一直挂着
 
 判据放 e2e/mp-chat-blocks.test.mjs，并且要做循环验证。
+
+## 0.7 rc1：逐行审计 → 修复 → 发版（2026-10-06 下午）
+
+八个分片并行逐行读完（约 5.2 万行：四仓源码 + 伞仓 e2e/scripts），产出**真实缺陷**，
+其中三条是会伤到用户的：① 中继被一条畸形 `Host` 头未认证打崩（`new URL()` 在
+request listener 里同步抛 → uncaughtException → exit 1，自带 `Restart=always`
+会变成重启循环并丢内存会话表）；② 协议里密文上限 512KiB 比中继 1MiB 预算紧一倍，
+手机闸门内的合法附件帧**被自家 schema 拒掉**（用户看到"图片发不出去"）；
+③ 小程序缩图画布永远拿不到节点（`SelectorQuery.exec` 回调是异步的，而代码同步读），
+Android 上图片实际不可用。
+
+其余高价值修复：会话状态接上 `awaiting-permission/awaiting-answer`（小程序「等你处理」
+区此前真机永不渲染）、inbox 接线、`cmd.get_pending`、`ev.run_state` 不再误清另一张卡、
+`unpair` 不留孤儿 socket、nonce 计数器不再回退（曾可复用密文）、status.json 补 chmod、
+日志值统一截断、客户端身份键不再无界泄漏、配对码不再进 stdout。
+
+判据侧同样重要：新增 **e2e 产物新鲜度闸门**（逐文件比对 src↔dist mtime，
+挡住"改了 src 没 build、测试全绿却测的是旧产物"这条历史上真发生过的路）、
+三条恒真/空判据被换成真判据、`live-e2e` 的零知识断言从 `latin1`（对中文正文
+**永不成立**）改成 UTF-8 字节比对、`unpair` 改成显式 `--unpair`（跑一次验收曾经
+会把用户自己的手机踢下线）。
+
+发版：四仓统一 `1.0.0-rc.1`，tag + GitHub Release 全建；wire 与 control 已发 npm
+（`latest` 指向 rc1），小程序已上传开发版本；**中继线上仍是 1.0.6**（rc1 与它只差版本号，
+要不要切由用户定）。
 
 ## 2. 环境坑（还有效的）
 
