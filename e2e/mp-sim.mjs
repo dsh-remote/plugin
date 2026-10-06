@@ -53,6 +53,14 @@ export function createRecorder() {
 export function installWxShim({ recorder } = {}) {
   const storage = new Map()
   const sockets = []
+  /**
+   * 原生组件（导航栏 / 页面底色）的最后一次取值。
+   *
+   * 它们是**命令式**设置的、深色模式下最容易留白顶栏的那两处，而 CSS 变量对比度闸门
+   * 看不到——所以必须在这里留一份可断言的读数。判据见
+   * `e2e/mp-theme.test.mjs` 的「原生组件配色也要过对比度」那几条。
+   */
+  const systemBars = { navigationBarColor: undefined, backgroundColor: undefined }
 
   const wx = {
     getStorageSync(key) {
@@ -105,6 +113,28 @@ export function installWxShim({ recorder } = {}) {
       }
       return task
     },
+    /**
+     * 导航栏 / 页面底色：记下参数而不是空实现。
+     *
+     * 为什么必须记（2026-10-06 审计）：`core/theme.js` 用**命令式**调用这两个 API
+     * 来切深色下的导航栏与下拉回弹区——它们是原生组件，不吃 CSS 自定义属性，所以
+     * `check-mp-contrast.mjs` 那 304 组 CSS 变量对比度**看不到它们**。
+     * 而 shim 里原本没有这两个 API，于是 `theme.js` 那两个 `try/catch` 在**除
+     * mp-theme.test.mjs 以外**的每个用例里都走 catch 分支——那两个调用从未真正执行过。
+     * （那两个色值本身是有判据的：`mp-theme.test.mjs` 用自己的 stub 逐字钉住了
+     * `#242424`/`#ffffff`/`#000000`。补 shim 是为了消除"这条分支在别处恒定走 catch"
+     * 这个系统性盲点，不是为了让色值第一次被看见。）
+     */
+    // ⚠️ **不进 recorder**：recorder 是零知识帧审计的证据表（run.mjs 第 16 步要逐帧
+    // 查明文），往里塞非帧内容会污染那条判据。读数走 systemBars 就够了。
+    setNavigationBarColor(opts) {
+      systemBars.navigationBarColor = opts
+      opts?.success?.({})
+    },
+    setBackgroundColor(opts) {
+      systemBars.backgroundColor = opts
+      opts?.success?.({})
+    },
     // 页面级 API：客户端核心一个都不用到，给空实现即可。
     showToast() {},
     hideToast() {},
@@ -116,7 +146,7 @@ export function installWxShim({ recorder } = {}) {
     setNavigationBarTitle() {},
   }
   globalThis.wx = wx
-  return { wx, storage, sockets }
+  return { wx, storage, sockets, systemBars }
 }
 
 /** 加载真实的小程序模块（绕开 require 缓存）。必须在 `installWxShim()` 之后调用。 */

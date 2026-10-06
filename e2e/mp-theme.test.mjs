@@ -178,3 +178,36 @@ test('applyTo 传 page 为 null 也不炸（app 启动时只有导航栏可设�
     assert.equal(calls.nav.length, 1)
   })
 })
+
+test('shim 覆盖 core/ 用到的每一个 wx.*（否则那些 try/catch 在别的用例里恒定走 catch）', () => {
+  // 2026-10-06 审计发现的盲点：`mp-sim.mjs` 那个 wx shim 里**没有**
+  // `setNavigationBarColor` / `setBackgroundColor`，而 `core/theme.js` 用它们切深色下的
+  // 导航栏与下拉回弹区。于是除了本文件（自带 stub）之外，**每个**用例里那两个调用都落进
+  // `try/catch` 的 catch 分支——那条分支成了测试里的**恒定路径**，里面藏着什么改动都测不到。
+  //
+  // 补 shim 之后这条判据守住它：`core/` 里出现的每个 `wx.*` 都必须被 shim 提供。
+  // 这与 `f.tempFilePath`（e2e 夹具照抄了 chooseMedia 的形状）是同一族——
+  // 假实现与真机分叉，而分叉的那一侧永远不会被发现。
+  const { readFileSync, readdirSync } = require('node:fs')
+  const coreDir = path.join(here, '..', 'dsh-remote-mp', 'miniprogram', 'core')
+  const used = new Set()
+  for (const name of readdirSync(coreDir)) {
+    if (!name.endsWith('.js')) continue
+    for (const m of readFileSync(path.join(coreDir, name), 'utf8').matchAll(/\bwx\.([a-zA-Z]+)/g)) {
+      used.add(m[1])
+    }
+  }
+  assert.ok(used.size >= 6, `core/ 里只扫到 ${used.size} 个 wx.* ：抽法或结构变了`)
+
+  const shim = readFileSync(path.join(here, 'mp-sim.mjs'), 'utf8')
+  // 只看 wx 对象字面量的成员：形如 `    name(...) {` 或 `    name: (...)`。
+  const provided = new Set([...shim.matchAll(/^ {4}([a-zA-Z]+)\s*[:(]/gm)].map((m) => m[1]))
+  const missing = [...used].filter((name) => !provided.has(name)).sort()
+  assert.deepEqual(
+    missing,
+    [],
+    `core/ 用到这些 wx API，而 mp-sim 的 shim 没有提供：${missing.join(', ')}。` +
+      '缺一个的后果不是"报 unknown"，而是调用方那个 `try/catch` 恒定走 catch 分支——' +
+      '真机上走的是另一条路，而测试里那条路从来没被执行过',
+  )
+})
