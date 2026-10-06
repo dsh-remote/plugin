@@ -1,7 +1,7 @@
 | dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction）；CHANGELOG 补到 1.8.1（2026-10-06） |
 | dsh-remote-control/（单包） | 2.0.11 | **已发版**：v2.0.11 tag 已推，Release 工作流跑 npm publish（此前是"只装进 Harness、未发版"）；CHANGELOG 补到 2.0.11 |
 | dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；v1.0.6 tag 已推，Release 产单文件；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
-| dsh-remote-mp/ | 1.1.25 | §1.6 已做进 1.1.25（重试/压缩瞬时提示 + 审批跨会话提示），**待重新上传开发版本并选为体验版**；CHANGELOG 记到 1.1.25 |
+| dsh-remote-mp/ | 1.1.25 | §1.6 已做进 1.1.25（重试/压缩瞬时提示 + 审批跨会话提示），**1.1.25 已上传为开发版本**，待「选为体验版」；CHANGELOG 记到 1.1.25 |
 
 三条不许再错：
 
