@@ -131,3 +131,47 @@ ssh root@47.100.82.15 'node --check /tmp/relay-new.mjs'                # 换之�
 curl -s https://drc.provid.cc/healthz                                 # 版本号变了才算成
 
 ```
+
+## 4. 宿主能力面：P0 / P1（2026-10-06 通读 app.asar 后整理）
+
+完整版在 [docs/HOST-CAPABILITIES.md](docs/HOST-CAPABILITIES.md)（30 服务 / 140 方法的来源与理由）。
+这里只留**已核实的结论**。
+
+**怎么查的**（下一位复核用这个，别再靠猜）：
+
+```sh
+# 每个宿主包都带一份机器可读的调用契约：lib/typert.host.js（服务 + 方法 + 参数 + 返回）
+# 每个包还有 README.md（人话版签名、语义、已知限制）
+# 线上到底挂了什么：~/.dsh/dsh-remote-control/status.json 的 probe.loaderRows / probe.wanted
+```
+
+**踩过的坑**：`probe.loaderRows` 被我们自己 slice(0, 2600) 过，所以**不能**拿它回答
+"某包装没装"——截断点之后的看起来就像没加载。2026-10-06 差点据此断言 token-meter 没挂。
+2026-10-06 已加 `probe.wanted`：逐个点名回答 true/false，短、不截断、可复算。
+
+### 已核实可用
+
+| 能力 | 状态 |
+|---|---|
+| `llm-retry`（P0-4 重试可见） | **已加载** → `llm/retry` 事件会来，可以接 |
+| `attachment` | **已加载** → 图片内联块那条路走得通 |
+
+### 已核实不可用（这一版 profile 里没有）
+
+| 能力 | 结论 |
+|---|---|
+| `token-meter`（P0-1 上下文占用） | **没挂**。依赖 `session-projection` 在，它自己不在 → 这条路当前走不通 |
+| `compaction-basic` / `command-compact`（P0-3） | **没挂** → `compaction/*` 事件不会来，那条待办作废 |
+| `api-workspace-files`（P1-7 手机看文件） | **没挂** → `workspaceFiles.*` 取不到 |
+| `client-file-upload`（P1-5 文件附件） | **没挂** → 印证了文件附件那条路确实够不到，不是我们没找对 |
+| 语音（包名带 experimental） | **没挂** |
+
+⚠️ 上面"没挂"指的是**这个 profile 的组合**。宿主发布清单里有（`desktop-runtime.json` 有 287 个包，
+含 dsh-token-meter），是 profile 没引。要启用得改 profile 的 bundle 声明，**不是**改我们的代码。
+
+### 还没核实的
+
+- `workspace/changes` / `llm/retry` 的**事件形状** —— 它们确实在发（status.json 的
+  `kernel.unmappedEventTypes` 里一直记着），但 data 长什么样要从真机 session log 取，不能照 README 猜。
+- `llm.discoverModels` 等模型枚举面 —— `agentDefaultModel` 那一侧确认只有 `currentSelection`，
+  但 `llm` 服务本身已加载，它有没有可用的枚举入口要单独验。
