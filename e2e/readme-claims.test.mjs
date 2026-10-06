@@ -175,3 +175,48 @@ test('README 的 Markdown 表格没有残缺行（改表格时最容易漏的一
     assert.equal(cells, columns, `README 第 ${i + 1} 行的表格列数与表头对不上（${cells - 2} 列 vs ${columns - 2} 列）：${line.slice(0, 60)}`)
   }
 })
+test('docs/SECURITY.md 引用的每一份**代码**都真的存在（伞仓没有 CI，引用坏了没人会发现）', () => {
+  // 这份文档明说"每条论断后面都跟着引用，请把它当成可核对的引用而不是修辞"。
+  // 2026-10-06 核对时 41 个引用里有 13 个指向已删或已改名的文件
+  // （协议层的 src/frames.ts 搬进了 src/wire/、mp 的 pages/pair/ 整页已删），
+  // 而**没有任何一层会报这个错**：伞仓没有 CI，docs/ 也不在任何闸门的射程内。
+  //
+  // 只查 `dsh-remote-*/`、`e2e/`、`scripts/` 这三类**代码**引用：`docs/` 那几处是
+  // "伞仓那份已删除"之类的历史陈述（说的就是一个不存在的文件，那正是它要说的），
+  // 把它们也当成待查路径会把判据变成永远红着的假闸。
+  const security = read('docs', 'SECURITY.md')
+  // `git show <commit>:<path>` 指的就是那个提交里的文件，一个字都不能动也不该查。
+  const scannable = security.replace(/git show [0-9a-f]+:[A-Za-z0-9_./-]+/g, '')
+  const cited = new Set(
+    [...scannable.matchAll(/`((?:dsh-remote-|e2e\/|scripts\/)[A-Za-z0-9_.\/-]*)`/g)].map((m) => m[1]),
+  )
+  assert.ok(cited.size >= 25, `只从 SECURITY.md 抽出 ${cited.size} 个代码路径引用：判据自己没抽到东西`)
+
+  const missing = [...cited].filter((rel) => !existsSync(path.join(ROOT, rel))).sort()
+  assert.deepEqual(missing, [], `SECURITY.md 引用了不存在的文件：${missing.join(', ')}`)
+})
+
+test('docs/SECURITY.md 正文里没有已删目录的旧路径残留（历史取证那一类除外）', () => {
+  const security = read('docs', 'SECURITY.md')
+  const lines = security.split('\n')
+  // 两类行必须排除，否则判据不是"能守住"而是"永远红着"：
+  //  ① `git show <commit>:<path>` —— 那个路径就该是历史路径；
+  //  ② 文档头那段**路径对照表** —— 它的职责就是把旧名字逐字列出来。
+  // 那段对照表以"→ `dsh-remote-…`"收尾，逐字列出旧名字；用字符串判定而不是正则——
+  // 正则字面量里写路径必然要转义 `/` 与反引号，而这类判据转义一次就容易漏一处。
+  const isMappingNote = (line) => line.includes('→ `dsh-remote-')
+  const body = lines.filter((line) => !line.includes('git show ') && !isMappingNote(line)).join('\n')
+  for (const [label, pattern] of [
+    ['apps/server/', /(?:^|[^/\w-])apps\/server\//],
+    ['packages/protocol/', /(?:^|[^/\w-])packages\/protocol\//],
+    ['packages/plugin/', /(?:^|[^/\w-])packages\/plugin\//],
+    ['mp/core/', /(?:^|[^/\w-])mp\/core\//],
+  ]) {
+    assert.doesNotMatch(
+      body,
+      pattern,
+      `SECURITY.md 正文里还留着旧目录 ${label}：四个仓已经拆成平行的顶层目录（README「组成」表是权威），` +
+        '读者照着它找不到文件——而这份文档的价值就是那些引用可核对',
+    )
+  }
+})
