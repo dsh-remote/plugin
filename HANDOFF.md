@@ -121,4 +121,13 @@ curl -s https://drc.provid.cc/healthz                 # 线上真相
 cat ~/.dsh/dsh-remote-control/status.json             # 插件侧真相（轮询+基线）
 node scripts/mp-preview.mjs                           # 改完 mp 先让用户扫码看
 node scripts/mp-shots.mjs --pages sessions            # 截图验收
+
+# 中继部署（2026-10-06 验证过，逐步都别省）
+ssh root@47.100.82.15 ls -l /opt/dsh-remote-control/server/relay.mjs   # 先看现状
+(cd dsh-remote-server && pnpm build)                                # 本地打包
+scp dsh-remote-server/dist/bundle/main.js root@47.100.82.15:/tmp/relay-new.mjs
+ssh root@47.100.82.15 'node --check /tmp/relay-new.mjs'                # 换之前先验语法
+# 远端：备份(带时间戳) → systemctl stop → install -m0755 + mv → systemctl start
+curl -s https://drc.provid.cc/healthz                                 # 版本号变了才算成
+
 ```
