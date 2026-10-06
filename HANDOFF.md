@@ -297,8 +297,21 @@ Android 上图片实际不可用。
 会把用户自己的手机踢下线）。
 
 发版：四仓统一 `1.0.0-rc.1`，tag + GitHub Release 全建；wire 与 control 已发 npm
-（`latest` 指向 rc1），小程序已上传开发版本；**中继线上仍是 1.0.6**（rc1 与它只差版本号，
-要不要切由用户定）。
+（`latest` 指向 rc1），小程序已上传开发版本。
+
+### 0.8 线上切换（2026-10-06 17:18，rc1 已在生产）
+
+`/healthz` = `1.0.0-rc.1`，`shutdownForced:0`、`stateWriteFailures:0`、`persistence:on`、
+`stateRestored:1`。**主机 1 秒内重连、手机配对从状态文件恢复**（clients/conversations 未清），
+这一条同时是 1.0.6 那次落盘改造的验收：换掉整个中继进程，用户不用重扫。
+
+**那条 P0 在线上二进制上验过**（不是只在单测里）：直连 `127.0.0.1:8787` 发
+`GET /healthz` + `Host: [` —— 换版前这一条会让进程 exit 1（`systemctl Restart=always`
+于是变成重启循环并丢内存会话表），现在正常回 200，uptime 连续（37s → 156s 未重启）。
+换版脚本与备份在 `dsh-remote-server/deploy/`，旧件备份名 `relay.mjs.bak-20261006-171849`。
+
+`clients:0` 是小程序退到后台，不是故障：`conversations:1` 仍在（配对长存，D3），
+回前台自动重连，不需要重扫。
 
 ## 2. 环境坑（还有效的）
 
