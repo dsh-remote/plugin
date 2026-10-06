@@ -3041,6 +3041,58 @@ test('用户回显：主机把一条长消息切成多帧回传时，屏幕上�
   assert.equal(users[0].confirmed, true, '要标成已确认')
 })
 
+/**
+ * 同一条消息主机会回传**两次**，屏幕上只能有一块（用户 2026-10-06 截图：第 3 轮两条一样的用户消息）。
+ *
+ * 现场形状（session log 取证）：一条手机消息产生两条内核事件——
+ * `agent/inbox/spliced`（seq4155，排队）与 `user/message`（seq4179，落定），
+ * 两条带**同一个 messageId**（f71ae5a5…）。主机把两者都出站成 role=user 的 delta，
+ * 而 `_onUserEcho` 的兜底动作是"再画一个气泡"，于是第二条把本地回显旁边又画了一份。
+ */
+test('同一条消息被主机回传两次（inbox + user/message）：屏幕上只能有一块', () => {
+  const p = makePage()
+  stubReceipt(p, { ok: true })
+  p.setData({ sessionId: 's1', inputText: '测试一下审批卡' })
+  p.onSend()
+  assert.equal(p.data.blocks.filter((b) => b.kind === 'user').length, 1, '夹具自检：本地立刻回显一条')
+
+  // 第一次（inbox）：把本地回显标成已确认
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'mu1', role: 'user', delta: '测试一下审批卡', done: true })
+  p._flushDelta()
+  const users1 = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users1.length, 1, '第一次回传就把本地回显结算掉了')
+  assert.equal(users1[0].confirmed, true, '要标成已确认')
+
+  // 第二次（user/message，同一个 messageId）：必须被吃掉
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'mu1', role: 'user', delta: '测试一下审批卡', done: true })
+  p._flushDelta()
+  const users2 = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users2.length, 1, `同一条消息在屏幕上出现了 ${users2.length} 次：重复显示没修掉`)
+  assert.equal(users2[0].text, '测试一下审批卡')
+
+  // 另一条消息照常显示（去重键是 messageId，不是"最近一条"）
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'mu2', role: 'user', delta: '再来一条', done: true })
+  p._flushDelta()
+  assert.equal(p.data.blocks.filter((b) => b.kind === 'user').length, 2, '把不同消息也吃掉就是另一个 bug 了')
+})
+
+/**
+ * 桌面侧排队的消息本地**没有回显**，两次回传也只该出现一块。
+ *
+ * 与上一条同源、不同触发路径：主机的 inbox 与 user/message 都对，用户在 DSH 桌面里
+ * 敲的字只经主机到达手机一次语义，却会被回传两遍。
+ */
+test('桌面排队消息（本地无回显）：两次回传也只画一块', () => {
+  const p = makePage()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'dk1', role: 'user', delta: '桌面里敲的', done: true })
+  p._flushDelta()
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'dk1', role: 'user', delta: '桌面里敲的', done: true })
+  p._flushDelta()
+  const users = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users.length, 1, `本地没有回显时两次回传画了 ${users.length} 块`)
+  assert.equal(users[0].confirmed, true)
+})
+
 test('历史回放：与屏幕上已有内容交错时，按页内锚点对齐（不许 m3 排到 m1 前面）', async () => {
   // 现场形状：会话正在跑，屏幕上已经有实时来的 m1 与 c2；历史第一页里
   // 既有更早的 c1（没渲染过），也有更晚的 m3（也没渲染过）。
@@ -3193,4 +3245,103 @@ test('正文 nodes 要在后续提交里活下来（块上那份 _md 已经不�
   send(p, { t: 'ev.run_state', sessionId: 's1', state: 'idle' })
   assert.deepEqual(p.data.mdBodies[block.key], nodesBefore, '运行态提交之后正文 nodes 丢了')
   assert.equal(p.data.blocks.find((b) => b.msgId === 'm1').text, '**结论**：没问题。', '正文原文也不能被动过')
+})
+
+// ── 2026-06 用户复访报的三条 ──────────────────────────────────────────────
+//   1) 待办全部做完、dsh 已经关闭了，mp 端还在显示
+//   2) retry 成功之后，mp 端的 retry 还显示
+//   3) 重连和重新进入 session 都应该直接滚到底部，不要记住"读到哪儿"
+// 三条都是"瞬时状态没有收尾"或"行为与约定不符"，每条先红后绿。
+
+test('待办：一轮结束（run 回到 idle）就清掉，别把上一轮的清单一直挂着', () => {
+  const p = readyAtBottom()
+  p._onEvent({
+    kind: 'payload',
+    payload: {
+      t: 'ev.todo',
+      sessionId: 's1',
+      todos: [
+        { content: '读完 handoff', status: 'completed' },
+        { content: '实现落盘', status: 'completed' },
+      ],
+    },
+  })
+  assert.equal(p.data.todos.length, 2, '夹具自检：清单先落上')
+  assert.equal(p.data.todoDone, 2)
+
+  // dsh 那一轮跑完了
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.run_state', sessionId: 's1', state: 'idle' } })
+
+  assert.equal(
+    p.data.todos.length,
+    0,
+    '一轮都结束了，待办条还挂着：用户看到的是一件已经做完的事（2026-06 复访报的第 1 条）',
+  )
+  assert.equal(p.data.todosOpen, false, '收起：留一个展开的空面板更怪')
+})
+
+test('待办：正在跑的时候不许清（那样就退回到"永远看不到"了）', () => {
+  const p = readyAtBottom()
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.todo', sessionId: 's1', todos: [{ content: '做一件事', status: 'in_progress' }] },
+  })
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.run_state', sessionId: 's1', state: 'running' } })
+  assert.equal(p.data.todos.length, 1, '跑到 idle 才清，running 时必须留着')
+})
+
+test('retry：重试成功、开始出字之后，那句「正在重试」必须消失', () => {
+  const p = readyAtBottom()
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.run_state', sessionId: 's1', state: 'running' } })
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.retry', sessionId: 's1', attempt: 2, max: 5, reason: 'TRANSPORT' },
+  })
+  assert.equal(p.data.notice, '正在重试 2/5 · TRANSPORT', '夹具自检：提示先挂上')
+
+  // 重试成功了 → 模型开始出字。注意这一轮**还在跑**，
+  // 所以「回到 idle 才清」那条路径根本不会触发（2026-06 复访报的第 2 条）。
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.message_delta', sessionId: 's1', messageId: 'm1', delta: '答' } })
+  p._flushDelta()
+
+  assert.equal(
+    p.data.notice,
+    '',
+    '已经在出字了还挂着"正在重试"：用户以为还在重试，而答案都出来了',
+  )
+})
+
+test('retry：工具事件同样算"恢复生产"的信号', () => {
+  const p = readyAtBottom()
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.run_state', sessionId: 's1', state: 'running' } })
+  p._onEvent({ kind: 'payload', payload: { t: 'ev.retry', sessionId: 's1', attempt: 1, max: 3 } })
+  assert.ok(p.data.notice.indexOf('正在重试') === 0)
+  p._onEvent({
+    kind: 'payload',
+    payload: { t: 'ev.tool_event', sessionId: 's1', callId: 'c1', phase: 'args', name: 'read_file' },
+  })
+  assert.equal(p.data.notice, '', '工具又跑起来了，重试早就结束了')
+})
+
+test('滚动：重连后也要到底部（不要停在"读到哪儿"）', async () => {
+  const p = readyAtBottom()
+  const calls = stubClient(p, () => Promise.resolve({ sessionId: 's1', cmdId: 'c1', items: HISTORY_PAGE }))
+  // 进页面（已在线）→ 读一页历史，停在底部
+  feedStatus(p, 'online')
+  await flush()
+  // 用户往上翻了一大段，正在读旧内容
+  p.onScroll({ detail: { scrollLeft: 0, scrollTop: 100, scrollHeight: 4000, deltaY: -300 } })
+  assert.equal(p.data.atBottom, false, '夹具自检：用户正在回看')
+  calls.length = 0
+
+  // 断链 → 重连
+  feedStatus(p, 'connecting', '连接已断开，正在重连…')
+  feedStatus(p, 'online')
+  await flush()
+
+  assert.equal(
+    p.data.atBottom,
+    true,
+    '重连后没回到底部（用户报的第 3 条）——约定是重连与重新进入都直接到底部',
+  )
 })
