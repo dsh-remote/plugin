@@ -1,7 +1,7 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction）；CHANGELOG 补到 1.8.1（2026-10-06） |
-| dsh-remote-control/（单包） | 2.0.12 | **已发版**（npm 2.0.12 可见；2.0.12 加 `replayPending`，见 §0.5）；CHANGELOG 补到 2.0.12 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.9.0 | 已发 npm（1.9.0 加 `cmd.get_pending`）；CHANGELOG 到 1.9.0 |
+| dsh-remote-control/（单包） | 2.0.13 | **已发版**（2.0.13：`cmd.get_pending` 主机侧 + inbox 接线 + 历史第一页恒带待办；npm 可见后见 §0.6）；CHANGELOG 到 2.0.13 |
 | dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；v1.0.6 tag 已推，Release 产单文件；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
-| dsh-remote-mp/ | 1.1.26 | 1.1.26 已上传为开发版本（含列表页跨会话提示 + 空 status 分支修复），待「选为体验版」；CHANGELOG 记到 1.1.26 |
+| dsh-remote-mp/ | 1.1.27 | 1.1.27 已上传为开发版本（FAB 底部/中文类别/提示合并/getPending/G5/G1），待「选为体验版」；CHANGELOG 到 1.1.27 |
 
 三条不许再错：
 
@@ -14,7 +14,47 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 92/92、server 102 条里 101 过 1 skip（原有的）、control 385/385、伞仓 212/212、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+闸门（干净工作树）：wire 93/93、server 102 条里 101 过 1 skip（原有的）、control 391/391、伞仓 229/229、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+
+## 0.6 用户三连 bug + 没做的清零（2026-10-06 下午，本轮）
+
+用户原话："跳到最新是水平居中，放在下面，不是垂直居中，还没做的也都要做好。"
+前半句是 FAB：中间那版（bottom:46%，用户自己 10-06 早前拍的"改到中间"）看着像
+屏幕正中长的东西。现在贴输入区上方（122+24rpx+安全区），有卡/附件行时让位。
+判据重写（旧判据钉的是百分比，已随决定作废）。
+
+"顶部 retry 和 todo 冲突"：两行状态叠在一起。改成一屏一次只说一件事——
+有待办时提示进待办条的状态位，无待办才单独占一行。
+
+"retry 成功后不更新也不 dismiss"：run_state 的 idle 是跳变帧，退后台期间错过就没了，
+提示永远挂着。现在列表说没跑就清、断链重连清掉（真相由列表与历史重建）。
+
+"重进 session todo 消失"：待办是"此刻的清单"，`todo/write` 在回合开头，
+后面几十条工具事件把 40 条窗口占满，快照被裁在外面，而之后没有变更就没有实时帧
+来补。现在历史第一页恒带最新一份快照（且仅第一页；很小，不计预算）。
+
+其它没做的（同一轮顺手清的）：
+
+- `cmd.get_pending`（wire 1.9.0 已发 npm）：进会话、重连成功各拉一次挂起卡。
+  peer-joined 重发只发生在重配对，普通重连主机收不到信号，只能手机拉。
+  复用原请求帧（手机零改动），老主机静默丢弃。真链路 6b 验过（真中继+真插件+真手机+mock 核）。
+- inbox 接线（control 2.0.13）：`case 'inbox'` 按 user role 进合帧窗口，
+  复用 `ev.message_delta`——无新载荷，mp 不用改。映射表加回，证据说真话。
+- 步骤中文类别（mp）：`activity(name)` 从 app.asar 逐字移植（之前"没找到"是因为
+  只搜了磁盘与 runtime 资源——它在 `dsh-client-ui-chat` 的 client.js 里，
+  连中英两套词表都在），原英文名退到副标题。判据覆盖宿主全部分流规则。
+- G5（mp）：主机卡拼"几秒前有消息"（只说时间），15 秒 tick，离线清掉。
+- G1（mp）：`awaiting` 会话列表上方「等你处理」区，点开即进。
+- G3/G4 核实：早已在（pillLabel/waitingRow + client-bundle 判据），勾掉。
+- GitHub 抛光 P0：keywords/`bugs`/EN 一句/徽章/跨仓链/About（描述/homepage/topics）。
+
+版本：wire 1.9.0（npm 可见）、control 2.0.13（tag 已推，Release 跑后 npm 可见；
+已装进 profile，重启 Harness 生效）、mp 1.1.27（已覆盖上传，待选体验版）。
+判据：wire +1、control +6（get_pending 2/inbox 2/快照 2）、伞仓 +17、mp 全绿。
+
+还没做的（真做不了的）：普通 socket 重连主机无信号那一程已由 get_pending 接住；
+§1.2 unpair / §1.3 体验版真机复验要用户手动；FAB 真机截图、端到端 GIF（P2）
+要真机排期；inbox 的"图片 only splice 无载体"按设计不发。
 
 ## 0.5 弹框缺口修复（2026-10-06 下午，本轮）
 
