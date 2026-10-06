@@ -1,0 +1,177 @@
+/**
+ * readme-claims.test — 伞仓 README 里**能被机械核对**的那些说法。
+ *
+ * ## 为什么只核对"能机械核对的"
+ *
+ * README 里既有必须常新的事实（各项数、字段名、路径），也有必须常在的散文
+ * （设计取舍、事故由来、拍板记录）。散文靠人读，数字与字段名靠判据。
+ *
+ * 这条判据的由来是一次真实的漂移：`pnpm gates` 那轮里同时被指出来的还有
+ * 「小程序**三道**闸」——`check` 实际是四道（verify + md + theme:check + contrast）；
+ * 以及「verify-miniprogram（32 项）」的 32 项其实属于 markdown 闸（verify 是一段
+ * 普通断言脚本，不是 node:test）。两句都读起来完全合理，都没人发现，直到有人
+ * 真去数了一遍。**事实性说法与实现脱节，是靠"数一遍"发现的，不是靠"看一眼"。**
+ *
+ * 覆盖：项数由 `scripts/report-gates.mjs` 负责（要真跑一遍才能知道），这里只管
+ * 不跑也能核的那几类。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const read = (...parts) => readFileSync(path.join(ROOT, ...parts), 'utf8')
+
+const README = read('README.md')
+const SERVER_DIST = path.join(ROOT, 'dsh-remote-server', 'dist', 'src')
+const PLUGIN_SRC = path.join(ROOT, 'dsh-remote-control', 'packages', 'plugin', 'src')
+
+/** 四棵平行仓在场是前提；不在就跳过而不是假装通过（伞仓单独 clone 时无意义）。 */
+const haveServerDist = existsSync(path.join(SERVER_DIST, 'server.js'))
+const havePluginSrc = existsSync(path.join(PLUGIN_SRC, 'pill', 'routes.ts'))
+
+test('README 与 HOST-SIDE 说的宿主路由条数，与 pill/routes.ts 里注册的四条一致', () => {
+  if (!havePluginSrc) return
+  const routes = read('dsh-remote-control', 'packages', 'plugin', 'src', 'pill', 'routes.ts')
+  const declared = [...routes.matchAll(/export const PAIR_\w+_ROUTE = '([^']+)'/g)].map((m) => m[1])
+  assert.equal(
+    declared.length,
+    4,
+    `宿主侧应该是四条同域路由，实际从 routes.ts 里抽出 ${declared.length} 条：${declared.join(', ')}——` +
+      '改了这一处，README 与 HOST-SIDE 里「N 条同域路由」的数都要一起改',
+  )
+  // 两份文档都用 `/pairing/new` 这样的**缩写**（全路径太长，缩写更好读），所以判据按
+  // 尾段比；两份都至少要提到每一条，否则"四条"里的某条在说明书上是不存在的。
+  const hostSide = read('docs', 'HOST-SIDE.md')
+  for (const route of declared) {
+    const suffix = route.replace('/plugins/dsh-remote-control', '')
+    assert.ok(README.includes(suffix), `README 少了路由 ${suffix}：§「配对与使用」第 1 条是配对入口的唯一说明书`)
+    assert.ok(hostSide.includes(suffix), `docs/HOST-SIDE.md 少了路由 ${suffix}：§6「路由的真机取证」是照着 curl 的那一份`)
+  }
+  // 条数不能少算。这条曾经长期写着"3 条"：`/unpair` 是 2026-10-05 加的，
+  // 补进了正文却没补这里的计数（见 HOST-SIDE §6 那条订正注记）。
+  //
+  // ⚠️ 匹配前必须**先把 `*` 去掉**：文档里那句是 `**4 条**同域路由`，星号夹在数字与
+  // 「条」之间，`(\d+)\s*条同域路由` 匹配不到——于是判据只看见了同一文件里另一处
+  // 没加粗的写法，把真正要盯的那一句漏掉了（第一版就这么写，变异验证当场抓出来）。
+  const plainHostSide = hostSide.replace(/\*/g, '')
+  const hostSideCounts = [...plainHostSide.matchAll(/(\d+)\s*条同域路由/g)].map((m) => Number(m[1]))
+  assert.ok(
+    hostSideCounts.length >= 2,
+    `HOST-SIDE 里只抽到 ${hostSideCounts.length} 处「N 条同域路由」：§6 那句才是要盯的，抽不到说明写法变了，同步改判据`,
+  )
+  for (const count of hostSideCounts) {
+    assert.equal(count, declared.length, `HOST-SIDE 说「${count} 条同域路由」，实际注册了 ${declared.length} 条`)
+  }
+  assert.doesNotMatch(
+    plainHostSide,
+    /3\s*条同域路由/,
+    'HOST-SIDE 又写回「3 条同域路由」了：`/unpair` 是第四条（2026-10-05 加，见 §6 的订正注记）',
+  )
+  // 写路由必须带那道自定义头 —— 两份文档都把它写成"跨站判据是**同源才发得出的自定义头**
+  // 而不是 `Origin`"，所以判据要盯的是那个头确实存在。
+  assert.match(routes, /PAIR_MARKER_HEADER\s*=/, 'routes.ts 里没有自定义头常量：那两份文档的核心说法就不成立')
+})
+
+test('README 列出的 /healthz 落盘五字段，与中继真的 health() 键集一致', () => {
+  if (!haveServerDist) return
+  const fields = ['persistence', 'stateRestored', 'stateSavedAtSec', 'stateWrites', 'stateWriteFailures']
+  for (const field of fields) {
+    assert.ok(README.includes(`\`${field}\``), `README 少了 healthz 字段 ${field}`)
+  }
+  const source = read('dsh-remote-server', 'src', 'server.ts')
+  for (const field of fields) {
+    assert.ok(
+      source.includes(field),
+      `/healthz 里其实没有 ${field}：README 的运维口径（"换完机器先看 stateWriteFailures，不是 0 就是没在写"）会指着一个不存在的字段`,
+    )
+  }
+})
+
+test('README 里写的 mp 闸门与 mp 的 check 脚本逐项一致（"三道"曾经是错的）', () => {
+  const pkg = JSON.parse(read('dsh-remote-mp', 'package.json'))
+  // `check` 串起来的每一段都必须是一个存在的 script，且每一个 script 都要被 check 覆盖：
+  // 只查前者会漏掉"加了新闸但没接进 check"，后者才是那次漂移的方向。
+  const chain = pkg.scripts.check.split('&&').map((part) => part.trim().replace(/^npm run /, ''))
+  const covered = new Set(chain)
+  for (const name of chain) {
+    assert.ok(pkg.scripts[name], `check 里提到的 ${name} 在 package.json 里不存在`)
+  }
+  for (const [name] of Object.entries(pkg.scripts)) {
+    if (['check', 'theme', 'format', 'format:check', 'prepare'].includes(name)) continue
+    assert.ok(covered.has(name), `mp 加了 script \`${name}\` 却没接进 \`check\`：CI 只跑 check，新闸等于不存在`)
+  }
+  // 不去数「N 道闸」那个词（写阿拉伯数字还是中文数字都算过），而是**要求每一道闸都被
+  // README 点名**（脚本名或它做的事）。数错条数只是症状，症状真正的问题是"照着 README
+  // 不知道自己漏跑了哪一道"。历史上那句「三道闸」就是这么错的。
+  const MENTIONS = {
+    verify: ['verify-miniprogram', '结构自检'],
+    md: ['markdown'],
+    'theme:check': ['theme:check', '主题'],
+    contrast: ['contrast', '对比度'],
+  }
+  for (const name of chain) {
+    const hints = MENTIONS[name] ?? [name]
+    assert.ok(
+      hints.some((hint) => README.includes(hint)),
+      `README 没说清 mp 的 \`${name}\` 这一道闸（${hints.join(' / ')} 都没出现）：` +
+        '照着 README 跑的人会以为它不在 check 里',
+    )
+  }
+})
+
+test('README 说的本地全链路步数，与 e2e/run.mjs 里真实的步骤条数一致', () => {
+  const run = read('e2e', 'run.mjs')
+  const steps = (run.match(/^\s+await run\(/gm) ?? []).length
+  assert.ok(steps >= 10, `run.mjs 里只数到 ${steps} 个 await run(...)：判据的抽法或结构变了`)
+  const claim = /本地全链路[^0-9]{0,12}(\d+)\s*步/.exec(README)
+  assert.ok(claim, 'README 里找不到「本地全链路 N 步」那句；它变了写法就同步改判据')
+  assert.equal(Number(claim[1]), steps, `README 说 ${claim[1]} 步，run.mjs 里实际 ${steps} 步`)
+})
+
+test('README 的四仓落位表里，每个目录都真的在', () => {
+  for (const dir of [
+    'dsh-remote-protocol',
+    'dsh-remote-server',
+    'dsh-remote-control',
+    'dsh-remote-mp',
+    'e2e',
+    'scripts',
+    'deploy',
+    'docs',
+  ]) {
+    assert.ok(existsSync(path.join(ROOT, dir)), `README 的「组成」表里列了 ${dir}/，但盘上没有`)
+  }
+})
+
+test('README 的「文档」小节里，每条相对链接都指向真实文件', () => {
+  // 伞仓没有 CI、没人点链接，所以"链接指向已删文件"会一直躺着直到有人真的点它。
+  const section = /\n## 文档\n([\s\S]*?)\n## /.exec(README)?.[1] ?? ''
+  assert.ok(section, 'README 里找不到「## 文档」小节')
+  const links = [...section.matchAll(/\]\(([^)#]+?)\)/g)].map((m) => m[1])
+  assert.ok(links.length >= 6, `只从「文档」小节抽出 ${links.length} 条链接，判据自己没抽到东西`)
+  for (const link of links) {
+    if (/^https?:/.test(link)) continue
+    assert.ok(existsSync(path.join(ROOT, link)), `README 的「文档」小节指向了不存在的文件：${link}`)
+  }
+})
+
+test('README 的 Markdown 表格没有残缺行（改表格时最容易漏的一处）', () => {
+  // 伞仓 README 的「组成」与「测试」两张表是纯手写的，表格改坏（列数对不上）不会
+  // 报任何错，只会渲染成一团。这里按块比对每一行的竖线数。
+  const lines = README.split('\n')
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.trimStart().startsWith('```')) inFence = !inFence
+    if (inFence || !line.startsWith('|')) continue
+    const cells = line.split('|').length
+    // 找这一块表格的第一行（分隔行）作为列数基准
+    const sep = lines[i + 1] ?? ''
+    if (!/^\|[\s:|-]+\|?\s*$/.test(sep)) continue
+    const columns = sep.split('|').length
+    assert.equal(cells, columns, `README 第 ${i + 1} 行的表格列数与表头对不上（${cells - 2} 列 vs ${columns - 2} 列）：${line.slice(0, 60)}`)
+  }
+})

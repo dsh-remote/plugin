@@ -147,9 +147,15 @@ cat ~/.dsh/dsh-remote-control/status.json
 
 ## 6. 路由的真机取证（不用打开 UI）
 
-宿主侧一共挂 **3 条**同域路由，全部服务状态栏那颗 pill：`POST /pairing/new`（发码，会改状态）、
-`GET /pairing.png`（弹窗里那张图）、`GET /status`（pill 抬头那句连接状态）。
+宿主侧一共挂 **4 条**同域路由，全部服务状态栏那颗 pill：`POST /pairing/new`（发码，会改状态）、
+`GET /pairing.png`（弹窗里那张图）、`GET /status`（pill 抬头那句连接状态）、
+`POST /unpair`（退出配对，作废全部配对通道，幂等）。
 1.1.0 那条右栏用的 `/pairing`（只读、带 `?session=`）已经随右栏方案一起删除——它现在返回 **404**。
+
+⚠️ 少算过一条（2026-10-06 订正）：`/unpair` 是 2026-10-05 加的（mp 侧解除配对要在主机
+那边也作废，否则 pill 永远说「手机离线」），当时只把它补进了正文那一段，
+**这条计数没跟着改**，于是这里长期写着"3 条"。判据：`e2e/readme-claims.test.mjs`
+从 `pill/routes.ts` 的四个 `_ROUTE` 常量数出来再比，改路由要连这里一起改。
 
 **发码那条要带一个自定义头**（`<P>` 是上面那个端口，每次启动都变，用 `lsof` 现找）：
 
