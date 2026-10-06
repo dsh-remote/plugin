@@ -6,8 +6,10 @@
 
 ## 用微信开发者工具打开
 
-1. 打开微信开发者工具 → 导入项目 → 目录选 `mp/`。
-2. appid：`mp/project.config.json` 里已配置真实 appid。
+1. 打开微信开发者工具 → 导入项目 → 目录选 **`dsh-remote-mp/`**（小程序已独立成仓，
+   `project.config.json` 在它的仓根、`miniprogramRoot` 指向 `miniprogram/`，
+   所以**导入的是仓根不是 `miniprogram/`**）。
+2. appid：`dsh-remote-mp/project.config.json` 里已配置真实 appid（fork 必须换成自己的）。
    真机还需要在微信后台 `开发管理 → 开发设置 → 服务器域名 → socket合法域名`
    加上 `drc.provid.cc`（必须是已备案域名 + 有效证书，且只能用 `wss://`）。
 3. 详情 → 本地设置 → 勾选 **「不校验合法域名、web-view、TLS 版本以及 HTTPS 证书」**

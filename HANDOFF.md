@@ -120,11 +120,60 @@ interface ChooseFile {
 （重算在 `applyServerTtl` 里，刻意只做一处：同一个 ttlMs 算两遍迟早算出两个
 不同的 expiresAt，而那种分歧的表现是"手机上还剩很久、实际刚过期"）。
 
-### 0.10.8 本轮闸门
+### 0.10.8 第三、四批（续审两轮，又发现 4 条 + 5 处文档漂移）
 
-`wire 107` / `server 132（1 skip）` / `control 464` / `伞仓 274` + 本地全链路 17 步 /
+| # | 缺陷 | 影响 | 判据 / 验证 |
+|---|---|---|---|
+| 10 | `docs/HOST-SIDE.md` 的配置表里有一个**代码里不存在**的键（`takeOverQuestions` / `DRC_TAKE_OVER_QUESTIONS`），而这一代宿主上 `userQuestions.registerProvider` 根本不存在（`platform/guard.ts` 明确记着） | 插件配置是"**写了不报错、不告警、不生效**"那一类：照着文档配的人得到一个静默无效的开关 | `e2e/host-config-docs.test.mjs` |
+| 11 | 同一张表里**缺 5 个代码里存在的键**：`pairStoreFile`（PSK 落哪）、`restoredIdleTtlSec`（恢复会话剪不剪）、`uploadDir` / `maxFileBytes`（附件落哪、多大）、`newSessionCwd`（**新建会话落在哪个分组**） | 同上：有个开关没人知道 = 没有这个开关。`newSessionCwd` 那条与 §0.10.3 直接相关 | 同上（双向逐项） |
+| 12 | `docs/HOST-SIDE.md` §6「宿主侧一共挂 **3 条**同域路由」，实际是四条 | `/unpair` 是 2026-10-05 加的，补进了正文与组件表却没补这个计数 | `e2e/readme-claims.test.mjs` |
+| 13 | `docs/SECURITY.md` 的 **41 条代码引用里 13 条指向已删/已改名文件**，且判据条数（中继 63 / 协议层 81 / 插件 208）与实际差了将近一倍 | 这份文档明说"每条论断后面都跟着引用，请把它当成可核对的引用"——而伞仓没有 CI，坏掉的引用会一直躺着 | 同上（引用存在性 + 旧目录残留） |
+
+另有四处**陈旧说法**已订正：`CONTRIBUTING.md` 与 protocol 的 `release.yml` 都还写着
+消费仓用 `^1.0.0`（rc 起是**精确钉**）；`CONTRIBUTING.md` 把升版流程指给一个
+不存在的锚点；`MINI-PROGRAM.md` 让读者在开发者工具里导入 `mp/`（现在是 `dsh-remote-mp/`）。
+
+### 0.10.9 本轮新增的四条机械判据（都是"静默失配"那一类）
+
+| 判据 | 守什么 | 为什么值得 |
+|---|---|---|
+| `scripts/report-gates.mjs`（`pnpm gates`） | 六道闸门各跑一遍，与 README 逐格比对，对不上 exit 1 | 「项数」过去半年漂了四次，全是"加了判据忘了改文档" |
+| `e2e/readme-claims.test.mjs`（9 条） | README 里不跑也能核的说法 + SECURITY.md 的引用存在性 | 「小程序三道闸」实际是四道、32 项其实属于 markdown 闸——两句都读起来完全合理 |
+| `e2e/wire-surface.test.mjs`（2 条） | 小程序引用的每个 `ev.*`/`cmd.*` 在协议层存在，且每个都被引用过 | 分发是**没有 else 的 if 链**，失配表现是"什么都不发生" |
+| `e2e/host-config-docs.test.mjs`（4 条） | HOST-SIDE 配置表 ↔ `shell/config.ts` 双向逐项 | 插件配置"写了不报错、不告警、不生效" |
+
+**四条判据本轮都做了变异验证**，其中三条**当场抓到判据自己骗自己**（与 §0.3 第 2 条
+同一条教训）：
+
+- 配对码日志那条第一版只断言两个手写的码，而 `publish` 走的是夹具给的 `'T1'`，
+  于是把发布那行改回 `token:` 时判据**没红**。现在三条路径逐个验，各自都会红。
+- HOST-SIDE 计数那条 `(\d+)\s*条同域路由` 匹配不到文档里的 `**4 条**同域路由`
+  （星号夹在数字与「条」之间），于是它只看见了同一文件另一处没加粗的写法，
+  把**真正要盯的那句**漏掉了——把 §6 写回「3 条」，判据没红。
+- host-config-docs 那条第一版扫全文，于是我自己写的订正注记里如实提到的
+  `DRC_TAKE_OVER_QUESTIONS` 把判据弄红了——判据把**说明**当成了**配置**。
+
+### 0.10.10 本轮的诚实边界
+
+`dsh-remote-control` 的工作树在本轮开工**之前**就有来自外部进程的未提交改动
+（mtime 早于本轮第一条命令，与 §0.2 记的是同一台机器上的同一个现象）。它们是：
+
+- 图片附件改走宿主 attachment store（`attachments.admitPromptContent` 那座桥、
+  `submitWithImages`、`ADMIT_TIMEOUT_DEFAULT`、`supportsInlineImages`）
+  ——原先是把 `{type:'image',data,mimeType}` 裸块塞进 followup，而内核序列化时读
+  `block.attachment.attachmentId`，跳不过那一步整个回合会以
+  "Cannot read properties of undefined (reading 'attachmentId')" 收场；
+- 带图请求不许被悄悄降级成纯文本（手机说发了 N 张图却一张都送不出数据时整条失败）。
+
+本轮**没有审这两段**，只跑了全量确认没有回归。已随插件仓的提交一起落地，
+提交说明里也写明了它们不是本轮写的——**下一个读那段历史的人第一件事应该是把图片
+附件这条链单独审一遍**。
+
+### 0.10.11 本轮闸门
+
+`wire 107` / `server 132（1 skip）` / `control 464` / `伞仓 289` + 本地全链路 17 步 /
 `mp verify + md 32 + theme + 对比度 304` 全绿；三仓 `format:check` 全绿；
-`scripts/check-mp-ui.mjs` 通过。
+`scripts/check-mp-ui.mjs` 通过；`pnpm gates` 七格全 ✅。
 
 **四仓从今天起统一用这一个版本号**（`1.0.0-rc.1`）；此前的 1.9.0 / 2.0.x / 1.0.6 / 1.1.x
 是私有期编号，不再作为发版口径。
