@@ -3474,3 +3474,111 @@ test('纯文字的长消息不受附件闸牵连（估高也要够准）', async
   assert.equal(calls.length, 1, `纯文字正文（${'const x = 1\n'.repeat(2000).length} 字符）被闸误拦了`)
   assert.equal(p.data.inputText, '', '放行时输入框照常清空')
 })
+
+
+/* ── 极端嵌套：lexer 会把堆吃光，try/catch 救不了 ─────────────────────── */
+
+
+test('回归：极深嵌套的正文不能让渲染器把进程打死（2026-10-06 审计）', () => {
+  // `render()` 一直有个 `try/catch`，注释还写着"解析器抛了（畸形输入/极端嵌套）"
+  // 就退化成纯文本。实测那句话对"极端嵌套"这一支是**错的**：marked 在深嵌套上不是抛，
+  // 是把堆吃光然后被引擎**致命终止**——
+  //     2000 层嵌套列表 → FATAL ERROR: Reached heap limit … heap out of memory
+  // 致命终止不是异常，catch 拦不住，于是"退化成纯文本"那行永远轮不到执行。
+  // 在小程序上那不是"这一条渲染得丑"，是**整个页面进程被打死**。
+  //
+  // ⚠️ 而这种正文**仍在** MAX_TEXT_PER_BLOCK=20000 之内（2000 层 ≈ 16–20KB），
+  // 所以块数/字数那两道闸也拦不住它。
+  //
+  // 这条判据证明的是「**判据把这种正文路由到了纯文本退路**」（节点数 == 1 且内容原样），
+  // 不是"跑一遍就 OOM"——测试进程的堆很大，真跑未必炸。断言退路的**形状**才是稳定的：
+  // 闸一撤，同样的正文会渲染成上千个节点，节点数立刻对不上（变异验证：撤掉闸 → 红）。
+  const md = require(path.join(ROOT, 'dsh-remote-mp/miniprogram/core/markdown.js'))
+  const nest = (depth) => Array.from({ length: depth }, (_, i) => '  '.repeat(i) + '- L' + i).join('\n')
+
+  // 正常嵌套必须照常排版（闸不是墙）
+  for (const depth of [1, 8, 24, 32]) {
+    const nodes = md.render(nest(depth), false)
+    assert.equal(
+      nodes.length,
+      depth,
+      `${depth} 层嵌套被当成了纯文本（${nodes.length} 个节点）：上限定得太低，正常内容会受害`,
+    )
+  }
+  // 越界的退回纯文本：一个节点、内容原样在、且**不抛**
+  for (const depth of [40, 200, 2000, 8000]) {
+    let nodes = null
+    assert.doesNotThrow(() => {
+      nodes = md.render(nest(depth), false)
+    }, `${depth} 层嵌套把渲染器搞死了`)
+    assert.equal(nodes.length, 1, `${depth} 层应当整体退化成纯文本（1 个 <p>）`)
+    assert.equal(
+      nodes[0].children[0].text,
+      nest(depth),
+      `${depth} 层时内容必须原样在屏幕上：退化是丢掉样式，不是丢掉内容`,
+    )
+  }
+})
+
+test('嵌套封顶不许误伤正常正文：混合块（含嵌套引用、表格、代码）照常排版', () => {
+  const md = require(path.join(ROOT, 'dsh-remote-mp/miniprogram/core/markdown.js'))
+  const normal = [
+    '# 标题',
+    '',
+    '一段**粗体**与 `code`。',
+    '',
+    '- a',
+    '- b',
+    '',
+    '> 引用',
+    '>> 再嵌一层',
+    '',
+    '| a | b |',
+    '|---|---|',
+    '| 1 | 2 |',
+  ].join('\n')
+  const nodes = md.render(normal, false)
+  assert.ok(nodes.length >= 5, `正常正文只剩 ${nodes.length} 个节点：封顶判据把它误判成极端嵌套了`)
+  const tags = nodes.map((n) => n.name)
+  for (const tag of ['h1', 'p', 'blockquote', 'table']) {
+    assert.ok(tags.includes(tag), `${tag} 没渲染出来（实际：${tags.join(',')}）：封顶判据在数错嵌套层数`)
+  }
+  // 列表**刻意摊平成顶层 p + bullet span**，不是 ul/li：rich-text 里 p 嵌 p 会按
+  // shrink-to-fit 布局，真机上整列 bullet 每行只排五六个字（见 listNode 的注释与
+  // mp-shots 的 chat-md-width）。这条断言是为了**钉住那个摊平**——谁把它"修回" ul/li，
+  // 真机上的排版就坏了，而单测当时是绿的。
+  assert.ok(
+    !tags.includes('ul'),
+    '列表又被渲染成 ul/li 了：那是刻意摊平的取舍（rich-text 嵌套 p 会 shrink-to-fit），别改回去',
+  )
+  // 摊平后的列表项签名 = 顶层 `p` 且带 `padding-left`（逐层 +28rpx）。
+  // 不去翻 children 找 bullet：bullet 藏在 span 里的 text 节点上，翻一层就脆。
+  const items = nodes.filter((n) => n.name === 'p' && /padding-left:\d+rpx/.test(String((n.attrs || {}).style || '')))
+  assert.equal(items.length, 2, `两条列表项应当各有一个带 padding-left 的顶层 p（实际 ${items.length}）`)
+  assert.ok(
+    items.every((it) => JSON.stringify(it).includes('•')),
+    '列表项的 • 标记不见了：摊平的形状变了（renderStream 的暂扣切分或标记文本都可能被改坏）',
+  )
+  // 缩进很深但**没有结构标记**的行不算嵌套——这是最容易误伤的一类：
+  // 真实正文里 indented code block 的每一行都带缩进（24 空格 = 12 级），
+  // 而它必须照常渲染成 `pre`，不能被当成"极端嵌套"退化成纯文本。
+  const indented = Array.from({ length: 60 }, (_, i) => '    '.repeat(6) + '这是第 ' + i + ' 行').join('\n')
+  const codeNodes = md.render(indented, false)
+  assert.equal(
+    codeNodes[0] && codeNodes[0].name,
+    'pre',
+    `60 行深缩进的正文退化成了纯文本（实际 ${codeNodes.map((n) => n.name).join(',')}）：` +
+      '封顶判据把代码块的缩进当成了结构嵌套层数',
+  )
+})
+
+test('流式路径同样受封顶保护（renderStream 内部走 render，不许另有一条没闸的路）', () => {
+  const md = require(path.join(ROOT, 'dsh-remote-mp/miniprogram/core/markdown.js'))
+  const deep = Array.from({ length: 2000 }, (_, i) => '  '.repeat(i) + '- L' + i).join('\n')
+  let out = null
+  assert.doesNotThrow(() => {
+    out = md.renderStream(deep, false)
+  }, '流式路径没有继承封顶：那里也是页面被杀的那条路')
+  assert.ok(out && Array.isArray(out.nodes), 'renderStream 应当仍返回 nodes')
+  assert.equal(out.nodes.length, 1, '流式路径也该退化成纯文本')
+})
