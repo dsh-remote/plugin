@@ -81,7 +81,7 @@ const GATES = [
   },
   {
     key: 'mp-md',
-    label: '小程序 markdown 规范（项）',
+    label: '小程序 markdown 渲染（项）',
     bin: 'node',
     args: ['--test', 'dsh-remote-mp/scripts/check-markdown.mjs'],
     read: tapCount,
@@ -178,7 +178,7 @@ const README_CELLS = [
   // verify-miniprogram 那一格没有数字（它不是 node:test），所以只断言"跑通了"，
   // 对应 README 口径里的「结构自检」那一档。
   { key: 'mp-verify', expect: 'ok', anchor: '结构自检（' },
-  { key: 'mp-md', anchor: 'markdown 规范（' },
+  { key: 'mp-md', anchor: 'markdown 渲染（' },
   { key: 'mp-contrast', anchor: '、对比度（' },
 ]
 

@@ -8,7 +8,7 @@
  *
  * 这条判据的由来是一次真实的漂移：`pnpm gates` 那轮里同时被指出来的还有
  * 「小程序**三道**闸」——`check` 实际是四道（verify + md + theme:check + contrast）；
- * 以及「verify-miniprogram（32 项）」的 32 项其实属于 markdown 闸（verify 是一段
+ * 以及「verify-miniprogram（32 项）」的 32 项其实属于 markdown 渲染闸（verify 是一段
  * 普通断言脚本，不是 node:test）。两句都读起来完全合理，都没人发现，直到有人
  * 真去数了一遍。**事实性说法与实现脱节，是靠"数一遍"发现的，不是靠"看一眼"。**
  *
@@ -108,7 +108,7 @@ test('README 里写的 mp 闸门与 mp 的 check 脚本逐项一致（"三道"�
   // 不知道自己漏跑了哪一道"。历史上那句「三道闸」就是这么错的。
   const MENTIONS = {
     verify: ['verify-miniprogram', '结构自检'],
-    md: ['markdown'],
+    md: ['markdown 渲染', 'markdown'],
     'theme:check': ['theme:check', '主题'],
     contrast: ['contrast', '对比度'],
   }
