@@ -1,7 +1,7 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction） |
-| dsh-remote-control/（单包） | 2.0.11 | 已发 npm 的是 2.0.10；**2.0.11 只装进了 Harness、未发版**，见 §4 |
-| dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
-| dsh-remote-mp/ | 1.1.24 | 开发版本已上传，待「选为体验版」 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | 1.8.1 | 已发 npm（1.8.1 加 ev.retry / ev.compaction）；CHANGELOG 补到 1.8.1（2026-10-06） |
+| dsh-remote-control/（单包） | 2.0.11 | **已发版**：v2.0.11 tag 已推，Release 工作流跑 npm publish（此前是"只装进 Harness、未发版"）；CHANGELOG 补到 2.0.11 |
+| dsh-remote-server/ | 1.0.6 | 已部署 2026-10-06 10:30（/healthz 1.0.6, persistence:on, stateRestored:1）；v1.0.6 tag 已推，Release 产单文件；不发 npm（包名被第三方占）；**§1.1 已完成**，见下 |
+| dsh-remote-mp/ | 1.1.25 | §1.6 已做进 1.1.25（重试/压缩瞬时提示 + 审批跨会话提示），**待重新上传开发版本并选为体验版**；CHANGELOG 记到 1.1.25 |
 
 三条不许再错：
 
@@ -14,7 +14,40 @@
 
 线上真相：中继 wss://drc.provid.cc；本机 hostId=drc-748e9a9ce167（落盘 host-id，0600）；status.json 按定时器刷，读它要轮询、要带基线。
 
-闸门（干净工作树）：wire 92/92、server 101/101（102 条里 1 条 skip 是原有的）、control 372/372、伞仓 194/194、mp 32/32 + 对比度全过；四个仓 format:check 全绿。
+闸门（干净工作树）：wire 92/92、server 102 条里 101 过 1 skip（原有的）、control 381/381、伞仓 210/210、mp 32/32 + 对比度 302 组全过；三仓 format:check 全绿（mp 无此门，其 check=verify+md+theme+contrast）。
+
+## 0.4 开源发布前整备（2026-10-06 中午，本轮）
+
+server 不用重启：`/healthz` 1.0.6、uptime 正常、`stateWriteFailures:0`、
+hosts 1——落盘在写，重启只会制造一次本可避免的断链。
+
+做的四件事：
+
+1. **补上最后一个半成品**：§1.6 的 mp 侧重试/压缩显示。主机 2.0.11 早就发了
+   `ev.retry` / `ev.compaction`，mp 的 `_onEvent` 里没有分支、界面上永远看不见。
+   现已补：顶栏下一行一句瞬时话（`正在重试 2/5 · TRANSPORT` / `正在压缩上下文` /
+   `压缩没成功：<error>`），run-state 回 idle 清掉，不进块流；
+   `failed` 与 `ended` 绝不合并。提交 `71b1205`（mp 1.1.25），判据在
+   `e2e/mp-chat-blocks.test.mjs` 末尾 7 条（旧代码上 6 条红，变异验证过）。
+   顺手还补了 PRODUCT.md G2 的另一半：审批跨会话原来彻底静默（提问至少还有 toast），
+   现与提问对称处理（`主机在另一条会话里等审批`）。主机侧重放（peer-joined 补发挂着的
+   提问）与 inbox 完整接线**仍没做**（风险中偏高，见 §0.3"还没做的"）。
+   另删掉 `_onEvent` 里一段逐字重复的死代码（跨会话提问 toast 写了两遍，第二遍不可达）。
+2. **CHANGELOG 全部补齐**：protocol 补 1.6.0–1.8.1（含 1.7.0 立 tag 未发包的注记）、
+   control 补 2.0.6–2.0.11（2.0.8 未立 tag/未发包，折入 2.0.9 并注记；与 v2.0.8
+   缺 tag 的处理一致）、server 补 1.0.5、mp 记到 1.1.25。
+3. **文档与现状对齐**：伞仓 README（生产实例 v1.0.1→1.0.6 + 落盘五字段、测试项数
+   92/102/381/210/verify32+对比度302、部署路径去 monorepo 残留、env 示例加
+   DRC_STATE_FILE、重启丢配对加"未配落盘时"限定）、server SELF-HOSTING（§2/§4/§6 +
+   compare 链）、control README（wire ^1.8.0）、mp README（`/drc pair` 已删）。
+   伞仓 `deploy/systemd` 与 server 仓单元对齐（含 StateDirectory——之前那份没有，
+   照它部署会重演 §0.1 的 EROFS）。
+4. **发版**：四仓分支全推；`v2.0.11`（control→npm）与 `v1.0.6`（server→Release 单文件）
+   两个 tag 已推，GitHub Actions 在跑。protocol 1.8.1 已在 npm 上，无需新动作。
+
+之后的手动项（都要真人/真机，e2e 覆盖不了）：
+mp 1.1.25 重新上传开发版本 → 选为体验版 → 真机复验 §1.2（unpair 变"未配对"、
+切后台回来不重扫）与 §1.3（待办条/断链补历史/图片去路径/重试压缩提示）。
 
 ## 0. 本轮做完的（2026-10-06 §1.1）
 
@@ -154,7 +187,7 @@ FAB 72rpx → 56rpx、贴右边缘、品牌色实心圆改成中性面 + 细边 
 而宿主显示中文类别，所以对齐后 mp 那一行的语义也会跟着变。
 不要凭猜测硬写映射表：猜错的表现是显示错的类别，比不翻译更糟。
 
-### 1.6 mp 侧显示重试与压缩（下一步，不用等重启）
+### 1.6 mp 侧显示重试与压缩（✅ 2026-10-06 中午已做进 mp 1.1.25，见 §0.4）
 
 主机侧已经做完并等重启生效：wire 1.8.1 发了 `ev.retry` / `ev.compaction`，control 2.0.11
 做了映射与广播，两条都过了判据与循环验证。
