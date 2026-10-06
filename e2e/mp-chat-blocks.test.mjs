@@ -2646,3 +2646,53 @@ test('审批：本会话的审批帧照常弹卡（别把上面那条改过头�
   })
   assert.ok(p.data.pendingPermission, '本会话的审批必须弹出来')
 })
+
+// ── 步骤中文类别（2026-10-06：映射函数从 app.asar 实测挖出，不是猜的） ──
+//
+// 宿主 `dsh-client-ui-chat` 的 `activity(name)`（工具名→类别）+ 中文词表
+// `message.stepProcess.*` 都在 asar 里，mp 之前直接显示 `{{it.tool}}` 原样英文。
+// port 在 `miniprogram/core/activity.js`，行首显示类别、原英文名退到副标题。
+
+test('步骤：工具名按宿主同款映射显示中文（bash→正在运行命令）', () => {
+  const p = readyAtBottom()
+  send(p, { t: 'ev.tool_event', sessionId: p.data.sessionId, callId: 'c1', phase: 'args', tool: 'bash' })
+  const group = stepGroups(p)[stepGroups(p).length - 1]
+  const item = group.items[group.items.length - 1]
+  assert.equal(item.tool, 'bash', 'tool 存原样（调试与断言的锚点）')
+  assert.equal(item.cat, '正在运行命令', '显示用中文类别')
+  assert.equal(item.title, 'bash', '无标题时原英文名退到副标题，信息不丢')
+})
+
+test('步骤：映射覆盖宿主全部的分流规则（不是只列几个常见的）', () => {
+  const cases = [
+    ['read', '正在读取文件'],
+    ['read_image', '正在读取图片'],
+    ['write', '正在写入文件'],
+    ['grep', '正在搜索代码'],
+    ['glob', '正在搜索代码'],
+    ['edit', '正在编辑文件'],
+    ['apply_patch', '正在编辑文件'],
+    ['web_search', '正在搜索网页'],
+    ['web_fetch', '正在访问网页'],
+    ['subagent', '正在协调子智能体'],
+    ['todo_write', '正在更新计划'],
+    ['ask_user_question', '等待你的操作'],
+    ['run_code', '正在运行代码'],
+    ['terminal_x', '正在运行命令'],
+    ['something_new', '正在调用工具'],
+  ]
+  for (const [tool, label] of cases) {
+    const p = readyAtBottom()
+    send(p, { t: 'ev.tool_event', sessionId: p.data.sessionId, callId: 'c-' + tool, phase: 'args', tool })
+    const group = stepGroups(p)[stepGroups(p).length - 1]
+    assert.equal(group.items[group.items.length - 1].cat, label, `${tool} 必须映射成「${label}」`)
+  }
+})
+
+test('步骤：行首渲染的是 cat（老数据没有 cat 才回退英文名）', () => {
+  const wxml = fs.readFileSync(
+    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
+    'utf8',
+  )
+  assert.match(wxml, /\{\{it\.cat \|\| it\.tool\}\}/, '行首必须是 cat 优先')
+})
