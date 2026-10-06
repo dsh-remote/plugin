@@ -56,7 +56,51 @@ ssh 进去 `touch` 又成功，因为那是另一个 mount namespace。
 （那半成品的内容已按上下文重建并补全，`state.ts` 的未提交修改则改由 `persist.ts` 承担，
 现在 `state.ts` 与 HEAD 一致。）
 
-## 1. 待办（按顺序做）
+## 0.3 五个 mp/host bug 已修（2026-10-06 晚，全部先红后绿）
+
+六个并行深挖的结论 + 修复。**四个用户可见问题里有三个是同一个盲区的产物**：
+判据一律在造帧，从不断言主机此刻到底发不发，于是修完也"测试通过"。
+
+| # | 问题 | 根因 | 修在哪 |
+|---|---|---|---|
+| 1 | 当前模型不见了 | commit **9511904**（修提问弹窗的那个）重构 `broadcastModel` 时把 `pushSessions()` 里的 call site **删掉而不是适配**。模型只剩 `request/header` 一个源，而它**每轮一条**，空闲会话永不发 | host：`modelBySession` 缓存 + 随列表补发 |
+| 2 | 待办不显示 | `isHistoryWorthy` 只放行 delta/tool，`todo` **在进历史页之前**就被丢掉 → `historyWireItem` 的 todo 分支是**死代码** | host：放行 + 一页塌缩成最后一份；mp：`_todoLive` 不许被形状不对的帧锁死 |
+| 3 | 重连后停更 | 2026-10-05 那次"修复"**只复位、不触发**，整段是空操作：`_maybeLoadHistory()` 在 `_historyStarted` 还是 true 时就 return 了，之后复位了却没人再调用 | mp：复位后显式再触发一次 |
+| 4 | FAB 移到中间 | restyle `4656d70` 把 `bottom` 从 210rpx 改成 176rpx，而输入区高 `122rpx + env(safe-area-inset-bottom)` → iPhone 沉 13rpx、Android 48dp 手势条沉 41rpx，正好压在输入框上。**根因是锚在 `.chat-wrap`（height:100%）而不是视口** | mp：`position: fixed` + `bottom: 46%` |
+| 5 | 提问不弹 | 用户确认：**整段 5 分 18 秒什么都没有**，不是闪一下被撤卡。帧确实出去了（`question_request_no_peer` 不存在=主机认为手机在线）。放大器之一是会话过滤把别的会话的提问**无声吞掉** | mp：不静默，给提示。**主机侧重放（治本）还没做** |
+
+### 三条最值得记住的
+
+1. **一个 commit 修了 A、弄坏了 B。** 9511904 是去修提问弹窗的，顺手弄坏了模型显示。
+   提交说明里一个字没提。**改签名时必须检查每一个 call site**，而不只是自己那处。
+2. **判据假通过比没有判据更糟。** 问题 3 那条 e2e 是绿的，但它证明不了任何事：
+   `stubClient` 把 `status:'online'` 写死且从不随帧变，于是断链那一帧
+   **替重连那一帧**把断言喂饱了。补了真实路径的判据之后它才红。
+3. **证据通道本身会骗人。** `MAPPED_SESSION_EVENTS` **只驱动 status.json 的记账、
+   不驱动 HostRuntime 的 switch**——`agent/inbox/spliced` 登记在里面，而 switch 里
+   没有 `case 'inbox'`，于是主机侧排队的消息手机完全看不到，而 status.json 报"一切正常"。
+   同理 `eventTypes` 的 `.slice(-24)` 让它与 `unmappedEventTypes` **对不上账**（同一个 Set 喂的）。
+
+### 新增的判据（这一轮的主要产出）
+
+- **穷举自检**：`MAPPED_SESSION_EVENTS` 每一种都灌进真实 `HostRuntime`，断言都有出站面。
+  `INTENTIONAL_DROPS` 登记"按设计只记账不翻译"的（approval/asked、approval/decided）。
+  且断言映射表新增条目必须同时补样本，否则判据会悄悄不再覆盖它。
+- `stubClient.status` 改为跟随状态帧（`feedStatus()`），7 处手写注入全部换掉。
+- 真实日志 fixture 补 `todo/write`（此前**出现 0 次**）。
+- `runtime.test.ts` 里 model 此前**出现 0 次**，现补 3 条。
+- FAB 加了**像素/结构**判据（此前末尾三条一条都没量位置）。
+
+### 还没做的（别当已完成）
+
+- **主机侧重放挂着的提问**：手机退后台/断线期间挂着的提问，回来后永远收不到；
+  300s 超时后还会被 `voidStaleCard` 主动擦掉。治本要改 `peer-joined` 后的补发，风险中偏高。
+- **inbox 的完整接线**：协议加载荷（wire 发版）+ mp 加处理器 + 改回映射表。现在只做了
+  「让证据说真话」。
+- **FAB 是否真的"跑到屏幕正中间"**：`fixed` + 46% 解决的是"沉进输入区"（已实测确认）。
+  字面意义的"屏幕正中间"在静态与模拟器都复现不出来——需要一张真机截图才能定。
+
+
 
 ### 1.1 ~~中继落盘会话表~~ ✅ 2026-10-06 完成并上线（1.0.6）
 
