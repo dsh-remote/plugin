@@ -158,23 +158,30 @@ test('README 的「文档」小节里，每条相对链接都指向真实文件'
   }
 })
 
-test('README 的 Markdown 表格没有残缺行（改表格时最容易漏的一处）', () => {
+test('本轮改动最多的几份文档：Markdown 表格没有残缺行（改表格时最容易漏的一处）', () => {
   // 伞仓 README 的「组成」与「测试」两张表是纯手写的，表格改坏（列数对不上）不会
-  // 报任何错，只会渲染成一团。这里按块比对每一行的竖线数。
-  const lines = README.split('\n')
-  let inFence = false
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line.trimStart().startsWith('```')) inFence = !inFence
-    if (inFence || !line.startsWith('|')) continue
-    const cells = line.split('|').length
-    // 找这一块表格的第一行（分隔行）作为列数基准
-    const sep = lines[i + 1] ?? ''
-    if (!/^\|[\s:|-]+\|?\s*$/.test(sep)) continue
-    const columns = sep.split('|').length
-    assert.equal(cells, columns, `README 第 ${i + 1} 行的表格列数与表头对不上（${cells - 2} 列 vs ${columns - 2} 列）：${line.slice(0, 60)}`)
+  // 报任何错，只会渲染成一团。HANDOFF / HOST-SIDE / SECURITY 同理——它们是这一轮
+  // 改动最多的三份，而伞仓没有 CI，坏掉的表格会一直躺着。
+  for (const doc of ['README.md', 'HANDOFF.md', 'docs/HOST-SIDE.md', 'docs/SECURITY.md']) {
+    const lines = read(doc).split('\n')
+    let inFence = false
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.trimStart().startsWith('```')) inFence = !inFence
+      if (inFence || !line.startsWith('|')) continue
+      const sep = lines[i + 1] ?? ''
+      // 找这一块表格的第一行（分隔行）作为列数基准
+      if (!/^\|[\s:|-]+\|?\s*$/.test(sep)) continue
+      const columns = sep.split('|').length
+      assert.equal(
+        line.split('|').length,
+        columns,
+        `${doc} 第 ${i + 1} 行的表格列数与表头对不上（${line.split('|').length - 2} 列 vs ${columns - 2} 列）：${line.slice(0, 60)}`,
+      )
+    }
   }
 })
+
 test('docs/SECURITY.md 引用的每一份**代码**都真的存在（伞仓没有 CI，引用坏了没人会发现）', () => {
   // 这份文档明说"每条论断后面都跟着引用，请把它当成可核对的引用而不是修辞"。
   // 2026-10-06 核对时 41 个引用里有 13 个指向已删或已改名的文件
