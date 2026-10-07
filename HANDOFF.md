@@ -1,6 +1,6 @@
 | dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.16** | 已发 npm。⚠️ 含**未评审**的握手面改造（`hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` / negotiate…，见 §0.10.16 待办 3） |
 | dsh-remote-control/（单包） | **2.0.15** | 已发 npm（`latest`）。发布物精确钉 `dsh-remote-wire@2.0.14`；**工作树里那笔改钉 2.0.16 还没提交**（待办 1） |
-| dsh-remote-server/ | **2.0.15** | Release 已建；**线上仍是 2.0.14**（部署待用户决定）；不发 npm（包名被第三方占） |
+| dsh-remote-server/ | **2.0.15** | 仓里已到 2.0.15（可靠性加固 + 容器化，见 §0.10.17）；**线上跑的还是 `1.0.0-rc.1`**（2026-10-06 17:18 那次切换之后没再动过）；**没有 tag、没有 GitHub Release**；不发 npm（包名被第三方占） |
 | dsh-remote-mp/ | **2.0.16** | 待上传 |
 
 > ⚠️ **四仓版本号现在不一致**（wire/mp 2.0.16、control/server 2.0.15）。
@@ -81,9 +81,7 @@
    `negotiate.ts`。接 `limits` 是纯收益（三处各写一个 4 那类问题从根上消掉）。
 5. **`docs/HOST-SIDE.md` 与新告警口径未对齐**：`maxFileBytes` 现在会被夹回并告警、
    `statusFile` 相对路径会告警。表里没写这两句。
-6. **`dsh-remote-server` 的容器化与可靠性改造**（164 条判据 + `deploy/docker/`）已提交，
-   但**线上仍是 2.0.14**，部署要用户定。`dsh-remote-control` 的 `deploy/` 与 server 的
-   `deploy/docker/` 现在多了"逐字节镜像"那条判据（伞仓 e2e 334 条）。
+6. **`dsh-remote-server` 的容器化与可靠性改造**已提交并推送（164 条判据 + `deploy/docker/`），但**线上没切、也没发版** —— 完整收尾步骤见 §0.10.17 的待办 1/2。
 7. **`dsh-remote-protocol` 的 `pnpm build` 没有 clean 步骤**（`tsc -p tsconfig.json`，
    不像插件那样 `pnpm clean && …`）。删掉的源文件会留在 `dist/` 里被 `node --test` 跑到——
    本轮发版时真的踩到（WIP 的 `negotiate.test.js` 留着，协议测试红了 1 条）。
@@ -104,6 +102,88 @@
 | `config.ts` 的 `resolvePairStoreFile`/`resolveUploadDir` | 相对路径不限制逃出 `statusFile` 目录（`../../etc/x` 可以） | 配置是用户自己的；HOST-SIDE 的"按所在目录解析"措辞与之不符，**属文档口径** |
 | `shell/status.ts` 的刷新节拍 | 唯一没 `unref` 的定时器（`createOneShotTimers` 早就为此建了 `unrefTimer`） | GUI 宿主本来就长驻；headless 嵌入才受影响 |
 | `pill/routes.ts` 的 `pairImageHandler` catch | 可能二次 `writeHead`（失败发生在 `writeHead(200)` 之后时 `ERR_HTTP_HEADERS_SENT` 逃出） | 依赖宿主是否 `catch` 那个返回的 promise，本轮看不到 `webServer.register` 的调用方 |
+
+## 0.10.17 中继 2.0.15：可靠性加固 + 容器化（2026-10-07 下午）—— 含**没做完的部署**
+
+三个并行子代理逐行读完 server 的 `src/`（约 2.4 千行），产出**逐条复现过**的缺陷；
+本仓判据 132 → **164 项（163 过 / 1 skip）**，新增两份判据文件。四次提交已推 `origin/main`：
+
+| 提交 | 内容 |
+|---|---|
+| `e8e582f` | 两条**未认证可打崩进程**的路径 + 三处日志洪水 + 配对状态机 + 落盘耐久 + 配置与限流 + 停机排空 + `/healthz` 503 + `--version` |
+| `d8a4a2c` | `deploy/docker/`（Dockerfile + compose + 指南） |
+| `54cbcb5` | 容器产物的 13 条判据 |
+| `6960b25` | 文档订正（含三处「文档说了、代码做不到」） |
+
+最重的两条都是**未认证可达**，而后果不止「服务挂一会儿」：早退的连接（停机中 / 超
+`DRC_MAX_CONNS`）**从未挂 `error` 监听器**，对端随后发一帧畸形帧就让 EventEmitter 同步抛
+→ `uncaughtException` → exit 1 → 被拉起 → **内存配对表清零**，全站用户回到电脑前重扫；
+`listen` 成功之后 http server **再无任何 `error` 监听器**（Node 对每次 accept 失败都 emit），
+这与文件头 P0-1 那条纪律是同一条，旧实现只修了 listen 之前的一半。两条都复现、修好、钉住
+（A1 那条另做过变异验证：去掉监听器即红）。
+
+容器化**在本机真起过**：镜像 61 MB、非 root、`--version` 打 2.0.15、未知参数 exit 2、
+`compose up` 后 `/healthz` 的 `stateWrites:1 / stateWriteFailures:0`、`compose stop` exit 0。
+顺带把 §0.1 那条教训在容器里**重新复现**了一遍：把状态目录属主留成 root，旧版本是
+每 60 秒一条 warn、配对表面完全正常；本版启动那一刻就记一条 **error** 并给出成因提示。
+**容器化给这个老坑新增了一个成因**（忘了挂卷 / 属主不对），所以那条改动不是预防性洁癖。
+
+### 待办（本轮的，按优先级）
+
+1. **线上切换成容器。** 线上现在跑的是 **`1.0.0-rc.1`**（不是 2.0.x —— 顶部表格此前写错了，
+   已订正），2026-10-06 17:18 切上去之后没再动过。生产那台机器**拉不到 `registry-1.docker.io`**
+   （`curl https://registry-1.docker.io/v2/` 超时），而 **npm registry 是通的**。两条路：
+   - **离线搬运**（本机已验证过前半段）：
+     `docker pull --platform linux/amd64 <mirror>/library/node:22-alpine` →
+     `docker save | gzip` → scp → 远端 `docker load` → 远端 `docker build`（原生 amd64）。
+     基线镜像已导出到本机 `/tmp/node22-amd64.tar.gz`（116 MB）——`/tmp` 会被清理，重导即可。
+     **别在 arm64 上模拟构建**：实测 `pnpm install` 阶段会撞 libuv 断言
+     （`Assertion failed: errno == EEXIST … uv__io_poll`）——那是模拟层的产物，不是 Dockerfile 的问题。
+   - 或给远端配 daemon 级 `registry-mirrors`（一劳永逸，`FROM` 不用改）。
+
+   切换要点：**token 与状态文件都要原样带过去**。`/etc/dsh-remote-control.env` 里除了
+   `DRC_HOST_TOKEN`，还有一条**不是默认值的** `DRC_PAIR_TTL_MS=180000`，必须逐字进
+   `deploy/docker/.env`；`/var/lib/dsh-remote-control` 要 `chown -R 10001:10001`。
+   顺序：远端 `docker build`（不中断服务）→ `systemctl stop dsh-remote-control` →
+   `docker compose -f deploy/docker/compose.yaml up -d` → 看 `/healthz` 的 `version` 变了、
+   `stateRestored:1`、`conversations:1`。**`clients:1`（用户那台手机）不该掉** ——
+   状态文件带过去了就不需要重扫。回滚：`docker compose down && systemctl start dsh-remote-control`。
+   端口发布必须是 `127.0.0.1:8787:8787`，这样 nginx 那份 `drc.conf` **一行都不用改**。
+
+2. **发版。** server 的 `package.json` 已经是 **2.0.15**（由另一路会话提交，提交说明写明
+   「代码未变」），但**没有 tag、没有 GitHub Release**。`git tag v2.0.15 && git push origin v2.0.15`
+   会触发 `release.yml`（typecheck + format + `pnpm test` + 单文件产物 + SHA256SUMS）。
+   中继仓**不发 npm**（包名被第三方占），所以推 tag 没有 §0.10.16 那张「tag 一推就发」的风险。
+   但**推之前先确认四仓版本号口径**（见待办 3）。
+
+3. **四仓版本号不一致**（wire/mp 2.0.16、control/server 2.0.15）→ `next-version.mjs --check` 报红。
+   与 §0.10.16 待办 1/2 是**同一件事**，别分头收口。
+
+4. **伞仓已同步、闸门已绿**：`96a87e1` 把 `deploy/docker/` 镜像到伞仓 `deploy/`，
+   `e2e/deploy-sync.test.mjs` 从 2 份文件扩到 5 份，并新增「容器形态三条硬约束」那条；
+   `pnpm gates` **八格全 ✅**（README 的 152 / 164 / 490 / 334 都已对齐实测）。
+
+### 审出来、但**判定不做**的（别重新逐条审一遍）
+
+| 位置 | 是什么 | 为什么不做 |
+|---|---|---|
+| `handlePairClaim` 的全局配额 | 未认证连接以约 4 条/s 重连即可抽干共享的 20/s 配额 → 所有真实用户配不上对，而手机上显示的是「配对码无效或已过期」 | 真解需要按来源分账，而中继**看不到真实 IP**（那是设计）。本轮只把日志从每帧一行压到每秒一行，边界仍应由 nginx 的 `limit_conn` 兜。**下轮若要动：给每条连接加一个本地配对配额**（一个 `Budget` 实例），把单连接对全局的消耗压到 1–2/s |
+| `enc` 的错误码 | 匿名者能区分 `unknown_session` 与 `not_member`，等于一个「这个 convId 在不在」的 oracle | convId 是 48 bit，且 D4 仍然挡住路由；危害有限 |
+| `hello.hostId` | wire schema 里**唯一没有长度上界**的自报字段（同一条里 token 512 / clientId 128 / label 128） | 上限该加在**协议层**（`dsh-remote-wire`），那是另一个仓的改动 |
+| `state.clientGone` | 每条客户端连接断开都全表扫 `conversations`（O(N)） | 真实部署 N 不大；要修就是加 `clientId → convIds` 反查索引 |
+| `shutdownForced` | 字段**结构上恒为 0**（加一之后紧接着 `exit(0)`，没人来得及 curl） | 已改成「去看那两行 warn」（§9.1 写清）；改退出码会牵动 systemd/compose 的语义，不值得 |
+
+### 环境坑（本轮新增，最要紧的一条）
+
+**改完立刻 commit。** 13:43–13:52 之间，本仓工作树里**两批未提交的改动被清掉了**
+（`src/*.ts` 的加固 + 新增的两份判据文件，约一个半小时的工作，只剩 `package.json` 一行为 modified）。
+`git reflog` 里没有任何 revert 记录，只有一条 `reset: moving to HEAD` 与一条**外部提交**的
+`fd42263 chore(release): 版本号 2.0.14 → 2.0.15（代码未变）`。这与 §0.2 记的是同一台机器上的
+同一现象，这次留下了直接证据（reflog + 那次提交）。**当时唯一的恢复来源是 `/tmp` 里的两份备份**
+（`/tmp/server.ts.bak`、`/tmp/rel-backup.mjs`），其余文件是靠回忆重写的——所以：改完就 commit，
+别攒着；跨多个文件的改动尤其别留在未提交状态过夜。
+
+---
 
 ### 0.10.15 发版 2.0.14（2026-10-07 中午）
 
