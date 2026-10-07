@@ -110,6 +110,7 @@ test('README 里写的 mp 闸门与 mp 的 check 脚本逐项一致（"三道"�
   const MENTIONS = {
     verify: ['verify-miniprogram', '结构自检'],
     md: ['markdown 渲染', 'markdown'],
+    scroll: ['滚动策略'],
     'theme:check': ['theme:check', '主题'],
     contrast: ['contrast', '对比度'],
   }

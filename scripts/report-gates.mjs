@@ -87,6 +87,13 @@ const GATES = [
     read: tapCount,
   },
   {
+    key: 'mp-scroll',
+    label: '小程序滚动策略（项）',
+    bin: 'npm',
+    args: ['--prefix', 'dsh-remote-mp', 'run', 'scroll'],
+    read: tapCount,
+  },
+  {
     key: 'mp-contrast',
     label: '小程序对比度（组）',
     bin: 'npm',
@@ -179,6 +186,7 @@ const README_CELLS = [
   // 对应 README 口径里的「结构自检」那一档。
   { key: 'mp-verify', expect: 'ok', anchor: '结构自检（' },
   { key: 'mp-md', anchor: 'markdown 渲染（' },
+  { key: 'mp-scroll', anchor: '**滚动策略（' },
   { key: 'mp-contrast', anchor: '、对比度（' },
 ]
 

@@ -1570,7 +1570,7 @@ function bottomFrame() {
 
 test('滚动：贴底时新内容要跟滚（toView 每提交翻一次面）', () => {
   const p = readyAtBottom()
-  assert.equal(p._autoScroll, true, '初始就该是跟随态')
+  assert.equal(p.scroll.following, true, '初始就该是跟随态')
   assert.equal(p.data.toView, 'anchor-a', '夹具自检：起始锚点')
   send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r1', delta: '新内容。', role: 'assistant', done: true })
   p._flushDelta()
@@ -1588,7 +1588,7 @@ test('滚动：往上回看立即停跟随，之后的 delta 不许把人拽回�
   p._flushDelta()
   // 用户在底部附近开始往上拖：位置还在 24px 容差里，但 deltaY 是负的
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1340, scrollHeight: 2000, deltaY: -36 } })
-  assert.equal(p._autoScroll, false, '往上拖就要停：容差内下一帧内容会把他拽回去')
+  assert.equal(p.scroll.following, false, '往上拖就要停：容差内下一帧内容会把他拽回去')
   assert.equal(p.data.atBottom, false, '停了跟随，按钮要浮出来')
   const before = p.data.toView
   send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-r2', delta: '回看期间到达。', role: 'assistant', done: true })
@@ -1600,18 +1600,18 @@ test('滚动：往上回看立即停跟随，之后的 delta 不许把人拽回�
 test('滚动：回到最新之后，落底回弹的负帧不许把跟随关掉（用户报的点）', () => {
   const p = readyAtBottom()
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1340, scrollHeight: 2000, deltaY: -36 } })
-  assert.equal(p._autoScroll, false, '夹具自检：先处于回看态')
+  assert.equal(p.scroll.following, false, '夹具自检：先处于回看态')
   p.onJumpLatest()
-  assert.equal(p._autoScroll, true, '点了回到最新就该接上跟随')
+  assert.equal(p.scroll.following, true, '点了回到最新就该接上跟随')
   // iOS 上 scroll-into-view 落底有回弹：尾帧 deltaY 为负、位置在底部
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1379, scrollHeight: 2000, deltaY: -3 } })
-  assert.equal(p._autoScroll, true, '回弹帧不是拖动：关掉它，后续 delta 就再也不跟了')
+  assert.equal(p.scroll.following, true, '回弹帧不是拖动：关掉它，后续 delta 就再也不跟了')
   assert.equal(p.data.atBottom, true, '位置本来就在底部，按钮不该重新浮出来')
   // 窗口（600ms）过后，真实的往上拖照旧停跟随
   return new Promise((resolve) =>
     setTimeout(() => {
       p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1200, scrollHeight: 2000, deltaY: -60 } })
-      assert.equal(p._autoScroll, false, '窗口过期后负 delta 恢复本义：停跟随')
+      assert.equal(p.scroll.following, false, '窗口过期后负 delta 恢复本义：停跟随')
       resolve()
     }, 650),
   )
@@ -2480,12 +2480,12 @@ test('滚动：贴在底部时不管 deltaY 什么符号都跟着（默认行为
   const p = readyAtBottom()
   // 一条「位置在底部但 deltaY 为负」的帧 —— iOS 落底回弹就是这个样子
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1380, scrollHeight: 2000, deltaY: -30 } })
-  assert.equal(p._autoScroll, true, '还在底部就把跟随关了：这正是「不跟手」的成因')
+  assert.equal(p.scroll.following, true, '还在底部就把跟随关了：这正是「不跟手」的成因')
   assert.equal(p.data.atBottom, true, '按钮不该浮出来')
 
   // 正的 deltaY（同理，不该影响）
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1390, scrollHeight: 2000, deltaY: 12 } })
-  assert.equal(p._autoScroll, true, '贴底时正向滚动也要保持跟随')
+  assert.equal(p.scroll.following, true, '贴底时正向滚动也要保持跟随')
 })
 
 /**
@@ -2498,10 +2498,10 @@ test('滚动：贴在底部时不管 deltaY 什么符号都跟着（默认行为
 test('滚动：自动滚动途中的中间帧不许停跟（否则一次滚动被拆成两半）', () => {
   const p = readyAtBottom()
   p.onJumpLatest()
-  assert.ok(p._programmaticUntil > 0, '夹具自检：点了回到最新就该记下窗口')
+  assert.ok(p.scroll._programmaticUntil > 0, '夹具自检：点了回到最新就该记下窗口')
   // 途中一帧：还没到底、deltaY 为负
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1200, scrollHeight: 2000, deltaY: -40 } })
-  assert.equal(p._autoScroll, true, '自动滚动的中间帧被当成了用户回看：这次滚动到此为止')
+  assert.equal(p.scroll.following, true, '自动滚动的中间帧被当成了用户回看：这次滚动到此为止')
 })
 
 /**
@@ -2512,7 +2512,7 @@ test('滚动：自动滚动途中的中间帧不许停跟（否则一次滚动�
 test('滚动：窗口之外的真实回看照旧停跟（不然就变成永远不跟了）', () => {
   const p = readyAtBottom()
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1000, scrollHeight: 2000, deltaY: -50 } })
-  assert.equal(p._autoScroll, false, '没在底部、也不是自动滚动的回弹帧：这就是用户在回看')
+  assert.equal(p.scroll.following, false, '没在底部、也不是自动滚动的回弹帧：这就是用户在回看')
 })
 
 test('断链重连后要重新读历史：**进页面时已在线**（onShow 读过）的那一条路径', async () => {
@@ -2594,7 +2594,7 @@ test('FAB：有附件行时整个不渲染（按钮按输入区定位，会压�
 test('FAB：点完「回到最新」，向下滚的中间帧不许把它重新挂上（deltaY > 0）', () => {
   const p = readyAtBottom()
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 1000, scrollHeight: 3000, deltaY: -300 } })
-  assert.equal(p._autoScroll, false, '夹具自检：用户往上滑之后不该再跟')
+  assert.equal(p.scroll.following, false, '夹具自检：用户往上滑之后不该再跟')
 
   p.onJumpLatest()
   assert.equal(p.data.atBottom, true, '点完立刻判定为贴底')
@@ -2603,7 +2603,7 @@ test('FAB：点完「回到最新」，向下滚的中间帧不许把它重新�
   // 原来的豁免只挡负 deltaY，于是 atBottom 被打回 false、按钮重新挂上。
   for (const scrollTop of [1100, 1250, 1500, 1900, 2400, 2800]) {
     p.onScroll({ detail: { scrollLeft: 0, scrollTop, scrollHeight: 3000, deltaY: 25 } })
-    assert.equal(p._autoScroll, true, `scrollTop=${scrollTop} 这一帧是"回到最新"自己的滚动，按钮不该重新出现`)
+    assert.equal(p.scroll.following, true, `scrollTop=${scrollTop} 这一帧是"回到最新"自己的滚动，按钮不该重新出现`)
     assert.equal(p.data.atBottom, true, `scrollTop=${scrollTop} 不该被判成"不在底部"`)
   }
 })
@@ -2614,7 +2614,7 @@ test('FAB：程序滚动窗口内用户真的往回拖，仍然要停跟（位�
   p.onJumpLatest()
   // 窗口内往回拖：scrollTop 明显**低于**起点。这是用户在回看，必须照跟停掉。
   p.onScroll({ detail: { scrollLeft: 0, scrollTop: 300, scrollHeight: 3000, deltaY: 30 } })
-  assert.equal(p._autoScroll, false, '窗口内往回拖是真回看，不能被位置豁免吃掉')
+  assert.equal(p.scroll.following, false, '窗口内往回拖是真回看，不能被位置豁免吃掉')
 })
 
 test('待办：形状不对的帧不许锁死历史回放（_todoLive 是单向闩锁）', async () => {
