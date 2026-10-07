@@ -221,6 +221,7 @@ cat ~/.dsh/dsh-remote-control/status.json
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — **产品定义**：三条承诺与由它们推出的「30 秒原则」判据，以及现在还差什么
 - [`docs/HOST-CAPABILITIES.md`](docs/HOST-CAPABILITIES.md) — 宿主能力面（30 服务 / 140 方法）的取证来源与 P0/P1 结论
 - [`docs/BOOTSTRAP-ASSESSMENT.md`](docs/BOOTSTRAP-ASSESSMENT.md) — 2026-10-04 对"免扫码重连 + appid 自适应配对"的评估（结论已落地，是**决策记录**不是待办）
+- [`docs/EXPANSION-PLAN.md`](docs/EXPANSION-PLAN.md) — 2026-10-07 的**扩展示划**：多 profile（web/tui）、三平台（win/linux/mac）、自建中继的取证与计划。含终端 ASCII 二维码的实测数据（行高 1.0 可解、TUI 的投递面只有一行）。**是计划与决策记录，尚未实现**
 - 中继侧部署手册在开源仓：[`dsh-remote-server/docs/SELF-HOSTING.md`](dsh-remote-server/docs/SELF-HOSTING.md)（伞仓那份旧命名副本 2026-10-03 已删）
 - [`deploy/README.md`](deploy/README.md) — 生产部署
 
