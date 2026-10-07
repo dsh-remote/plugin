@@ -1,7 +1,11 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.14** | 已发 npm；`latest` 已从 rc1 切过来。含本地那笔 `cmd.new_session` 的可选 `workspace` |
-| dsh-remote-control/（单包） | **2.0.14** | 已发 npm；`latest` 同上。**已装进 profile，重启 Harness 生效**；依赖精确钉 `dsh-remote-wire@2.0.14` |
-| dsh-remote-server/ | **2.0.14** | Release 已建（单文件产物）；**线上仍是旧版本**（部署待用户决定）；不发 npm（包名被第三方占） |
-| dsh-remote-mp/ | **2.0.14** | 待上传 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.16** | 已发 npm。⚠️ 含**未评审**的握手面改造（`hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` / negotiate…，见 §0.10.16 待办 3） |
+| dsh-remote-control/（单包） | **2.0.15** | 已发 npm（`latest`）。发布物精确钉 `dsh-remote-wire@2.0.14`；**工作树里那笔改钉 2.0.16 还没提交**（待办 1） |
+| dsh-remote-server/ | **2.0.15** | Release 已建；**线上仍是 2.0.14**（部署待用户决定）；不发 npm（包名被第三方占） |
+| dsh-remote-mp/ | **2.0.16** | 待上传 |
+
+> ⚠️ **四仓版本号现在不一致**（wire/mp 2.0.16、control/server 2.0.15）。
+> `node scripts/next-version.mjs --check` 会因此报红 —— 那是**真的**，不是闸门坏了。
+> 收口方式见 §0.10.16 待办 1。
 
 > ⚠️ **为什么不是 1.0.1**：`dsh-remote-wire@1.0.1` **2025 年就发布过**（私有期编号），
 > npm 版本不可重用。`1.0.2`～`1.0.7`、`1.0.8`… 一直到 `1.9.0` 也基本都被占过。
@@ -10,6 +14,96 @@
 > `^2.0.0` 的消费方按 semver 比大小，**拿不到** 2.0.8。
 > 所以判据是「**大于**所有已发布版本，且两个包上都空着」→ **2.0.14**。
 > 这条判断已经固化成闸门：`node scripts/next-version.mjs --check`（见 §0.10.15）。
+
+## 0.10.16 宿主插件 2.0.15 深审一轮（2026-10-07 下午）—— 含**待办清单**
+
+`dsh-remote-control@2.0.15` 已发 npm、四仓 tag 与 Release 全建。这一轮是"读 handoff 与代码
+→ 并行深审（四个分片逐行读完约 1.2 万行）→ 修 → 发版"。
+
+**八处修复全部先红后绿，且逐个做过变异验证**；其中**两处判据第一版恒真**，被变异当场抓住后重写：
+
+- 「关掉快照顺手关掉剪枝」那条第一版钉的是"装了几只定时器"——`apply` 里那一堆一次性复查
+  与 runtime 的刷新节拍足以让断言恒真，**把修复整段删掉它照样绿**。改成钉可观察的后果
+  （7 天没动过的恢复通道真的被剪掉）才红。与 §0.3 第 2 条、§0.10.9 是同一个洞。
+- 配对码日志那条第一版只断言两个手写的码（与 §0.10.9 第 1 条同形）。
+
+八处修复（详情见插件仓 `CHANGELOG.md` 的 2.0.15 段）：
+
+| # | 缺陷 | 影响 |
+|---|---|---|
+| 1 | 浏览器面倒计时是 `expiresInMs -= 1000`（数节拍，不读墙钟） | 用户点开发码面板必然要切走去扫码，那正是计时器最不可靠的时候 → 回来显示"还剩 2 分"而码早死了。**这正是 2026-10-05 现场报的那件事，倒计时本来就是为了治它** |
+| 2 | `/unpair` 的回答被整个丢掉 | 403 里**专门**带 `guard` 且注释写着"唯一现场"，而 403 不让 fetch 抛错 → 一句都留不下 |
+| 3 | `index.ts` 把 **6 位配对码原样** `log({ token })` | §0.10.7 #7 漏掉的第四个调用点；路径**可达**（`slots.prune()` 之后中继才回 pair-ready） |
+| 4 | `voidConversation` 先 `voided.add()` 再 `raw()` | 帧没发出去通道却已标"已声明"，此后**所有重试被挡**，包括 `onEncrypted` 那条设计上依赖的出路 |
+| 5 | 出站 `enc` 帧绕过协议层唯一的体积闸 | 超限 → 中继 `error{bad_frame}` → 插件只记日志 → 手机 15 秒超时"读不到" |
+| 6 | 剪枝 / 配对码换代 / PSK 批量落盘**寄生在 `status.start()` 回调里** | `statusFile: ''` 是有文档的开关 → 同时静默关掉三件与排错无关的事，密钥簿重新变回无界 |
+| 7 | `statusFile` 只过 `!x`；`maxFileBytes` 超预算不夹不告警 | 相对路径按宿主 CWD（`/`）解析 → 唯一排错入口静默消失；只带一个文件的用户被告知"少带几个" |
+| 8 | 附件写到一半失败留孤儿文件 | 重试一次文件名就 `first-2.txt`、`first-3.txt`……一直涨 |
+
+另接了两处线（同一轮）：`cmd.new_session.workspace`（§0.10.4 第 3 步，阻塞条件早已解除，
+主机一直没读它 → 手机指定分组、会话建在别处、回执照样 `ok:true`）与
+**`rate_limited` 恒真死分支**换成真的退避（`pair-fail.reason` 的枚举里**没有**这个取值，
+实测 `parseRelayFrameText` 对 `{"reason":"rate_limited"}` 返回 `null`）。
+
+判据 471 → **490**；`pnpm gates` 八格全 ✅（顺带把 README 的 471 改成 490）。
+
+### 本轮的真话：三个不是我能定的事
+
+**A. 我起的四个并行审查代理有写权限，且在报告"只读"之后仍然写了。** 它们改了
+`runtime.ts`/`carrier-services.ts`/`ports`/`mock-kernel`（那一笔我逐行读过，结论比我自己的
+初稿更对——手机指定的 workspace 排在运维配置钉**之上**——保留了），提交了 2 次，并把
+`protocol` 与 `server` 的改造**直接从工作树提交掉了**。这一轮被它打断多次（构建红过三次、
+`index.ts` 被写到一半引用不存在的标识符）。**下次用子代理做审查时，必须显式禁止写盘，
+或者给它们独立工作树。**
+
+**B. `dsh-remote-protocol` 的 `release.yml` 在 push tag 时自动 `npm publish`。**
+我推 tag 时本意是"只立版本号"，结果 `dsh-remote-wire@2.0.15` 当场发了出去——
+我提交说明里写的"本次不发 npm"是错的，随后补了订正提交。
+**本仓的"先评审、后发版"不是默认成立的：tag 一推就发，评审必须在推 tag 之前做完。**
+
+**C. 另一路会话（3 小时窗口里）把 protocol/server/mp 的改造做完并发了。**
+现在 `dsh-remote-wire@2.0.16` = 那份**我刻意扣下的**协议改造（九个模块，含
+`hello.capabilities`）。已核对发布物确认它确实在里面。见待办 3。
+
+### 待办（按优先级）
+
+1. **插件改钉 2.0.16 那笔未提交**（`packages/plugin/package.json` + `pnpm-lock.yaml`，
+   工作树里是 2.0.16，而 npm 上的 2.0.15 钉的是 2.0.14）。收口方式：
+   跑 `pnpm test` → 提交 → 决定要不要发 control 2.0.16（发的话四仓版本号重新一致，
+   同时也是把 wire 2.0.16 真正接进插件的唯一动作）。
+2. **四仓版本号不一致**（wire/mp 2.0.16、control/server 2.0.15）→ `next-version.mjs --check` 报红。
+   收口见待办 1。
+3. **协议 2.0.16 的握手面改造没有评审，也没有做三端兼容核对。**
+   `hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` 是**握手**改动：中继（线上 2.0.14）与
+   小程序是否都容得下，**没人验过**。至少要跑一遍本地全链路 + 真机配对。
+4. **协议层新能力主机侧一个都没用**：`limits.ts`（预算常量单一来源——插件现在硬编码
+   `MAX_ATTACH_TOTAL_BYTES` 等）、`registry.ts`、`classify.ts`、`errors.ts`（可重试判定）、
+   `negotiate.ts`。接 `limits` 是纯收益（三处各写一个 4 那类问题从根上消掉）。
+5. **`docs/HOST-SIDE.md` 与新告警口径未对齐**：`maxFileBytes` 现在会被夹回并告警、
+   `statusFile` 相对路径会告警。表里没写这两句。
+6. **`dsh-remote-server` 的容器化与可靠性改造**（164 条判据 + `deploy/docker/`）已提交，
+   但**线上仍是 2.0.14**，部署要用户定。`dsh-remote-control` 的 `deploy/` 与 server 的
+   `deploy/docker/` 现在多了"逐字节镜像"那条判据（伞仓 e2e 334 条）。
+7. **`dsh-remote-protocol` 的 `pnpm build` 没有 clean 步骤**（`tsc -p tsconfig.json`，
+   不像插件那样 `pnpm clean && …`）。删掉的源文件会留在 `dist/` 里被 `node --test` 跑到——
+   本轮发版时真的踩到（WIP 的 `negotiate.test.js` 留着，协议测试红了 1 条）。
+
+### 已经查过、**判定不做**的（别重新逐条审一遍）
+
+下面这些是同一轮审出来、逐条判定为"latent / 威胁模型内 / 收益不抵改动"的，**留着当结论**：
+
+| 位置 | 是什么 | 为什么不做 |
+|---|---|---|
+| mp `core/codec.js` 的 `parsePairingQr` | 只认 `dshr:` 前缀，不校验 path 必须是 `/p`（wire 的 `parsePairingUri` 会校验） | 只有第三方手工造的码才撞得上；`e2e/protocol.test.mjs` 的交叉核对只喂 `buildPairingUri` 的输出，**没有负向量**——要补先补向量 |
+| mp `client.js` 15s 与主机 `carrier-services.ts` 的 `HISTORY_TIMEOUT_DEFAULT` | 两处各写一个 15000，没有共同来源 | 两端同时到点才分叉，窗口是毫秒级 |
+| `core/keys.ts` 的 `Conversation.clientIds` | 无界 Set；中继丢 `peer-left` 时会永久 `hasClient=true` | 需要"丢通知 + 手机换 clientId"同时发生。真要修就是给它加上界 + 时间戳 |
+| `core/window.ts` 的 `partCursor` | 无界 Map（会话中断/归档时那条 `done` 永不到） | 每条约 50 字节、进程级；且**没有任何 accessor** 能观测它，先加观测再谈 |
+| `pill/routes.ts` 的 `/pairing.png` | 只要 loopback Host，不要 `x-drc-pair`（比 `/pairing/new` 弱）；无缓存、无限速 | 跨站读不到字节，最多是个"屏上有没有码"的 oracle。**但这条不对称没有任何地方论证过**——下次动它要顺手写清 |
+| `uploads.ts` 的 `appendFileNote` | 把手机来的 `mediaType`（64 字符、无字符集限制）插进 prompt | 只有自己的手机能配对；真要修就是过一遍 `safeSegment` |
+| `uploads.ts` 的 `decodeBase64` | 宽松（截断的 base64 解成更短的"合法"文件并报成功） | 中继帧层不会转发半条帧 |
+| `config.ts` 的 `resolvePairStoreFile`/`resolveUploadDir` | 相对路径不限制逃出 `statusFile` 目录（`../../etc/x` 可以） | 配置是用户自己的；HOST-SIDE 的"按所在目录解析"措辞与之不符，**属文档口径** |
+| `shell/status.ts` 的刷新节拍 | 唯一没 `unref` 的定时器（`createOneShotTimers` 早就为此建了 `unrefTimer`） | GUI 宿主本来就长驻；headless 嵌入才受影响 |
+| `pill/routes.ts` 的 `pairImageHandler` catch | 可能二次 `writeHead`（失败发生在 `writeHead(200)` 之后时 `ERR_HTTP_HEADERS_SENT` 逃出） | 依赖宿主是否 `catch` 那个返回的 promise，本轮看不到 `webServer.register` 的调用方 |
 
 ### 0.10.15 发版 2.0.14（2026-10-07 中午）
 
@@ -131,6 +225,15 @@ interface ChooseFile {
    落在别处，比不提供这个入口更糟。
 5. `mock-kernel.newSession` 跟着记 workspace，e2e 断言"手机指定的分组真的生效了"。
 
+> **2026-10-07 进度：第 1/2/3/5 步已做，第 4 步（mp）没做。**
+> 第 1 步的口径已经变了两次：wire 现在到 `2.0.16`；插件发的是 `2.0.15`、发布物钉的是
+> `2.0.14`，而工作树里有一笔**未提交**的改钉 `2.0.16`（见 §0.10.16 待办 1）。
+> 第 3 步的取值顺序与这里写的不同：**手机指定的 workspace 排在运维配置那句钉之上**
+> （那句钉是"手机没说话时的默认"，而用户这一次是明确说了），仍然过 `badWorkspace()`
+> 且形状不合法就**明确失败而不是静默改道**。
+> 第 4 步的**前置已经全部满足**（主机 2.0.15 起真的读这个字段了），
+> 所以"长按选分组"现在可以做了——判据是"手机指定的分组真的生效了"。
+
 ### 0.10.5 其余六条（都是"功能看着正常、其实那一步没生效"）
 
 | # | 缺陷 | 影响 | 判据 |
@@ -211,6 +314,17 @@ interface ChooseFile {
 本轮**没有审这两段**，只跑了全量确认没有回归。已随插件仓的提交一起落地，
 提交说明里也写明了它们不是本轮写的——**下一个读那段历史的人第一件事应该是把图片
 附件这条链单独审一遍**。
+
+> ✅ **2026-10-07 已审（§0.10.16 那一轮）。** 结论：这条链是**对的**，可以不再重审。
+> 具体核过：`runtime.ts` 只把手机形状 `{data, mimeType}` 往上递（分层红线守住了）；
+> `carrier-services.sendPrompt` 用 `prepareImageParts` 整成内核入口形状
+> （字段名 `mediaType`，不是 `mimeType`）、**整批先验后返**（任一张不合法就整条拒绝并说
+> 清是第几张）；`submitWithImages` 优先走 `sessionController.commands.prompt`，
+> 退回 `attachments.admitPromptContent`，两个面都没有时**明确拒绝而不退回裸块硬发**；
+> `admitted` 里每张 image 都断言带 `attachment` 才放行。
+> 另：`POISONED_IMAGE_HISTORY` 那条兜底（修复前留下的坏块会把**之后每一轮**都打死，
+> 连纯文本一起）在 `turnErrorText` 里，仍然是当前最有用的一条错误翻译。
+> **唯一没验的是真机**：这条链需要一次真实的"手机选图 → 发送 → 模型看见图"。
 
 ### 0.10.11 第四、五轮（继续审，又发现 6 条）
 
