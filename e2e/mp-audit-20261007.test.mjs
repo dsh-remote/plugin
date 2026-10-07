@@ -663,3 +663,126 @@ test('【A2】宿主有 API 时入口必须真的调它（别把守卫写成永�
   page._pickFiles()
   assert.equal(called, 1, '宿主有 chooseMessageFile 时必须真的调它')
 })
+
+/** 载入 sessions 页（真实页面代码）并造一个可操作的实例。 */
+function loadSessionsPage() {
+  globalThis.Page = (cfg) => {
+    globalThis.__capturedSessions = cfg
+  }
+  requireFresh(path.join(MP, 'pages/sessions/sessions.js'))
+  const p = globalThis.__capturedSessions
+  p.setData = function (patch) {
+    for (const k in patch) this.data[k] = patch[k]
+  }
+  p.client = {
+    isPaired: () => false,
+    status: 'idle',
+    on: () => () => {},
+    sessions: [],
+    listSessions: () => {},
+    connect: () => {},
+  }
+  p.data = Object.assign({}, globalThis.__capturedSessions.data, { sessions: [], pending: [], status: 'idle' })
+  pageInstances.push({
+    onUnload() {
+      p._stopLinkTick && p._stopLinkTick()
+    },
+  })
+  return p
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 十、cmd.new_session 的 workspace：让新会话落进指定的分组
+//   （HANDOFF §0.10.4 第 4 步 / 遗留清单待办 D 的最后一项）
+// ══════════════════════════════════════════════════════════════════════
+
+test('【W1】指定 workspace 时载荷带上它；不指定时**一个键都不多**（老主机那条路）', () => {
+  // 协议层 `cmd.new_session.workspace` 是**可选**字段，而 zod 默认 strip 未知键 ——
+  // 所以"带上它"对老主机是无害的。但"带上它"仍然是**变更**：判据要钉住
+  // 「不给就不给」，否则将来有人为了"省事"改成总是发一个空串，
+  // 而空串会被主机的 `badWorkspace()` 判成形状不合法 → **明确失败**而不是静默改道。
+  const { c, frames } = justPaired()
+  const seen = []
+  c.on((e) => {
+    if (e.kind === 'payload') return
+  })
+  // 直接截获 sendCmd 的入参（比解密更直接，验的是"发出去的那条命令"）
+  const orig = c.sendCmd.bind(c)
+  c.sendCmd = (cmd) => {
+    seen.push(cmd)
+    return orig(cmd)
+  }
+
+  c.newSession('/Users/x/dsh-remote-control')
+  c.newSession()
+
+  assert.equal(seen[0]?.workspace, '/Users/x/dsh-remote-control', '指定了工作区却没有带上 —— 手机指定的分组被主机忽略了，' +
+    '会话建在主机自己推断的目录里，而回执照样 ok:true、无错无日志、界面上完全看不出')
+  assert.equal(
+    'workspace' in (seen[1] || {}),
+    false,
+    `没指定工作区时载荷里仍然有 workspace=${JSON.stringify(seen[1]?.workspace)} —— ` +
+      '这一格必须与接线之前逐字相同（老主机那条路不能被这次改动影响）',
+  )
+})
+
+test('【W2】默认取"最后点开的那条会话的工作区"（点开列表不等于同意那个项目）', () => {
+  // 默认值的来历必须是**用户点开哪一条**，而不是"最近更新的那条" ——
+  // 点开常常只是看一眼就走，而"我接下来要在哪个项目里干活"才是新建时要表达的事。
+  const page = loadSessionsPage()
+  page.data.sessions = [
+    { id: 'a', title: 'A', workspace: '/w/alpha' },
+    { id: 'b', title: 'B', workspace: '/w/beta' },
+  ]
+  page.onOpen({ currentTarget: { dataset: { id: 'b', title: 'B', workspace: '/w/beta' } } })
+
+  assert.equal(page._currentWorkspace(), '/w/beta', '点开 B 之后默认应当是 B 的工作区（不是列表里第一条 A）')
+})
+
+test('【W3】没点开过任何一条时退到"列表里第一个非空分组"，且全都没有时不带字段', () => {
+  const page = loadSessionsPage()
+  page.data.sessions = [{ id: 'a', title: 'A', workspace: '' }, { id: 'b', title: 'B', workspace: '/w/beta' }]
+  assert.equal(page._currentWorkspace(), '/w/beta', '空目录那一行不该被选中（列表已把空目录排最后）')
+
+  const empty = loadSessionsPage()
+  empty.data.sessions = [{ id: 'a', title: 'A', workspace: '' }]
+  assert.equal(empty._currentWorkspace(), '', '全都没有时返回空串 —— 调用点据此不带字段，由主机推断')
+})
+
+test('【W4】长按选分组：只列这一页见过的非空工作区，且没有就不弹空列表', () => {
+  const page = loadSessionsPage()
+  const sheets = []
+  globalThis.wx.showActionSheet = (o) => {
+    sheets.push(o.itemList)
+    o.success && o.success({ tapIndex: 0 })
+  }
+  const asked = []
+  page.client.newSession = (ws) => {
+    asked.push(ws)
+    return Promise.resolve({ ok: true, sessionId: 'ses_made' })
+  }
+  page.client.isPaired = () => true
+  page.data.status = 'online'
+
+  page.data.sessions = [
+    { id: 'a', title: 'A', workspace: '/w/alpha' },
+    { id: 'b', title: 'B', workspace: '/w/beta' },
+    { id: 'c', title: 'C', workspace: '/w/alpha' },
+  ]
+  page.onNewSessionLongPress()
+
+  assert.deepEqual(sheets[0], ['alpha', 'beta'], '同一工作区只出现一次，且显示目录最后一段')
+  assert.equal(asked[0], '/w/alpha', '选中第 0 项就应当把它那一项的**完整路径**传下去（协议传的是绝对路径）')
+
+  // 一个都没见过 → 不弹空列表
+  const none = loadSessionsPage()
+  const sheets2 = []
+  globalThis.wx.showActionSheet = (o) => sheets2.push(o.itemList)
+  const toasts = []
+  globalThis.wx.showToast = (o) => toasts.push(o.title)
+  none.client.isPaired = () => true
+  none.data.sessions = []
+  none.onNewSessionLongPress()
+  assert.equal(sheets2.length, 0, '一个工作区都没有时弹了一个空列表 —— 那比不弹更像坏了')
+  assert.match(toasts.join('|'), /工作区/, `必须说清为什么没有可选项，实际：${JSON.stringify(toasts)}`)
+})
