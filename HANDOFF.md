@@ -93,15 +93,28 @@ PSK 从不上网；双方各自从 `(psk, 方向, convId)` 派生 `c2h`/`h2c` �
 
 ## 3. 待办（真的还没做的）
 
-### 3.1 把 2.0.16 装进 profile 并重启 Harness —— **最优先，也是真机复验的前置**
+### 3.1 把 2.0.16 装进 profile 并重启 Harness —— **文件已装好，只差重启**
+
+**已装（2026-10-07 22:24）**：`pkg=2.0.16`，并逐个核过 2.0.16 独有的标记——
+`handleInvalidCommand`（本轮 §5-9 的修）、`IdempotencyLedger`、`encToClient`、
+`cmd.workspace` 都在 `index.js` 里；`visibilitychange`（2.0.15 那条墙钟倒计时修）在
+**浏览器面** `client.cjs` 里。装之前 profile 里是 **2.0.14**，这些标记一个都没有。
+
+⚠️ **装的时候必须给绝对路径的 `DSH_PROFILE`**（见 §6 的环境坑：这个 shell 里它是个裸的
+`desktop`，不给的话脚本直接 `profile not found: desktop` 退出）。
 
 ```sh
-./dsh-remote-control/scripts/install-to-profile.sh
+env -u NODE_OPTIONS DSH_PROFILE="$HOME/.dsh/profiles/desktop" \
+  ./dsh-remote-control/scripts/install-to-profile.sh      # 可重复跑（幂等）
+
 osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 8; open -a "DeepSeek Harness"
 ```
 
-改代码/换产物后**必须重启**：HMR 只热更 `cordis.patch.yml` 的配置，不会重新 `import` dist；
-浏览器面同理，要重新加载页面才会重拉 `client.cjs`。装完看 `status.json` 的
+**重启必须由人来做**：插件跑在 DSH 进程里，从进程内部触发重启等于当场掐掉正在跑的会话
+（历史在盘上不丢，但那一轮会中断）。HMR 只热更 `cordis.patch.yml` 的配置，**不会重新
+`import` dist**；浏览器面同理，要重新加载页面才会重拉 `client.cjs`。
+
+重启后核 `~/.dsh/dsh-remote-control/status.json` 四个字段：
 `carrier=services` / `relay=online` / `pill.routes=registered` / `problems=[]`。
 
 ### 3.2 发版收口（外部动作，要人定）
@@ -271,6 +284,12 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 
 - **所有 pnpm/node 命令带 `env -u NODE_OPTIONS`**：Qoder CLI 会往子 shell 注入一个 `--require` 的 CJS 代理，
   Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂。
+- **`install-to-profile.sh` 要给绝对路径的 `DSH_PROFILE`**：DSH 这个 shell 里
+  `DSH_PROFILE` 被导成**裸的 `desktop`**（不是路径），而脚本第一行就是
+  `PROFILE="${DSH_PROFILE:-$HOME/.dsh/profiles/desktop}"` —— 变量一旦有值，那个默认路径
+  整个被绕开，于是报 `install-to-profile: profile not found: desktop` 就退出。
+  两种写法都行：显式 `DSH_PROFILE="$HOME/.dsh/profiles/desktop"`，或 `env -u DSH_PROFILE`。
+  **症状是"脚本报找不到 profile"，看着像路径写错了，其实环境里已经有一个同名变量。**
 - **改完立刻 commit。** 这台机器上未提交的工作树被清掉过两次（一次已订正为人工 `git stash` + `checkout`，
   不是神秘外部进程）。`git reflog` 里留下的直接证据：`reset: moving to HEAD` 与一笔外部提交。
   **同一个工作树上不要同时有两个人**：一边发版清场、一边在同一目录改造，两边各自都合理，合起来互相踩。
