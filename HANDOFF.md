@@ -1,7 +1,15 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | **1.0.0-rc.1** | 已发 npm（`latest` 也指向它）；tag 与 GitHub Release 已建。**⚠ 本地已改（`cmd.new_session` 加可选 `workspace`），未发版**——见 §0.10 |
-| dsh-remote-control/（单包） | **1.0.0-rc.1** | 已发 npm（`latest`）；Release 已建；**已装进 profile，重启 Harness 生效**。本地已改（新建会话落点），未发版 |
-| dsh-remote-server/ | **1.0.0-rc.1** | Release 已建（单文件产物）；**线上仍跑 1.0.6**（代码只差版本号，部署待用户决定）；不发 npm（包名被第三方占） |
-| dsh-remote-mp/ | **1.0.0-rc.1** | 已上传为开发版本，待「选为体验版」 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.14** | 已发 npm；`latest` 已从 rc1 切过来。含本地那笔 `cmd.new_session` 的可选 `workspace` |
+| dsh-remote-control/（单包） | **2.0.14** | 已发 npm；`latest` 同上。**已装进 profile，重启 Harness 生效**；依赖精确钉 `dsh-remote-wire@2.0.14` |
+| dsh-remote-server/ | **2.0.14** | Release 已建（单文件产物）；**线上仍是旧版本**（部署待用户决定）；不发 npm（包名被第三方占） |
+| dsh-remote-mp/ | **2.0.14** | 待上传 |
+
+> ⚠️ **为什么不是 1.0.1**：`dsh-remote-wire@1.0.1` **2025 年就发布过**（私有期编号），
+> npm 版本不可重用。`1.0.2`～`1.0.7`、`1.0.8`… 一直到 `1.9.0` 也基本都被占过。
+> 而 **2.0.8 在 control 上是空的**（当年 2.0.7 之后直接跳到 2.0.9）却**不能用**——
+> 2.0.13 已经发出去了，发 2.0.8 等于版本号倒退：`latest` 会退回去，
+> `^2.0.0` 的消费方按 semver 比大小，**拿不到** 2.0.8。
+> 所以判据是「**大于**所有已发布版本，且两个包上都空着」→ **2.0.14**。
+> 这条判断已经固化成闸门：`node scripts/next-version.mjs --check`（见 §0.10.15）。
 
 ## 0.10 2026-10-06 深夜：串行深审一轮（发现问题 → 修 → 补判据）
 

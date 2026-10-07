@@ -60,7 +60,10 @@
 - 跑的是 `dsh-remote-server` 仓 **Release 已发布的产物**（线上 v1.0.6，rc1 已发布待切）：
   先 `shasum -c SHA256SUMS` 校验再从 Release 下载，scp 上线后 `/healthz` 报该版本号，
   重启后 5 秒内 `hosts` 回 1（线上宿主插件自动重连）——"能换"是这么证的。
-  **私有那套编号全部作废**，从 `1.0.0-rc.1` 起四仓统一用同一个版本号。
+  **私有那套编号全部作废**，四仓统一用同一个版本号（当前 `2.0.14`）。
+  ⚠️ 注意 npm 上 `1.0.1`～`1.9.0`、`2.0.0`～`2.0.13` **都已被私有期占用**，不可重用；
+  发版前跑 `node scripts/next-version.mjs --check`（它会算出下一个**大于**所有已发布、
+  且两个包上都空着的号）。
 - 1.0.6 起会话表落盘（`DRC_STATE_FILE`，中继重启不再丢配对）：`/healthz` 多五个字段
   `persistence` / `stateRestored` / `stateSavedAtSec` / `stateWrites` / `stateWriteFailures`
  （换完机器先看 `stateWriteFailures`，不是 0 就是没在写）。
