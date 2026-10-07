@@ -28,7 +28,15 @@ const UMBRELLA = join(ROOT, 'deploy')
 const SERVER = join(ROOT, 'dsh-remote-server', 'deploy')
 
 /** 逐字节比对的清单。nginx 与 systemd 两份都必须对齐。 */
-const FILES = ['nginx/drc.conf', 'systemd/dsh-remote-control.service']
+const FILES = [
+  'nginx/drc.conf',
+  'systemd/dsh-remote-control.service',
+  // 容器化那一份（2026-10-07 生产切到 compose）：三份都要逐字节一致，
+  // 因为「照旧的那份部署」现在有三种形态了，少同步一种就有人照着旧的上线。
+  'docker/Dockerfile',
+  'docker/compose.yaml',
+  'docker/README.md',
+]
 
 test('四棵平行仓在场（这条判据的前提）', () => {
   // 不在就**跳过**而不是假装通过：伞仓单独 clone 时这条判据无意义，红掉只会让人以为
@@ -123,5 +131,31 @@ test('deploy/ 下没有多出来的文件（两份目录只该各维护那几个
       [],
       `${base} 下多出 ${extra.join(', ')}：deploy-sync 这条判据的清单要一起更新，否则它就漏检了`,
     )
+  }
+})
+
+test('容器形态的三条硬约束（bind / 回环发布 / 状态目录属主）', () => {
+  if (!existsSync(SERVER)) return
+  for (const base of [UMBRELLA, SERVER]) {
+    const compose = readFileSync(join(base, 'docker/compose.yaml'), 'utf8')
+    const dockerfile = readFileSync(join(base, 'docker/Dockerfile'), 'utf8')
+
+    // ① 容器内必须绑 0.0.0.0：代码默认只绑 127.0.0.1，那样 -p 发布了也没人监听。
+    assert.match(
+      compose + dockerfile,
+      /DRC_BIND[:=]\s*["']?0\.0\.0\.0/,
+      base + '：DRC_BIND 必须是 0.0.0.0，否则容器起来但外面连不上（代码默认绑回环）',
+    )
+    // ② 端口只能发布到回环：绑 0.0.0.0 会把 8787 直接暴露公网，绕过 nginx 的按 IP 限流，
+    //    而那份 drc.conf 是按 127.0.0.1:8787 写的。
+    assert.match(compose, /"127\.0\.0\.1:\$\{DRC_PORT/, base + '：compose 必须只把端口发布到宿主机回环')
+    assert.doesNotMatch(compose, /"0\.0\.0\.0:/, base + '：不许把 8787 发布到 0.0.0.0')
+    // ③ 状态目录与卷是一对：漏了挂卷就是「状态写进容器可写层、down 即丢」，
+    //    而且这个失效的外部表现是「配对正常、只是重启全丢」（HANDOFF 0.1 那个形状）。
+    assert.match(compose, /DRC_STATE_FILE:[^\n]*\/data\/state\.json/, base + '：DRC_STATE_FILE 要落在挂载点上')
+    assert.match(compose, /:\/data\s*$/m, base + '：要挂 /data')
+    // 非 root 与健康检查：少了它们容器会以 root 跑、或状态永远是 healthy。
+    assert.match(dockerfile, /^USER 10001:10001$/m, base + '：镜像必须非 root')
+    assert.match(dockerfile, /^HEALTHCHECK /m, base + '：必须有 HEALTHCHECK')
   }
 })

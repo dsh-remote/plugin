@@ -1,0 +1,110 @@
+# 中继的容器编排（Compose v2，生产用的就是这一份）。
+#
+#   docker compose -f deploy/docker/compose.yaml up -d --build
+#   docker compose -f deploy/docker/compose.yaml ps        # 看健康状态
+#   docker compose -f deploy/docker/compose.yaml logs -f relay
+#   docker compose -f deploy/docker/compose.yaml down
+#
+# ## 变量从哪来
+#
+# Compose 自动读**本文件所在目录**的 .env。所以 token 写在那儿，而不是命令行上
+# （命令行会进 shell history，也会进 ps 的 argv）。.env 已被 .gitignore 忽略。
+# 下面每一条 都是"不配就与裸机 systemd 单元同义"——
+# 容器不该偷偷改变程序的默认行为，它只改变"怎么被托管"。
+#
+# ## 与裸机部署的关系：nginx 一行都不用改
+#
+# 端口只发布到**宿主机回环**（127.0.0.1:8787:8787），所以宿主机上的
+# /etc/nginx/conf.d/drc.conf（proxy_pass http://127.0.0.1:8787）原样继续工作，
+# TLS 仍然由 nginx 终止。切容器化不动证书、不动反代，只换进程托管方式。
+name: dsh-remote-relay
+
+# 具名卷：docker compose up 开箱即用，且属主由镜像里的 /data 决定（uid 10001）。
+# 要用宿主机路径（生产那样做，落在 /var/lib 下）就把 DRC_DATA_DIR 指过去并 chown。
+volumes:
+  relay-data:
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        # 标签里的版本/提交号。CI 与发布脚本会传；本地构建不传就是 0.0.0/unknown，
+        # 而真正认版本的地方是 /healthz（产物内注入），两者由构建阶段的断言绑定。
+        DRC_VERSION: ${DRC_VERSION:-0.0.0}
+        VCS_REF: ${VCS_REF:-unknown}
+    # 标签与 /healthz 的 version 分工：标签给 docker inspect 与部署脚本，
+    # /healthz 给运维"线上跑的是哪一版"。
+    image: ${DRC_IMAGE:-dsh-remote-relay}:${DRC_IMAGE_TAG:-local}
+
+    # 崩溃即拉起，与 systemd 的 Restart=always 同义。
+    # 刻意**不是** always：中继优雅停机时会 exit 0，always 会在 docker compose down
+    # 之后又把它拉起来（"停机之后进程自己回来了"是最难查的一类故障）。
+    restart: unless-stopped
+
+    ports:
+      # 只绑回环。公网走 443（宿主机 nginx），8787 不对公网。
+      - "127.0.0.1:${DRC_PORT:-8787}:${DRC_PORT:-8787}"
+
+    environment:
+      # 唯一必填项。写错/漏写时 compose 在**启动前**就报出来，而不是让容器起来
+      # 再自己拒绝启动（那时报错在 logs 里，人不一定看）。
+      DRC_HOST_TOKEN: ${DRC_HOST_TOKEN:?在 deploy/docker/.env 里设 DRC_HOST_TOKEN（openssl rand -hex 32）}
+      DRC_PORT: ${DRC_PORT:-8787}
+      DRC_BIND: "0.0.0.0"
+      DRC_PUBLIC_URL: ${DRC_PUBLIC_URL:-}
+      DRC_LOG_LEVEL: ${DRC_LOG_LEVEL:-info}
+      DRC_PAIR_TTL_MS: ${DRC_PAIR_TTL_MS:-120000}
+      # 落盘：与卷是一对，所以写在这里与下面的 volumes 并排。
+      # 默认用**具名卷**：Docker 会用镜像里 /data 的属主（uid 10001）初始化它，所以
+      # `docker compose up` 开箱即用。改成宿主机路径（bind mount）时，属主必须也是
+      # 10001，否则状态写不进去 —— 属主不对时 2.x 启动就会记一条 error；1.x 时代只能等
+      # 每 60 秒一条的 state file write failed，而配对表面完全正常（HANDOFF 0.1）。
+      DRC_STATE_FILE: ${DRC_STATE_FILE:-/data/state.json}
+      DRC_STATE_SAVE_MS: ${DRC_STATE_SAVE_MS:-60000}
+      DRC_MAX_CONNS: ${DRC_MAX_CONNS:-200}
+      DRC_CONV_IDLE_TTL_MS: ${DRC_CONV_IDLE_TTL_MS:-604800000}
+      DRC_HOST_GRACE_MS: ${DRC_HOST_GRACE_MS:-120000}
+
+    volumes:
+      - ${DRC_DATA_DIR:-relay-data}:/data
+
+    # 与 systemd 单元同款的加固，容器里没有理由更松：
+    #  - read_only + tmpfs /tmp：中继只写 /data（卷），其余一律只读；
+    #  - cap_drop ALL + no-new-privileges：它不需要任何 capability，也不需要提权；
+    #  - mem_limit 与单元里的 MemoryMax=512M 取同一个数，两套形态口径一致。
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    # 每条 WebSocket 占用一个文件描述符，默认上限对 maxConnections 来说偏紧。
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+
+    # 停机窗口要大于程序内部的 5 秒兜底（main.ts 的 shutdown guard），
+    # 否则 compose 先 SIGKILL，状态文件的最后一次补写就被砍掉了。
+    stop_grace_period: 15s
+    stop_signal: SIGTERM
+
+    # 日志轮转：生产上 relay 的日志是有界的（每个字符串值截断到 256 字符，
+    # tests/log.test.mjs 有判据），但**行数**无界。不设上限的话 json-file 会一直长，
+    # 把磁盘吃满——而这正是中继所在那台机器上唯一真正稀缺的东西。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.DRC_PORT||8787)+'/healthz').then(r=>r.json()).then(j=>process.exit(j.ok===true?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
