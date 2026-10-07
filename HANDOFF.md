@@ -1,6 +1,6 @@
 | dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.16** | 已发 npm，且已在 `main` 上（不再是 wip 分支）。含 SPEC.md + 六个新模块。**握手面改造已评审**：结论是加性成立，并落成 7 条可执行判据（§0.10.19 待办 C）；另修了一处文案人称（那句话会原样弹到手机上） |
 | dsh-remote-control/（单包） | **2.0.16** | npm 上最新是 **2.0.15**；2.0.16（改钉 + 版本号 + **`cmdId` 去重**）**已提交并推送、未发版**（§0.10.19 待办 A） |
-| dsh-remote-server/ | **2.0.16** | 仓里已到 2.0.16（可靠性加固 + 容器化，见 §0.10.17；随后又有一笔把 wire 钉跟到 2.0.16）；**线上跑的还是 `1.0.0-rc.1`**（2026-10-06 17:18 那次切换之后没再动过）；**没有 `v2.0.16` tag、没有 GitHub Release**；不发 npm（包名被第三方占）。本轮接上了**协议版本闸**（此前 `hello.protocol` 从未被校验，§0.10.19） |
+| dsh-remote-server/ | **2.0.16** | 仓里已到 2.0.16（可靠性加固 + 容器化，见 §0.10.17；随后又有一笔把 wire 钉跟到 2.0.16）；**线上已于 2026-10-07 19:49 切到容器 `dsh-remote-relay:2.0.16`**（此前是裸机 systemd 跑 `1.0.0-rc.1`；rc1 残留已于 19:58 清理，回滚到 rc1 的能力已刻意消除）；**没有 `v2.0.16` tag、没有 GitHub Release**；不发 npm（包名被第三方占）。本轮接上了**协议版本闸**（此前 `hello.protocol` 从未被校验，§0.10.19） |
 | dsh-remote-mp/ | **2.0.16** | 2.0.16 已 tag 并上传（开发版本）。本轮接上了 `cmd.new_session.workspace`（§0.10.4 第 4 步，此前手机指定的分组从未发出） |
 
 > ⚠️ **四仓的 manifest 现在都是 2.0.16，但"发出去"的那半没跟上**：
@@ -338,6 +338,29 @@ markdown 35 / scroll 14 / 对比度 304），README 的项数与实测逐格一�
    顺序：远端 `docker build`（不中断服务）→ `systemctl stop dsh-remote-control` →
    `docker compose -f deploy/docker/compose.yaml up -d` → 看 `/healthz` 的 `version` 变了、
    `stateRestored:1`、`conversations:1`。**`clients:1`（用户那台手机）不该掉** ——
+   **⚠️ 上面那条「回滚到 systemd」在 2026-10-07 19:58 之后已失效** ——
+   rc1 的产物目录（`/opt/dsh-remote-control/server/`）与那个 systemd 单元都已退役。
+   现在只有一条回滚路径：`docker compose -f deploy/docker/compose.yaml restart`。
+
+   **19:49 切容器时丢了一条配对会话**（用户重扫一次即可）。原因不是产品缺陷，
+   是切换顺序：`chown 10001` 做在 `systemctl stop` **之前**，而单元里
+   `StateDirectory=` 会在停机时按 `User=` 把属主改回 root ⇒ 容器以 uid 10001
+   读一个 root 拥有的 600 文件 ⇒ `EACCES` ⇒ `starting empty` ⇒
+   首次落盘把空状态写回去 ⇒ 会话记录不可逆地没了。
+   **这一族最坏的一点**：服务起来了、`/healthz` 是 `ok:true`、配对表面完全正常，
+   唯一信号是 `stateRestored:0` 配 `conversations:0`。
+   正确顺序与判据见 `dsh-remote-server/deploy/docker/README.md`「与 systemd 并存」。
+
+   **删 rc1 时踩到的一条**（务必记住）：那个 systemd 单元当时是 **`enabled`**，
+   而 `ExecStart` 指向被删掉的文件。只删目录不复查的话，机器一重启 ⇒
+   systemd 起单元失败、容器**不会**被拉起（`restart: unless-stopped` 只管容器
+   自己崩，不管宿主机重启）⇒ **重启后中继彻底没了**，且报错只说"单元起不来"。
+   **删部署目录之后必须复查开机自启链**，现在这一环是：
+   `docker` = `enabled` + 容器 `restart=unless-stopped`。
+
+   备份：rc1 整个目录 tar 在**本机** `.workbuddy/backup/rc1-server-20261007.tgz`
+   （1.4 MB），服务器上不留副本。
+
    状态文件带过去了就不需要重扫。回滚：`docker compose down && systemctl start dsh-remote-control`。
    端口发布必须是 `127.0.0.1:8787:8787`，这样 nginx 那份 `drc.conf` **一行都不用改**。
 
