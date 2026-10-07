@@ -201,8 +201,10 @@
   已经吃过一次这个亏），所以"先立 tag 再评审"在这里不是流程建议而是事实。
   control 那一版现在**含 `cmdId` 去重**，内容已复核过。
 - **真机复验**（要真人扫）：`live-e2e.mjs` 三端真链路、§1.2 unpair、§1.3 体验版。
-- **§0.10.17 待办 1**（线上切容器）**要你定**：生产那台机器拉不到 `registry-1.docker.io`，
-  而 npm 通；离线搬运的前半段本机已验证过，详见那一节。
+- **§0.10.17 待办 1**（线上切容器）：**唯一剩下的障碍已经清掉了** ——
+  daemon 级镜像加速已配好并实测（生产机 `docker pull node:22-alpine` 10 秒，digest 对得上），
+  详见 §0.10.17 待办 1 的 ✅ 那条。切不切、以及什么时候切，仍**要你定**：
+  线上还跑 `1.0.0-rc.1`、**你那台手机此刻在线**（`hosts:1`），切换顺序与回滚见那一节。
 - **待办 F** 刻意未做：`ev.host_info`、v2 消息棘轮、`dshr:` 注册。
 
 ## 0.10.18 协议层落地、四仓口径收口（2026-10-07 晚）—— 含**遗留清单**
@@ -314,14 +316,21 @@ markdown 35 / scroll 14 / 对比度 304），README 的项数与实测逐格一�
 
 1. **线上切换成容器。** 线上现在跑的是 **`1.0.0-rc.1`**（不是 2.0.x —— 顶部表格此前写错了，
    已订正），2026-10-06 17:18 切上去之后没再动过。生产那台机器**拉不到 `registry-1.docker.io`**
-   （`curl https://registry-1.docker.io/v2/` 超时），而 **npm registry 是通的**。两条路：
-   - **离线搬运**（本机已验证过前半段）：
+   （`curl https://registry-1.docker.io/v2/` 超时），而 **npm registry 是通的**。
+   - ✅ **daemon 级镜像加速已配好（2026-10-07 19:16 落地，这条不再是障碍）**：
+     `/etc/docker/daemon.json` 加了 `registry-mirrors`
+     `https://6faa0280329c285d57dd15ba1333bdeb.d.1ms.run`，`docker info` 已认到，
+     生产机 `docker pull node:22-alpine` **10 秒完成**（`FROM` 一个字都没改）。
+     ⚠️ 那份文件原本已有三条现网配置（`log-driver`+`log-opts`、`live-restore: true`、
+     `default-address-pools`），是**合并**进去的（写坏它会让 docker 起不来，
+     而它是那台机器上所有容器的地基）；备份 `daemon.json.bak.20261007-191641`。
+     digest 与直连 Docker Hub 一致（`sha256:0a7108bf…`）⇒ 加速站返回的是官方内容。
+   - **离线搬运**（保留当备份路径，本机已验证过前半段）：
      `docker pull --platform linux/amd64 <mirror>/library/node:22-alpine` →
      `docker save | gzip` → scp → 远端 `docker load` → 远端 `docker build`（原生 amd64）。
      基线镜像已导出到本机 `/tmp/node22-amd64.tar.gz`（116 MB）——`/tmp` 会被清理，重导即可。
      **别在 arm64 上模拟构建**：实测 `pnpm install` 阶段会撞 libuv 断言
      （`Assertion failed: errno == EEXIST … uv__io_poll`）——那是模拟层的产物，不是 Dockerfile 的问题。
-   - 或给远端配 daemon 级 `registry-mirrors`（一劳永逸，`FROM` 不用改）。
 
    切换要点：**token 与状态文件都要原样带过去**。`/etc/dsh-remote-control.env` 里除了
    `DRC_HOST_TOKEN`，还有一条**不是默认值的** `DRC_PAIR_TTL_MS=180000`，必须逐字进

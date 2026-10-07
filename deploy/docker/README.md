@@ -76,14 +76,31 @@ docker compose -f deploy/docker/compose.yaml up -d
 
 生产那台机器 `registry-1.docker.io` 超时（而 npm registry 通）。三条路，按推荐顺序：
 
-1. **配 daemon 级镜像加速**（一劳永逸，FROM 不用改）：
+1. **配 daemon 级镜像加速**（一劳永逸，`FROM` 不用改）—— **生产走的就是这条**：
 
    ```json
    // /etc/docker/daemon.json
-   { "registry-mirrors": ["https://<你的镜像加速地址>"] }
+   { "registry-mirrors": ["https://6faa0280329c285d57dd15ba1333bdeb.d.1ms.run"] }
    ```
    ```sh
    systemctl daemon-reload && systemctl restart docker
+   ```
+
+   > ⚠️ **`daemon.json` 要合并，不能覆盖。** 那台机器上原本已经有三条现网配置
+   > （`log-driver` + `log-opts`、`live-restore: true`、`default-address-pools`）。
+   > 写坏它会让 **docker 起不来**，而它是那台机器上所有容器的地基。
+   > 判据：`tests/docker.test.mjs` 里有「compose 不许覆盖 daemon 级设置」那条。
+   >
+   > 配完**必须核对 digest**，不能只看「拉下来了」：加速站是第三方，
+   > 拉到的内容是不是官方的，靠 `RepoDigests` 说话。
+   > ```sh
+   > docker image inspect node:22-alpine --format '{{index .RepoDigests 0}}'
+   > # node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+   > ```
+   > 与直连 Docker Hub 拉到的是**同一个 digest**，才是可信的（2026-10-07 实测）。
+   >
+   > **加速地址会变**：它是按账号发的，换账号/换机器就是另一个串。
+   > 上面那个是 2026-10-07 生产实测可用的那一个；失效时按本文另一条路走。
    ```
 
 2. **本地打标签**：从可达的镜像站拉一份再改名，docker build 就不解析远端了。
