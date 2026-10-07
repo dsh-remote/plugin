@@ -1738,7 +1738,9 @@ test('图片附件：上限 4 个附件（协议层同一个数，两边不许�
   for (let i = 0; i < 6; i++) p.onAttach()
   await settleAttach()
   assert.equal(p.data.attachments.length, 4, '假 wx 每次都回一张——但页面侧要截到 4')
-  p.setData({ inputText: '' })
+  p.setData({
+    inputText: '',
+  })
   p.onSend()
   assert.equal(calls.length, 1)
   assert.equal(calls[0].text, '')
@@ -2058,7 +2060,9 @@ test('文件附件：与图片可以同一条消息带（协议里是两个独�
   assert.equal(p.data.attachments.length, 2, '图 + 文件各一条')
   assert.equal(p.data.attachments.filter((a) => a.kind === 'file').length, 1)
   assert.equal(p.data.attachments.filter((a) => a.kind !== 'file').length, 1)
-  p.setData({ inputText: '' })
+  p.setData({
+    inputText: '',
+  })
   p.onSend()
   await new Promise((r) => setTimeout(r, 0))
   assert.equal(calls.length, 1)
@@ -3473,4 +3477,67 @@ test('纯文字的长消息不受附件闸牵连（估高也要够准）', async
   await new Promise((r) => setTimeout(r, 0))
   assert.equal(calls.length, 1, `纯文字正文（${'const x = 1\n'.repeat(2000).length} 字符）被闸误拦了`)
   assert.equal(p.data.inputText, '', '放行时输入框照常清空')
+})
+
+test('回归：带附件的用户消息不会被画成两条（主机在正文后补了一段附件说明）', async () => {
+  // 主机把附件落盘后会在正文后面补一段说明（`uploads.ts` 的 `appendFileNote`）：
+  //     你发出去的正文
+  //
+  //     [文件附件 1 个，已存到本机]
+  //     1. /Users/x/a.pdf（application/pdf）
+  //
+  // 手机上的本地回显只有「你发出去的正文」，于是**逐字比较必然对不上**
+  // → 落到"追加新块"兜底 → 屏幕上多出一条一模一样的用户气泡（用户 2026-10-07 实测）。
+  //
+  // 它长得跟 message/inbox 双发一模一样，但根因不同：不是同一条被发了两遍，
+  // 是**同一条的本地回显与宿主回传正文本来就不相等**。
+  const p = readyAtBottom()
+  const TEXT = '看看这份周报'
+  const NOTE = '\n\n[文件附件 1 个，已存到本机]\n1. /Users/x/a.pdf（application/pdf）'
+  p.setData({ inputText: TEXT })
+  p.onSend()
+  assert.equal(
+    p.data.blocks.filter((b) => b.kind === 'user').length,
+    1,
+    '夹具自检：本地回显一条',
+  )
+
+  // 宿主回传：同一条，正文后面多了一段附件说明。
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-u1', delta: TEXT, role: 'user' })
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-u1', delta: NOTE, role: 'user', done: true })
+  p._flushDelta()
+
+  const users = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users.length, 1, `带附件的消息被画成了 ${users.length} 条：逐字比较对不上就走了"追加新块"那条兜底`)
+  assert.equal(users[0].confirmed, true, '本地的那条应当被标成已确认，而不是多出一条新的')
+})
+
+test('只发附件、不带正文的用户消息，同样不该被画成两条', async () => {
+  const p = readyAtBottom()
+  const NOTE = '[文件附件 2 个，已存到本机]\n1. /Users/x/a.pdf（application/pdf）\n2. /Users/x/b.pdf（application/pdf）'
+  p.setData({
+    inputText: '',
+    attachments: [{ kind: 'file', name: 'a.pdf', data: 'QQ==' }],
+  })
+  p.onSend()
+  assert.equal(p.data.blocks.filter((b) => b.kind === 'user').length, 1, '夹具自检：本地回显一条（正文为空）')
+
+  send(p, { t: 'ev.message_delta', sessionId: 's1', messageId: 'm-u2', delta: NOTE, role: 'user', done: true })
+  p._flushDelta()
+
+  const users = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users.length, 1, `只发附件的消息被画成了 ${users.length} 条`)
+  assert.equal(users[0].confirmed, true, '空正文那条也要被认出来并标成已确认')
+})
+
+test('放宽只放行"附件说明"这一种：ok / okay 这种前缀关系不许被认成同一条', () => {
+  const p = readyAtBottom()
+  // 本地回显「ok」未确认；宿主回传「okay」——两条不同的消息。
+  // `_append` 是纯函数：不 `_commit` 它，块流里根本没有那条「ok」，下面就什么都测不到。
+  p._commit(p._append(p.data.blocks, { key: 'u-a', kind: 'user', text: 'ok', confirmed: false }))
+  p._onUserEcho('okay')
+  const users = p.data.blocks.filter((b) => b.kind === 'user')
+  assert.equal(users.length, 2, '「ok」与「okay」被认成同一条了：确认错一条的代价是另一条永远留在"未确认"上')
+  assert.equal(users[0].confirmed, false, '「ok」不该被标成已确认')
+  assert.equal(users[1].confirmed, true)
 })
