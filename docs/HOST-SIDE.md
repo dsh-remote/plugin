@@ -15,7 +15,7 @@
 `dsh-remote-control@1.1.0` 把界面上那一半（原来是独立包 `dsh-remote-control-presentation`）折进了
 主插件；`1.2.0`（已发布、带 provenance）先加上状态栏那颗配对 pill，随后把**右栏自动弹码**与
 **终端文本码**两条老路整个删掉——配对入口现在只有那颗 pill。一次构建产出两半，
-实测尺寸 `index.js 1242 KB / client.cjs 18 KB`：
+实测尺寸 `index.js ≈ 1340 KB / client.cjs ≈ 30 KB`（随版本浮动，以 `ls -l` 实测为准）：
 
 | 产物 | 跑在哪 | 干什么 |
 |---|---|---|
@@ -111,11 +111,11 @@ patch 里，改名等于让线上配置静默失效。
 | `approvalTimeoutSec` | `180` | — | 审批卡超时 |
 | `listingRefreshSec` | `15` | — | 会话列表刷新周期 |
 | `conversationIdleTtlSec` | `86400` | — | 配对通道空闲剪枝（0/非法值**不表示永不剪枝**，会夹回默认） |
-| `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里 stdout 没人看，这是唯一排错入口） |
+| `statusFile` | `~/.dsh/dsh-remote-control/status.json` | — | 置空关闭状态快照（GUI 宿主里 stdout 没人看，这是唯一排错入口）。⚠️ 写**相对路径**会发一条 `warn:statusFile` 并按 `~/.dsh/dsh-remote-control/` 解析——因为这个路径同时决定 `pairStoreFile` / `uploadDir` 的相对基准，写错一个字符的代价是三条配置一起落到别处 |
 | `pairStoreFile` | `~/.dsh/dsh-remote-control/conversations-<hostId>.json` | — | 配对通道的密钥簿落盘路径（**落的是 PSK，不是派生密钥**：派生是纯函数，存派生结果等于多一份必须永远相等的第二真相）。它让「主机重启 → 手机免扫码续用」成立；置空则每次重启都要重扫 |
 | `restoredIdleTtlSec` | `604800`（7 天） | — | **从盘上恢复的**会话多久没收发可以剪。与上一行那条分开：恢复出来的不是"新配了没人用"，而是"早就配好了、主机重启了"，按 24 小时剪等于每次长假都把唯一那条通道清掉。默认与中继的空闲 TTL 对齐 |
 | `uploadDir` | `''`（自动：`status.json` 同目录的 `uploads/`） | — | **附件落盘目录**。⚠️ **没有任何东西会替你清理它**——会话剪枝（`conversationIdleTtlSec`）剪的是**密钥簿条目**，不是磁盘上那些文件；附件写进 `<uploadDir>/<sessionId>/` 之后只增不减，每条 ≤512KB、每条消息最多 4 个。默认路径在 `~/.dsh/` 下，所以它**不在**系统临时目录的清理范围内：长期用这台机器会一直涨。要么把它指向一个你有清理策略的位置（如 `/tmp` 下的子目录），要么接受「用多少占多少」。默认值偏向「找得到」而不是「省地方」——这是取舍，不是疏漏 |
-| `maxFileBytes` | `524288`（512KB） | — | 单个文件附件的字节上限。中继单帧 1MB 是硬上限，而文件没有压缩这一步 |
+| `maxFileBytes` | `524288`（512KB） | — | 单个文件附件的字节上限（= 协议层 `limits.MAX_ATTACHMENT_BYTES`）。中继单帧 1MB 是硬上限，而文件没有压缩这一步。⚠️ **调大它不生效**并会发一条 `warn:maxFileBytes`：整批附件的预算（`MAX_ATTACHMENT_TOTAL_BYTES`，同样 512KB）是硬的，所以单文件设成 2MB 的结果是那一个文件被整批闸拒掉，而回给手机的话是「请少带几个」——用户只带了一个却被这样告知。非有限/小于 1 也会 warn + 夹回默认 |
 | `newSessionCwd` | `''`（自动推断） | `DRC_NEW_SESSION_CWD` | 新建会话落在哪个项目目录。**置空（默认）时主机自己推断**：配置 → 最后操作过的那条会话的目录 → 往前扫第一条带 cwd 的会话 → 宿主默认（真机上是 `/`，那条会话就会落进 DSH 的**未分组**） |
 | `mockBridge` | `false` | `DRC_MOCK_BRIDGE=1` | 强制内存替身内核，**别用在真机上** |
 

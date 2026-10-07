@@ -57,14 +57,18 @@
 ## 生产实例（已上线）
 
 - 入口：`wss://drc.provid.cc`（阿里云 cn-shanghai / ECS `47.100.82.15`）
-- 跑的是 `dsh-remote-server` 仓 **Release 已发布的产物**（线上 v1.0.6，rc1 已发布待切）：
-  先 `shasum -c SHA256SUMS` 校验再从 Release 下载，scp 上线后 `/healthz` 报该版本号，
-  重启后 5 秒内 `hosts` 回 1（线上宿主插件自动重连）——"能换"是这么证的。
-  **私有那套编号全部作废**，四仓统一用同一个版本号（当前 `2.0.14`）。
+- 跑的是**容器** `dsh-remote-relay-relay-1`（镜像 `dsh-remote-relay:<版本>`，
+  `restart=unless-stopped`），compose 工程目录
+  `/opt/dsh-remote-control/dsh-remote-server/deploy/docker`。**裸机 systemd 那条路已退役**
+  （单元 `dsh-remote-control` = not-found）⇒ **唯一的回滚动作是 `docker compose restart`**。
+  换版：`docker compose up -d --build`（build 在起新容器之前完成，中断只有 recreate 那一下），
+  然后 `curl -s https://drc.provid.cc/healthz` 看 `version` 变了才算成。
+  部署手册见 `dsh-remote-server/deploy/docker/README.md`。
+  **私有那套编号全部作废**，四仓统一用同一个版本号（当前 `2.0.18`）。
   ⚠️ 注意 npm 上 `1.0.1`～`1.9.0`、`2.0.0`～`2.0.13` **都已被私有期占用**，不可重用；
   发版前跑 `node scripts/next-version.mjs --check`（它会算出下一个**大于**所有已发布、
   且两个包上都空着的号）。
-- 1.0.6 起会话表落盘（`DRC_STATE_FILE`，中继重启不再丢配对）：`/healthz` 多五个字段
+- 会话表落盘（`DRC_STATE_FILE`，中继重启不再丢配对）：`/healthz` 多五个字段
   `persistence` / `stateRestored` / `stateSavedAtSec` / `stateWrites` / `stateWriteFailures`
  （换完机器先看 `stateWriteFailures`，不是 0 就是没在写）。
 - 配置与复现步骤：[`deploy/README.md`](deploy/README.md)
@@ -77,13 +81,13 @@
 
 ```sh
 # 逐仓装依赖 + 跑各自的闸门（都在仓根）
-cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 152
-cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 178（1 skip）
-cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 497
+cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 168
+cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 197（1 skip）
+cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 524
 cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
 
 # 伞仓：取证与运维
-env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（354）+ 本地全链路 17 步
+env -u NODE_OPTIONS pnpm -r test        # e2e 全部 *.test.mjs（364）+ 本地全链路 17 步
 env -u NODE_OPTIONS node e2e/run.mjs    # 只跑本地全链路
 ```
 
@@ -120,13 +124,13 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 
 | 命令 | 覆盖 | 项数 |
 |---|---|---|
-| `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 152 |
+| `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 168 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
-| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行）+ **容器产物闸门**（两条 FROM 同源、非 root、HEALTHCHECK 判 `ok` 字段、runtime 阶段零依赖、产物断言在构建里、端口只发布回环、`DRC_STATE_FILE` 与卷成对、加固项与 systemd 同口径、`.dockerignore` 该裁的裁该留的留）+ **本轮深审**（两条未认证崩溃打崩进程 / 三处日志洪水 / 配对码一次性与归属 / 落盘 fsync 与未来时间戳 / 时钟回拨冻死限流 / 配置原型链与空串 / 停机排空 / `--version`）+ **已知未修收口**（`resync` 删会话要通知成员 / 版本闸的注释与死字段 / 只解析一次 / 限流带 `retryAfterMs`） | 178（1 skip） |
-| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**、**cmdId 去重**（GAP-4）、**形状不对的载荷必须回执**（不是只记日志：手机原来干等满 12 秒超时），以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 497 |
+| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行）+ **容器产物闸门**（两条 FROM 同源、非 root、HEALTHCHECK 判 `ok` 字段、runtime 阶段零依赖、产物断言在构建里、端口只发布回环、`DRC_STATE_FILE` 与卷成对、加固项与 systemd 同口径、`.dockerignore` 该裁的裁该留的留）+ **本轮深审**（两条未认证崩溃打崩进程 / 三处日志洪水 / 配对码一次性与归属 / 落盘 fsync 与未来时间戳 / 时钟回拨冻死限流 / 配置原型链与空串 / 停机排空 / `--version`）+ **已知未修收口**（`resync` 删会话要通知成员 / 版本闸的注释与死字段 / 只解析一次 / 限流带 `retryAfterMs`） | 197（1 skip） |
+| `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**、**cmdId 去重**（GAP-4）、**形状不对的载荷必须回执**（不是只记日志：手机原来干等满 12 秒超时）、**cmd.archive_session**（归档/取消归档，含「绝不传 stopActivity」与「运行中明确拒绝」）、**幂等台账的淘汰出口**（并着的回执表不许无界）、**坏落盘记录只丢它自己**（不许带崩插件）、**越界时刻不许停更 status.json**、**配对失败只作废真正失败的那张码**、**协议层接线**（七个出站控制帧走构造器 / hello 报能力 / error 按码分支 / 附件上限引用常量），以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 524 |
 | `npm --prefix dsh-remote-mp run check` | 小程序**五道闸**（`check` = verify + md + scroll + theme:check + contrast）：verify-miniprogram 结构自检（JSON / 页面 / 组件引用 / 自研 JS 的声明一致性）、markdown 渲染（35 项）、**滚动策略（14 项，纯函数层）**、theme:check（主题文件与生成器同步）、对比度（304 组） | 全过 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock）。**跑之前先过产物新鲜度闸门**（逐文件比对 src↔dist 的 mtime：改了 src 没 build 时直接红，测的不是旧产物） | 17 步 |
-| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复/**本轮深审**（nonce 复用 / 弱密钥 / 状态撕裂 / 畸形帧 / 帧预算转义膨胀 / 带附件回放漏去重 / 重连视口 / 秒表冻住 / 附件入口守卫）+ **容器化的部署同步**（`deploy/docker/` 逐字节镜像 + bind/回环发布/状态目录属主三条硬约束）+ **握手面加性判据**（老 schema 收新 hello / 依赖 zod strip 语义 / 能力 id 不进帧路由 / 未知能力照收 / MIN ≤ PROTOCOL）+ **新建会话的分组**（指定工作区才带字段 / 默认取最后点开的那条 / 长按选分组）+ **已知未修收口**（发不出去要说 / 退避窗口不消耗 nonce / 坏 nonceCounter 记录丢弃 / 派发抛错不吞后续帧 / 列表页听失败回执） | 354 |
+| `node --test e2e/*.test.mjs` | 握手/F8/F7/F3/审批闭环/提问闭环/多码并存/**重启续用**/历史分页/chat 块流/浅深主题/配对恢复/**本轮深审**（nonce 复用 / 弱密钥 / 状态撕裂 / 畸形帧 / 帧预算转义膨胀 / 带附件回放漏去重 / 重连视口 / 秒表冻住 / 附件入口守卫）+ **容器化的部署同步**（`deploy/docker/` 逐字节镜像 + bind/回环发布/状态目录属主三条硬约束）+ **握手面加性判据**（老 schema 收新 hello / 依赖 zod strip 语义 / 能力 id 不进帧路由 / 未知能力照收 / MIN ≤ PROTOCOL）+ **新建会话的分组**（指定工作区才带字段 / 默认取最后点开的那条 / 长按选分组）+ **已知未修收口**（发不出去要说 / 退避窗口不消耗 nonce / 坏 nonceCounter 记录丢弃 / 派发抛错不吞后续帧 / 列表页听失败回执 / **会话归档与取消归档**（每条配一条反向判据）/ **handler 签名机械扫描**（第一参不长得像事件对象就红）/ **needs-pair 逐字段归零**） | 364 |
 | `node e2e/live-e2e.mjs` | **三个真实**：真小程序代码 + 真中继 + 真内核。拿不到真材料就失败，绝不退化 mock ⚠️ **会把你自己那台手机踢下线**（见下方用法块前的警告） | 18 项/轮 |
 | `node scripts/next-version.mjs --check` | 发版前的**版本号闸**：该号在两个 npm 包上都**没发过**，且**大于**所有已发布版本，各仓版本号一致（否则 `latest` 退回去，或 npm 直接拒绝）。**发版之后它会对当前版本号报红——那是正确的**，因为已发过的号不能再发一遍 | 退出码 |
 | `node scripts/validate-qr.mjs` | 二维码用 zxing-cpp 真实解码（**图片 PNG / 裸矩阵两条路径**；文本字形那条已随文本码一起删掉） | 28 组 ×2 |
@@ -159,7 +163,7 @@ CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22�
 ### 上面那张表怎么不漂
 
 「项数」那一列只在你真跑过之后才知道，而跑一遍要四个仓各自 build+test——所以它过去
-漂过好几次（92→106、448→457、255→262、对比度 302→304、471→490→494→497、311→334→341→345→354、132→164→175→176→177→178），每次都是"加了判据忘了改文档"。
+漂过好几次（92→106、448→457、255→262、对比度 302→304、471→490→494→497、311→334→341→345→354、132→164→175→176→177→178→182→197、152→158→168、354→361→364、471→490→494→497→524），每次都是"加了判据忘了改文档"。
 为此有一条命令：
 
 ```sh

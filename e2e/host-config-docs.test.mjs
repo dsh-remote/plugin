@@ -82,14 +82,27 @@ test('配置接口里的每个键都在 HOST-SIDE.md 的表里出现过（运维
   const declared = declaredKeys(readFileSync(CONFIG_SRC, 'utf8'))
   const doc = readFileSync(DOC, 'utf8')
 
-  // 表里出现过就算文档过：`enabled` 这类名字会同时出现在 pill.enabled / keepAwake.enabled 上。
-  const missing = [...declared].filter((key) => !doc.includes(key)).sort()
+  // **只扫配置表那几行**（以 `|` 开头），理由与下面那条 DRC_* 判据完全一样：
+  // 正文里提到一个键名是在讲历史或讲踩过的坑，那不是"这个键现在还能调"。
+  //
+  // 原来这里扫全文，于是两件事同时发生（2026-10-07 修）：
+  // ① 判据比它自己声称的**弱** —— `enabled` / `maxFileBytes` 在正文散文里
+  //    出现过就放过，于是"表格里删掉了这一行"它照样绿；
+  // ② 它把说明当成了配置 —— 我自己写的订正注记里如实列过一个已删掉的键名，
+  //    足以把这条判据弄红（与 DRC_* 那条踩过的坑一模一样）。
+  const table = doc
+    .split('\n')
+    .filter((line) => line.startsWith('|'))
+    .join('\n')
+  assert.ok(table.length > 500, `配置表只抽到 ${table.length} 字符：表格写法变了，同步改判据`)
+  const missing = [...declared].filter((key) => !table.includes(key)).sort()
   assert.deepEqual(
     missing,
     [],
-    `config.ts 里这些键在 HOST-SIDE.md 全文里一次都没出现：${missing.join(', ')}。` +
+    `config.ts 里这些键在 HOST-SIDE.md 的**配置表**里一次都没出现：${missing.join(', ')}。` +
       '其中 pairStoreFile / uploadDir / maxFileBytes 决定"密钥与附件落在哪"，' +
-      'newSessionCwd 决定"新建会话落在哪个分组"——运维找不到就等于没有这个开关',
+      'newSessionCwd 决定"新建会话落在哪个分组"——运维找不到就等于没有这个开关。' +
+      '（判据只扫表格行：正文里提到键名是在讲历史，不是在讲"现在还能调"）',
   )
 })
 

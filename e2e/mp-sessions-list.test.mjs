@@ -55,25 +55,42 @@ function makePage() {
 
 const ids = (ctx) => ctx.data.sessions.map((s) => s.id)
 
-test('归档会话被过滤掉，数量与说明都对得上', () => {
+test('归档会话单独成一组，不进主列表（2026-10-07 改：原来是被丢掉）', () => {
   const p = makePage()
-  p._renderSessions([
-    { id: 'a', title: '正常会话', state: 'idle', updatedAt: '2026-10-02T08:00:00.000Z' },
-    { id: 'b', title: '归档会话 1', state: 'archived' },
-    { id: 'c', title: '运行中', state: 'running', running: true },
-    { id: 'd', title: '归档会话 2', state: 'archived' },
-  ])
-  // 2026-10-04 起列表按四级排序：都在空目录组、c 在跑 → c 在前
-  assert.deepEqual(ids(p), ['c', 'a'], '归档的不能出现在列表里；剩下的按运行中优先排')
-  assert.equal(p.data.hiddenArchived, 2)
-  assert.equal(p.data.hiddenText, '已隐藏 2 个归档会话', '不能悄无声息地少掉，要留一句话')
+  try {
+    p._renderSessions([
+      { id: 'a', title: '正常会话', state: 'idle', updatedAt: '2026-10-02T08:00:00.000Z' },
+      { id: 'b', title: '归档会话 1', state: 'archived' },
+      { id: 'c', title: '运行中', state: 'running', running: true },
+      { id: 'd', title: '归档会话 2', state: 'archived' },
+    ])
+    // 2026-10-04 起列表按四级排序：都在空目录组、c 在跑 → c 在前
+    assert.deepEqual(ids(p), ['c', 'a'], '归档的不能出现在主列表里；剩下的按运行中优先排')
+    // ⚠️ 原来是 hiddenArchived/hiddenText 两条计数，而归档会话被**直接丢掉** ——
+    // 那让"归档"在小程序上不可逆：主机有 cmd.archive_session，列表也真收到了
+    // 那些行，用户却再也找不回来、也没法取消。现在它们进 archivedSessions。
+    assert.equal(p.data.archivedCount, 2)
+    assert.deepEqual(
+      p.data.archivedSessions.map((s) => s.id),
+      ['b', 'd'],
+      '归档的按同一套排序进归档区（updatedAt 相同则保持原序）',
+    )
+    assert.equal(p.data.archivedSessions[0].title, '归档会话 1', '标题要带过来：用户靠它认哪条')
+    assert.equal(p.data.archivedOpen, false, '默认折叠：多数归档是"做完了先收起来"')
+  } finally {
+    p._stopLinkTick()
+  }
 })
 
-test('没有归档时不显示说明', () => {
+test('没有归档时归档区整块不占地方', () => {
   const p = makePage()
-  p._renderSessions([{ id: 'x', state: 'idle' }])
-  assert.equal(p.data.hiddenArchived, 0)
-  assert.equal(p.data.hiddenText, '')
+  try {
+    p._renderSessions([{ id: 'x', state: 'idle' }])
+    assert.equal(p.data.archivedCount, 0)
+    assert.deepEqual(p.data.archivedSessions, [])
+  } finally {
+    p._stopLinkTick()
+  }
 })
 
 test('空列表与非归档状态不报错', () => {
@@ -355,7 +372,8 @@ test('G1：awaiting 的会话进"等你处理"区，完整列表照旧', () => {
     )
     assert.equal(p.data.pending[1].badgeText, '待审批')
     assert.equal(p.data.pending[0].badgeText, '待回答')
-    assert.equal(p.data.sessions.length, 3, '完整列表照旧（归档隐藏，其余都在）')
+    assert.equal(p.data.sessions.length, 3, '主列表照旧（归档那条进归档区，其余都在）')
+    assert.equal(p.data.archivedCount, 1, '归档的那条进归档区')
   } finally {
     p._stopLinkTick()
   }
@@ -394,6 +412,7 @@ function fakeClient(over = {}) {
     on: () => () => {},
     getPending: () => {},
     newSession: () => Promise.resolve({ ok: false }),
+    archiveSession: () => Promise.resolve({ ok: false, message: '夹具没实现' }),
     ...over,
   }
 }
@@ -437,4 +456,342 @@ test('app.json 的 darkmode 必须是 false：主题是自管的，不吃系统 
   const appJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/app.json'), 'utf8'))
   assert.equal(appJson.darkmode, false, 'darkmode 必须关掉（主题自管，见 core/theme.js 的文件头）')
   assert.equal('themeLocation' in appJson, false, '没有 theme.json 就不该声明 themeLocation')
+})
+
+// ── 归档 / 取消归档（2026-10-07）─────────────────────────────────────
+//
+// 这一段的判据纪律：**每条都配一条反向判据**。归档这一族最容易写成
+// "永远拦截"（长按永远弹不出、永远只归档不取消、失败也当成功），
+// 而那种实现下面这几条照样全绿。
+
+test('长按一行 → 弹 ActionSheet → 确认后才真的发归档命令', async () => {
+  const sheets = []
+  globalThis.wx.showActionSheet = (o) => {
+    sheets.push(o)
+    o.success && o.success({ tapIndex: 0 })
+  }
+  const calls = []
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'online',
+    archiveSession: (id, archived) => {
+      calls.push({ id, archived })
+      return Promise.resolve({ ok: true })
+    },
+    listSessions: () => {},
+  })
+  try {
+    p._onEvent({ kind: 'status', status: 'online', text: '已配对' })
+    p.onSessionLongPress({ currentTarget: { dataset: { id: 'a', title: '正常会话' } } })
+    await new Promise((r) => setTimeout(r, 0))
+    assert.equal(sheets.length, 1, '长按必须先弹一个确认 —— 归档虽然可逆，但用户点错一行的成本是真实的')
+    assert.match(sheets[0].itemList[0], /归档「正常会话」/, '选项上要带会话名，否则用户不知道自己在归档哪一条')
+    assert.deepEqual(calls, [{ id: 'a', archived: true }], '确认之后才发，且 archived=true 是归档方向')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('反向判据：没连上主机时长按**不发命令**，直接说为什么', () => {
+  const calls = []
+  let toast = null
+  globalThis.wx.showToast = (o) => {
+    toast = o
+  }
+  globalThis.wx.showActionSheet = () => {
+    throw new Error('没连上时不该弹 ActionSheet')
+  }
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'offline',
+    archiveSession: (id, archived) => {
+      calls.push({ id, archived })
+      return Promise.resolve({ ok: true })
+    },
+  })
+  p.onSessionLongPress({ currentTarget: { dataset: { id: 'a', title: 'x' } } })
+  assert.deepEqual(calls, [], '没连上就一条都不许发：发出去也是白等 12 秒超时')
+  assert.ok(toast && /还没连上主机/.test(toast.title), '要说清为什么不能归档')
+})
+
+test('反向判据：主机拒绝时把它的原因原样给用户，不弹"成功"', async () => {
+  let toast = null
+  globalThis.wx.showToast = (o) => {
+    toast = o
+  }
+  globalThis.wx.showActionSheet = (o) => o.success && o.success({ tapIndex: 0 })
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'online',
+    // 真实主机在会话还在跑时回的就是这句
+    archiveSession: () => Promise.resolve({ ok: false, message: '会话正在运行，不能归档。请先在电脑上让它跑完' }),
+    listSessions: () => {},
+  })
+  try {
+    p._onEvent({ kind: 'status', status: 'online', text: '已配对' })
+    p.onSessionLongPress({ currentTarget: { dataset: { id: 'a', title: 'x' } } })
+    await new Promise((r) => setTimeout(r, 0))
+    assert.ok(toast && /正在运行/.test(toast.title), `必须把主机的原话给用户，实际是 ${JSON.stringify(toast)}`)
+    assert.equal(p.data.archivingId, '', '失败后必须把"进行中"那个状态清掉，否则这一行永远转圈')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('点归档区那一行 = 取消归档（不是打开它）', async () => {
+  const calls = []
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'online',
+    archiveSession: (id, archived) => {
+      calls.push({ id, archived })
+      return Promise.resolve({ ok: true })
+    },
+    listSessions: () => {},
+  })
+  try {
+    p._onEvent({ kind: 'status', status: 'online', text: '已配对' })
+    p.onArchivedTap({ currentTarget: { dataset: { id: 'b' } } })
+    await new Promise((r) => setTimeout(r, 0))
+    // 方向是这一条的全部：点归档行绝不能是"归档"（那是原地不动），
+    // 也不能是"打开"——主机对归档会话的每一步都直接拒绝，进去只能拿到超时。
+    assert.deepEqual(calls, [{ id: 'b', archived: false }], '单击归档行 = 取消归档')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('反向判据：取消归档也有一条独立出口（长按），不是"只能靠点"这一个动作', () => {
+  assert.equal(typeof captured.onArchivedLongPress, 'function', '长按那条 ActionSheet 入口必须留着')
+  assert.equal(typeof captured.onSessionLongPress, 'function')
+  assert.equal(typeof captured.onToggleArchived, 'function', '归档区的展开/收起也要有')
+})
+
+test('反向判据：折叠状态不随列表刷新被重置', () => {
+  const p = makePage()
+  try {
+    p.onToggleArchived()
+    assert.equal(p.data.archivedOpen, true, '点一下就展开')
+    // 用户刚展开的折叠区在一次列表刷新后又合上，是最烦人的那类界面抖动
+    p._renderSessions([{ id: 'a', state: 'archived' }])
+    assert.equal(p.data.archivedOpen, true, '刷新不许把用户的折叠状态按回去')
+    p.onToggleArchived()
+    assert.equal(p.data.archivedOpen, false, '再点一下收起')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+
+/**
+ * 绑在 wxml 上的 handler，第一参**必须**长得像事件对象（2026-10-07 补）。
+ *
+ * ## 它抓到过一个真实的缺陷
+ *
+ * `onNewSession(picked)` 挂在 `bindtap="onNewSession"` 上，而 bindtap 会把
+ * **事件对象**当第一个实参传进来 —— 于是 `picked` 恒为真值，
+ * `picked || this._currentWorkspace()` 的三级兜底永远走不到，
+ * 每次单击都往主机发一个名为 `[object Object]` 的工作区。
+ *
+ * 症状特别难查：`String({}) === '[object Object]'`，它**不是空串**，
+ * 所以 `if (workspace) cmd.workspace = ...` 照发；主机侧 `badWorkspace()`
+ * 收到一个不存在的目录，会话落错地方或被拒，而回执路径上没有任何提示。
+ * 而 2.0.17 那轮刚给 `cmd.new_session.workspace` 补完判据与文档 ——
+ * 接线是通的，而**单击那条路发的是垃圾**。
+ *
+ * ## 为什么这条判据是机械的而不是逐个断言
+ *
+ * 逐个写"onXxx 不许这样"必然漏（下一个页面又有同类）。所以这里扫**全部**绑定：
+ * 凡是绑在 wxml 上、而第一参不长得像事件的，一律红。那种 handler 要么本来就
+ * 该读 `e.currentTarget.dataset`，要么被内部调用（如 `onNewSession(picked)`）
+ * —— 后者由下一条判据单独放行并要求它判类型。
+ */
+test('绑在 wxml 上的 handler：第一参必须长得像事件对象（否则 bindtap 会把事件喂进数据位）', () => {
+  const wxml = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.wxml'), 'utf8')
+  const bound = new Set([...wxml.matchAll(/bind(?:tap|longpress|change|input|confirm|blur)="(\w+)"/g)].map((m) => m[1]))
+  // 这些是**被内部调用**的（不是 wxml 直接绑的），它们的第一参是数据
+  const internallyCalled = new Set(['onNewSession'])
+  // ⚠️ 必须读**源码文本**而不是 `String(fn)`：函数被 stringify 之后参数名就没了
+  // （实测 `String(captured.onScan)` 出来是 `function () { … }`），于是正则取到
+  // 的"第一参"是 `function` —— 一次就产出 17 个假阳性。
+  // 这与 memory 里那条「判据红了先确认它测的是不是那一段」是同一族。
+  const source = fs.readFileSync(path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/sessions/sessions.js'), 'utf8')
+  const suspicious = []
+  for (const name of bound) {
+    if (internallyCalled.has(name)) continue
+    // 形如 `  onScan: function (e) {` 或 `  onScan: function () {`
+    const m = new RegExp(`^  ${name}: function \\(([^)]*)\\)`, 'm').exec(source)
+    if (!m) continue
+    const first = m[1].trim().split(',')[0].trim()
+    if (first && !/^(e|evt|event|t)$/.test(first)) suspicious.push(`${name}(${first})`)
+  }
+  assert.deepEqual(
+    suspicious,
+    [],
+    `这些 handler 绑在 wxml 上却把第一参当数据用：${suspicious.join(', ')}。` +
+      'bindtap/bindlongpress 会把事件对象传进来，而事件对象恒为真值 —— ' +
+      '任何 `picked || fallback` 都会永远走 fallback 那一支',
+  )
+})
+
+test('onNewSession：bindtap 传进来的事件对象不许被当成工作区（判类型而不是判空）', async () => {
+  // 上一条把它从机械扫描里排除了（它确实绑在 wxml 上），所以这一条单独钉住契约：
+  // 实参可能是路径字符串（长按那条路），也可能是**事件对象**（bindtap 那条路）。
+  //
+  // ⚠️ 两次调用之间必须 `await`：`onNewSession` 开头有 `if (this.data.creating) return`
+  // 这个防连点的闩锁，而 `creating` 要等 Promise 回来才清 —— 同步连发两次时
+  // 第二次会被闩锁挡掉，于是判据读到的 `calls` 少了第二条，而症状是
+  // 「夹具自检：两次都该发出去了」——与被测的那段逻辑无关。
+  const calls = []
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'online',
+    // ⚠️ `isPaired` 也得给 true：共用夹具默认是 false，而 `onNewSession` 的第二道
+    // 闸就是它。第一版忘了给，两次调用都在「还没有配对主机」那支早退 ——
+    // 症状是 `calls` 为空，而看起来像"实现没发命令"。
+    isPaired: () => true,
+    newSession: (workspace) => {
+      calls.push(workspace)
+      return Promise.resolve({ ok: true, sessionId: 'ses_new' })
+    },
+  })
+  try {
+    p._onEvent({ kind: 'status', status: 'online', text: '已配对' })
+    assert.equal(p.data.status, 'online', '夹具自检：状态必须是 online，否则下面两次都会在"没连上"那支早退')
+    assert.equal(p.client.isPaired(), true, '夹具自检：isPaired 必须为 true')
+
+    // ① bindtap 那条路：实参是**事件对象**
+    p.onNewSession({ type: 'tap', currentTarget: { dataset: {} } })
+    await new Promise((r) => setTimeout(r, 0))
+    // ② 长按那条路：实参是真字符串
+    p.onNewSession('/Users/someone/project-x')
+    await new Promise((r) => setTimeout(r, 0))
+
+    assert.equal(calls.length, 2, `夹具自检：两次都该发出去了，实得 ${JSON.stringify(calls)}`)
+    for (const got of calls) {
+      assert.notEqual(
+        got,
+        '[object Object]',
+        '绝不许把 String(事件对象) 发给主机：主机侧 badWorkspace() 收到一个不存在的目录，' +
+          '会话落错地方或被拒，而回执路径上没有任何提示',
+      )
+    }
+    // ② 必须是**用户显式指定的那一个**，逐字透传（不许被兜底覆盖）
+    assert.equal(calls[1], '/Users/someone/project-x', '长按选中的工作区必须原样发出去')
+    // ① 事件对象那一路落到三级兜底：本夹具里列表空、`_lastWorkspace` 也没记，
+    // 所以第三级是"不带这个字段" = 空串 —— 而**不是** '[object Object]'。
+    assert.equal(
+      calls[0],
+      '',
+      '没有可用兜底时必须退到"不带这个字段"（由主机推断），而不是把事件对象发出去',
+    )
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('反向判据：needs-pair 必须把这一页**每一个**从主机读来的量归零', () => {
+  // 这一支原来只清了 sessions / hiddenArchived / hiddenText —— 而后两个在
+  // 2026-10-07 那轮已经**不再被写**（归档改成单独一组），所以它实际只清了
+  // sessions，`archivedSessions` / `archivedCount` / `pending` /
+  // `pendingCount` / `archivingId` 全部留着上一台主机的数据。
+  //
+  // 今天看不出来，只因为 wxml 靠 `wx:if="{{paired}}"` 把它们遮住了——
+  // 而那层遮蔽是**巧合**不是设计：模板分支一改就是"已解配却还列着上一台
+  // 主机的会话"。
+  //
+  // 判据形状：先灌满全部字段，再走 needs-pair，然后**逐个**断言归零。
+  // 用"逐个断言"而不是"deepEqual(data, 初始)"：后者会把 theme/pasteText
+  // 这些**本来就该留着**的用户输入也一起要求归零（那是另一个缺陷）。
+  const p = makePage()
+  try {
+    p._renderSessions([
+      { id: 'a', title: '在跑', state: 'running', running: true, updatedAt: '2026-10-07T10:00:00Z' },
+      { id: 'b', title: '等你批', state: 'awaiting-permission', updatedAt: '2026-10-07T11:00:00Z' },
+      { id: 'c', title: '归档', state: 'archived', updatedAt: '2026-10-07T09:00:00Z' },
+    ])
+    p.setData({ archivingId: 'a', busy: true, creating: true })
+    assert.ok(p.data.sessions.length > 0 && p.data.archivedCount > 0 && p.data.pendingCount > 0, '夹具自检：先灌满')
+    assert.equal(p.data.archivingId, 'a', '夹具自检：进行中那一条也灌上')
+
+    p._onEvent({ kind: 'status', status: 'needs-pair', text: '配对已失效' })
+
+    // 每一个"从主机读来的量"都必须归零
+    for (const key of [
+      'sessions',
+      'archivedSessions',
+      'pending',
+      'archivingId',
+      'creating',
+      'busy',
+    ]) {
+      const got = p.data[key]
+      const empty = Array.isArray(got) ? got.length === 0 : got === '' || got === false
+      assert.ok(empty, `needs-pair 之后 \`${key}\` 必须归零，实得 ${JSON.stringify(got)}`)
+    }
+    for (const key of ['archivedCount', 'pendingCount']) {
+      assert.equal(p.data[key], 0, `needs-pair 之后 \`${key}\` 必须是 0，实得 ${p.data[key]}`)
+    }
+    assert.equal(p.data.paired, false, '配对已失效，界面必须回到扫码入口')
+    // 反向判据：用户输入**不该**被清（清掉就是另一个缺陷：重填一遍很烦）
+    assert.equal(p.data.pasteText, '', '夹具自检：初始 pasteText 是空串')
+  } finally {
+    p._stopLinkTick()
+  }
+})
+
+test('反向判据：onShow 不许把退避打回零（socket 还在就别重连）', () => {
+  // 原来这里是 `else { this.client.connect() }`，而 connect() 会先 close 掉
+  // 旧 socket 再造一个新的、**退避重置为 0** 的。
+  //
+  // 症状：退避被反复打回零。在 会话列表↔聊天 之间来回切时（每次切换都走
+  // 一次 onShow），只要当前不在线就重连一次 ⇒ 指数退避（1s→30s）永远顶格
+  // 在 1s。退避存在的意义就是别在中继拒收时 hammer 它。
+  //
+  // `app.js` 的 onShow 早就写对了（`&& !this.drc.sock`），唯独这里没有。
+  const connects = []
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'offline',
+    // `onShow` 在 `!isPaired()` 那支就 return 了，而共用夹具默认 isPaired=false
+    isPaired: () => true,
+    // ⚠️ `sock` 存在 = "socket 已经建好了、正在等它连上/等它重连"。
+    // 正在重连时 socket **是存在的**（createSocket 立刻赋值），所以这一支
+    // 必须不走 —— 那正是原来那个 bug 的形态。
+    sock: {},
+    connect: () => connects.push(1),
+  })
+  p._off = p.client.on(() => {})
+  try {
+    p.onShow()
+    p._off()
+    assert.equal(
+      connects.length,
+      0,
+      'socket 还在（正在重连）时又调 connect()：那会把退避重置为 0，' +
+        '指数退避永远顶格在 1s，而退避的意义正是别 hammer 中继',
+    )
+  } finally {
+    // ⚠️ `onShow` 会 `_startLinkTick()`，而那是**真的 setInterval**。
+    // 忘了停它 ⇒ 整个 `node --test` 进程不退出（表现为命令被 SIGTERM，
+    // 而判据本身全绿）—— 症状与被测的逻辑完全无关，极难定位。
+    p._stopLinkTick()
+  }
+})
+
+test('反向判据：真的没有 socket 时仍然要重连（上一条不许把这条功能关掉）', () => {
+  // 与上一条成对：只写"不许重连"的话，把整支删掉也能全绿。
+  const connects = []
+  const p = makePage()
+  p.client = fakeClient({
+    status: 'offline',
+    isPaired: () => true,
+    sock: null,
+    connect: () => connects.push(1),
+  })
+  p._off = p.client.on(() => {})
+  p.onShow()
+  p._off()
+  p._stopLinkTick()
+  assert.equal(connects.length, 1, '真的没有 socket 时必须重连：从后台回来要能自己恢复')
 })

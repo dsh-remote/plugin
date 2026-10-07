@@ -41,6 +41,35 @@ function mpSources(dir, out = []) {
 
 const TYPES = /'(ev\.[a-z_]+|cmd\.[a-z_]+)'/g
 
+/**
+ * 抽一次载荷类型字面量，**顺带自检抽法还活着**（2026-10-07 补）。
+ *
+ * ## 为什么必须自检
+ *
+ * `TYPES` 只认**单引号**。而如果协议层某天改成双引号或反引号字面量，
+ * 抽出来的就是**空集** —— 于是两条方向相反的判据会**同时恒绿**：
+ * 「小程序引用的都在协议层」（`known` 空 ⇒ `unknown` 必为空）与
+ * 「协议层的都被引用过」（`known` 空 ⇒ `unused` 也必为空）。
+ *
+ * 第一条判据本来有一个 `known.size >= 20` 的兜底，第二条**没有**——
+ * 两条的强度不对称，而弱的那条正是会静默放行的那条。
+ * 现在两条都走这个助手。
+ *
+ * 另一个方向的失效同样要挡：判据的价值在于"运行时决定分支的那个字符串"，
+ * 而反引号形式（散文里写 `` `cmd.subscribe` ``）本来就不该被算作引用，
+ * 所以这里**不**扩正则 —— 扩了会把注释里的字面名也算成"引用过"，
+ * 那正好毁掉第二条判据要防的事（新增 ev.* 却忘了写渲染分支）。
+ */
+function extractTypes(label, text) {
+  const found = new Set([...text.matchAll(TYPES)].map((m) => m[1]))
+  assert.ok(
+    found.size >= 20,
+    `${label} 只抽出 ${found.size} 个类型字面量（门槛 20）：抽法或结构变了。` +
+      '此时下面两条方向相反的判据会**同时恒绿**（空集 ⊆ 任何集合），所以这一条必须先过',
+  )
+  return found
+}
+
 /** 按仓内相对路径读一个文件。 */
 const read = (...parts) => readFileSync(path.join(ROOT, ...parts), 'utf8')
 
@@ -63,8 +92,7 @@ test('小程序引用的每个载荷类型，协议层都真的定义了（否�
   assert.ok(existsSync(MP_DIR), `找不到 ${MP_DIR}：e2e 需要四棵平行仓在场`)
   assert.ok(existsSync(PROTOCOL), `找不到 ${PROTOCOL}`)
 
-  const known = new Set([...readFileSync(PROTOCOL, 'utf8').matchAll(TYPES)].map((m) => m[1]))
-  assert.ok(known.size >= 20, `协议层只抽出 ${known.size} 个类型字面量：抽法或结构变了`)
+  const known = extractTypes('协议层', readFileSync(PROTOCOL, 'utf8'))
 
   const sources = mpSources(MP_DIR)
   assert.ok(sources.length >= 5, `小程序自研 JS 只扫到 ${sources.length} 个`)
@@ -88,11 +116,14 @@ test('小程序引用的每个载荷类型，协议层都真的定义了（否�
 })
 
 test('协议层的每个载荷类型都被小程序引用过（新增 ev.* 却忘了写渲染分支 = 界面上永远不出现）', () => {
-  const known = new Set([...readFileSync(PROTOCOL, 'utf8').matchAll(TYPES)].map((m) => m[1]))
+  // ⚠️ 这一条原来**没有**自检，而它是两条里弱的那条：`known` 抽空时
+  // `unused` 必为空 ⇒ 恒绿。现在两条共用 extractTypes。
+  const known = extractTypes('协议层', readFileSync(PROTOCOL, 'utf8'))
   const cited = new Set()
   for (const file of mpSources(MP_DIR)) {
     for (const m of readFileSync(file, 'utf8').matchAll(TYPES)) cited.add(m[1])
   }
+  assert.ok(cited.size >= 20, `小程序只引用了 ${cited.size} 个载荷类型：抽法或结构变了`)
   const unused = [...known].filter((t) => !cited.has(t)).sort()
   assert.deepEqual(
     unused,
@@ -140,11 +171,90 @@ test('附件条数上限在三处是同一个数（协议层 / 小程序 / 主�
   }
   assert.equal(Number(mpMax[1]), protocolMax, '小程序的 MAX_ATTACH 与协议层不一致')
 
-  const hostMax = /const maxCount = options\.maxCount \?\? (\d+)/.exec(uploads)
-  assert.ok(hostMax, 'uploads.ts 里找不到 maxCount 的默认值')
-  assert.equal(
-    Number(hostMax[1]),
-    protocolMax,
-    `主机侧的 maxCount 默认 ${hostMax[1]} 与协议层 ${protocolMax} 不一致：超出的那几条会被静默拒收`,
+  // 主机侧自 2026-10-17 起也**引用常量**了（`uploads.ts` 从 `dsh-remote-wire/limits`
+  // import `MAX_FILE_ATTACHMENTS`），所以这里从"比对字面量"改成"两条都接受"：
+  //   ① 引用常量 —— 最好的形态，那个数在这条路上**没有第二个定义点**；
+  //   ② 仍是字面量 —— 只在它**恰好等于**协议层的值时接受（小程序引不了这个包，
+  //      它必须走这一条）。
+  //
+  // ⚠️ 判据放松的代价必须说清：① 这条路上一改协议常量主机侧自动跟着变，
+  // 而② 那种形态需要人肉同步。**所以 ② 单独留一条 warn 级判据**（下面），
+  // 别让"这条闸允许字面量"变成"没人再管主机侧那个数字了"。
+  const usesConstant = /maxCount = options\.maxCount \?\? MAX_FILE_ATTACHMENTS/.test(uploads)
+  if (!usesConstant) {
+    const hostMax = /const maxCount = options\.maxCount \?\? (\d+)/.exec(uploads)
+    assert.ok(
+      hostMax,
+      'uploads.ts 里既没引用 MAX_FILE_ATTACHMENTS，也找不到 maxCount 的字面量默认值：' +
+        '主机侧的附件条数上限必须来自 wire/limits.ts 的常量（与协议层同源），不能各写一个数',
+    )
+    assert.equal(
+      Number(hostMax[1]),
+      protocolMax,
+      `主机侧的 maxCount 默认 ${hostMax[1]} 与协议层 ${protocolMax} 不一致：超出的那几条会被静默拒收`,
+    )
+  }
+})
+
+test('主机侧的附件上限必须**引用** wire/limits.ts，而不是自己写一个数（不再允许字面量）', async () => {
+  // 上一条判据为了兼容小程序那种"引不了这个包"的形态，允许主机侧留字面量。
+  // 这一条把那条口子**只对主机侧**关上：它引得了这个包（它就在依赖图里），
+  // 所以留字面量只有一个理由——懒得改，而那正是四个数字漂移的起因。
+  const { MAX_FILE_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES } = await importWireLimits()
+  const uploads = read('dsh-remote-control', 'packages', 'plugin', 'src', 'shell', 'uploads.ts')
+  const config = read('dsh-remote-control', 'packages', 'plugin', 'src', 'shell', 'config.ts')
+  const runtime = read('dsh-remote-control', 'packages', 'plugin', 'src', 'core', 'runtime.ts')
+
+  // ① 三处默认值的**来源**必须是常量名。
+  assert.match(
+    uploads,
+    /maxCount = options\.maxCount \?\? MAX_FILE_ATTACHMENTS/,
+    `主机侧的文件条数上限必须引用 MAX_FILE_ATTACHMENTS（=${MAX_FILE_ATTACHMENTS}）`,
   )
+  assert.match(
+    uploads,
+    /maxBytes = options\.maxBytesPerFile \?\? MAX_ATTACHMENT_BYTES/,
+    `主机侧的单文件上限必须引用 MAX_ATTACHMENT_BYTES（=${MAX_ATTACHMENT_BYTES}）`,
+  )
+  assert.match(
+    config,
+    /maxFileBytes: MAX_ATTACHMENT_BYTES/,
+    'config.ts 的 maxFileBytes 默认值必须引用 MAX_ATTACHMENT_BYTES',
+  )
+  assert.match(runtime, /maxFileBytes: MAX_ATTACHMENT_BYTES/, 'runtime.ts 的 maxFileBytes 默认值同上')
+
+  // ② 反向判据：这三个文件里**不许再出现**附件上限的字面量。
+  // 只查 `512 * 1024` 这个形状——它就是历史上那四处漂移的共同写法。
+  for (const [name, text] of [
+    ['uploads.ts', uploads],
+    ['config.ts', config],
+    ['runtime.ts', runtime],
+  ]) {
+    assert.ok(
+      !/512 \* 1024/.test(text),
+      `${name} 里还有 512 * 1024 字面量：它必须引用 wire/limits.ts 的 MAX_ATTACHMENT_BYTES` +
+        `（=${MAX_ATTACHMENT_BYTES}）或 MAX_ATTACHMENT_TOTAL_BYTES（=${MAX_ATTACHMENT_TOTAL_BYTES}）`,
+    )
+  }
+  // ③ 反向判据：别把"转出"写成"又抄一遍"。uploads.ts 保留
+  // `MAX_ATTACH_TOTAL_BYTES` 这个名字是为了不破坏既有 import，
+  // 它必须是**转出**协议层而不是自己定义。
+  assert.ok(
+    !/^export const MAX_ATTACH_TOTAL_BYTES = /m.test(uploads),
+    'uploads.ts 的 MAX_ATTACH_TOTAL_BYTES 必须是从 wire/limits 的**转出**，不是自己的定义',
+  )
+  // ⚠️ 判据必须认**正确**的那两种形状。`export { A as B } from 'wire/limits'`
+  // 看着最像"转出"，但它**不在本地产生 B 的绑定** —— 于是本文件里
+  // `saveFileAttachments` 用的 `MAX_ATTACH_TOTAL_BYTES` 会是未定义（编译期红）。
+  // 真正能用的两种：本地 const 别名 + 纯转出，或直接 import 时 `as` 改名。
+  // 这条判据的作用是"哪天有人把上面那行改回 from 形式，闸门立刻报出来"——
+  // 那种改动的症状是编译报错，而它在**别的**文件里，与改动点不同处。
+  const hasLocalAlias = /const MAX_ATTACH_TOTAL_BYTES = MAX_ATTACHMENT_TOTAL_BYTES/.test(uploads)
+  const hasImportAlias = /MAX_ATTACHMENT_TOTAL_BYTES as MAX_ATTACH_TOTAL_BYTES/.test(uploads)
+  assert.ok(
+    hasLocalAlias || hasImportAlias,
+    'uploads.ts 必须有一个**本地可见**的 MAX_ATTACH_TOTAL_BYTES 绑定：' +
+      '`export { A as B } from ...` 只改导出侧的名字，本地用 B 会是未定义',
+  )
+  assert.match(uploads, /export \{ MAX_ATTACH_TOTAL_BYTES \}|export const MAX_ATTACH_TOTAL_BYTES/, '对外仍要导出这个名字（config.ts / runtime.ts 从这里 import）')
 })

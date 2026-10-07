@@ -2113,51 +2113,19 @@ test('wxml：加号一个入口管两样，没有旁边的第二个按钮', () =
   // 回显里同样只说项数（不画缩略图是已定的界面决定）。
   assert.match(wxml, /附件 \{\{item\.images\.length\}\} 项/, '回显里也说附件项数')
 })
+/* ── 长按复制那三条在本文件里曾经有**两份逐字相同**的副本（2026-10-07 删掉第二份）──
+ * ────────────────────────────────────────────────────────────────
+ * 留着它不犯法，但它把 `pnpm gates` 报的"项数"灌了 3 —— 而那个数是
+ * README 与 gates 逐格比对的锚点，也就是本项目用来发现
+ * 「加了判据忘了改文档」的唯一机制。灌水的项数让那个机制变钝。
+ *
+ * 删的时候**症状是判据仍然全绿**：逐字相同的两份测的是同一件事，
+ * 所以少一份不会让任何东西变红。这就是「重复的判据比没有判据更糟」——
+ * 它不占位也不报错，只是悄悄让一个数字失去意义。
+ */
 
 
 
-
-
-
-test('长按复制：助手回复同样能复制（markdown 原文）', () => {
-  const p = makePage()
-  globalThis.__drcClipboard = undefined
-  const md = '## 结论\n\n**问题**在第三行'
-  p.onCopyMessage({ currentTarget: { dataset: { text: md } } })
-  assert.equal(globalThis.__drcClipboard, md, '复制的是模型原文，不是渲染后的版本')
-})
-
-
-test('长按复制：空文本不动作（不许用空串覆盖用户已复制的东西）', () => {
-  const p = makePage()
-  globalThis.__drcClipboard = '用户之前复制的'
-  p.onCopyMessage({ currentTarget: { dataset: { text: '' } } })
-  assert.equal(globalThis.__drcClipboard, '用户之前复制的', '空文本不许碰剪贴板')
-  // 连 dataset 都没有（没绑 data-text 的节点）也不能炸
-  p.onCopyMessage({ currentTarget: { dataset: {} } })
-  p.onCopyMessage({})
-  assert.equal(globalThis.__drcClipboard, '用户之前复制的')
-})
-
-
-test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑', () => {
-  const { readFileSync } = require('node:fs')
-  const wxml = fs.readFileSync(
-    path.join(ROOT, 'dsh-remote-mp/miniprogram/pages/chat/chat.wxml'),
-    'utf8',
-  )
-  // 两处绑定：user 与 text
-  const binds = wxml.match(/bindlongpress="onCopyMessage"/g) || []
-  assert.equal(binds.length, 2, '只该有两处：用户气泡 + 回复气泡')
-  // 步骤组那一行：不许出现 onCopyMessage（用户明说 steps 不用）
-  const stepsLine = wxml
-    .split(String.fromCharCode(10))
-    .find((l) => l.includes("class=\"steps\"") && l.includes('wx:if'))
-  assert.ok(stepsLine, '夹具自检：步骤组的渲染行没找到')
-  assert.ok(!stepsLine.includes('onCopyMessage'), '步骤组不许绑复制')
-  // data-text 必须跟着绑（没有它两手都空）
-  assert.equal((wxml.match(/data-text="\{\{item\.text\}\}"/g) || []).length, 2)
-})
 
 
 
@@ -2201,6 +2169,14 @@ test('wxml：只给用户气泡与回复气泡绑长按复制，步骤组不绑'
   // data-text 必须跟着绑（没有它两手都空）
   assert.equal((wxml.match(/data-text="\{\{item\.text\}\}"/g) || []).length, 2)
 })
+
+
+
+
+
+
+
+
 
 
 /* ── 加号弹选择：图片 / 文件（2026-10-05 用户：文件要放在加号里面） ────── */
@@ -3611,4 +3587,20 @@ test('回归：审批与提问走的是同一条补拉路——两种卡都不�
   goOnline()
   p._onEvent({ kind: 'status', status: 'online' })
   assert.equal(pulled.length, 2, '审批与提问共用这条补拉路，它断了就是两种卡一起丢')
+})
+
+test('本文件里不许有两条**逐字同题**的判据（灌水的项数比没有判据更糟）', () => {
+  // 2026-10-07 删掉过 3 条：长按复制那三组在本文件里有两份逐字相同的副本。
+  // 留着不犯法，但它把 `pnpm gates` 报的"项数"灌了 3 —— 而那个数是
+  // README 与 gates 逐格比对的锚点，也就是本项目发现
+  // 「加了判据忘了改文档」的唯一机制。灌水的项数让那个机制变钝。
+  //
+  // 而删的时候**症状是判据仍然全绿**：逐字相同的两份测的是同一件事，
+  // 所以少一份不会让任何东西变红。这就是「重复的判据比没有判据更糟」——
+  // 它不占位也不报错，只是悄悄让一个数字失去意义。
+  //
+  // 所以这条判据的作用是"让下一次复制粘贴立刻变红"，而它自己必须机械。
+  const titles = [...fs.readFileSync(new URL(import.meta.url), 'utf8').matchAll(/^test\('([^']+)'/gm)].map((m) => m[1])
+  const dup = [...new Set(titles.filter((t, i) => titles.indexOf(t) !== i))].sort()
+  assert.deepEqual(dup, [], `这些判据标题在本文件里出现了不止一次：${dup.join(' / ')}`)
 })

@@ -46,10 +46,50 @@ test('README 与 HOST-SIDE 说的宿主路由条数，与 pill/routes.ts 里注�
   // 两份文档都用 `/pairing/new` 这样的**缩写**（全路径太长，缩写更好读），所以判据按
   // 尾段比；两份都至少要提到每一条，否则"四条"里的某条在说明书上是不存在的。
   const hostSide = read('docs', 'HOST-SIDE.md')
+  // ⚠️ 缩写匹配（`'README'.includes('/status')`）**比看起来弱得多**：
+  // `/status` 这种两三个字符的尾段在任何文档里都可能出现（实测 README 与
+  // HOST-SIDE 的正文、表格、curl 示例里都有），所以"文档提到了它"这件事
+  // 几乎恒真 —— 它证明不了"这一条路由被写进了说明书"。
+  //
+  // 收紧成**带前缀的完整形态**：文档里写全路径（`/plugins/dsh-remote-control/xxx`）
+  // 或者至少写成 `dsh-remote-control/xxx`。这两种写法在原文里都出现过，
+  // 而 `/status` 那种裸尾段一个都不算数。
+  //
+  // 判据同时接受两种形态，是为了不把"文档可以写缩写"这条设计意图判死：
+  // 真正要防的是"这个尾段在某处偶然出现"。
+  //
+  // 两份文档的**约定写法**是「方法动词 + 尾段」：`POST …/pairing/new`、
+  // `GET /status`。所以判据要求这个形态，而**不是**裸的 `/status` ——
+  // 后者在任何文档里都可能出现（散文、curl 示例、路径前缀），实测它让
+  // 「这一条路由被写进了说明书」这件事几乎恒真。
+  //
+  // 接受三种形态（都带方法动词或前缀）：完整路径、`dsh-remote-control/xxx`、
+  // 裸尾段但**前面 12 个字符里有 GET/POST**。第三种正是两份文档现在用的。
+  const mentions = (doc, route) => {
+    const suffix = route.replace('/plugins/dsh-remote-control', '')
+    if (doc.includes(route)) return true
+    if (doc.includes(`dsh-remote-control${suffix}`)) return true
+    for (let i = 0; ; ) {
+      const at = doc.indexOf(suffix, i)
+      if (at < 0) return false
+      const before = doc.slice(Math.max(0, at - 12), at)
+      if (/\b(GET|POST|PUT|DELETE)\b/.test(before)) return true
+      i = at + 1
+    }
+  }
   for (const route of declared) {
     const suffix = route.replace('/plugins/dsh-remote-control', '')
-    assert.ok(README.includes(suffix), `README 少了路由 ${suffix}：§「配对与使用」第 1 条是配对入口的唯一说明书`)
-    assert.ok(hostSide.includes(suffix), `docs/HOST-SIDE.md 少了路由 ${suffix}：§6「路由的真机取证」是照着 curl 的那一份`)
+    assert.ok(
+      mentions(README, route),
+      `README 少了路由 ${suffix}：要找「${route}」、'dsh-remote-control${suffix}'，` +
+        '或者前面带 GET/POST 的裸尾段（两份文档的约定写法）。' +
+        '§「配对与使用」第 1 条是配对入口的唯一说明书',
+    )
+    assert.ok(
+      mentions(hostSide, route),
+      `docs/HOST-SIDE.md 少了路由 ${suffix}：要找「${route}」、'dsh-remote-control${suffix}'，` +
+        '或者前面带 GET/POST 的裸尾段。§6「路由的真机取证」是照着 curl 的那一份',
+    )
   }
   // 条数不能少算。这条曾经长期写着"3 条"：`/unpair` 是 2026-10-05 加的，
   // 补进了正文却没补这里的计数（见 HOST-SIDE §6 那条订正注记）。
