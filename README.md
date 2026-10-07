@@ -175,7 +175,7 @@ env -u NODE_OPTIONS pnpm gates        # = node scripts/report-gates.mjs
 
 | 判据 | 守住什么 |
 |---|---|
-| `e2e/readme-claims.test.mjs` | README 与 `docs/PRODUCT.md`：四条宿主路由的条数与路径、`/healthz` 落盘五字段、mp `check` 链上的每一道闸都被点名、本地全链路步数、「文档」小节的链接、四份文档的表格没有残缺行；`docs/SECURITY.md` 的每一条代码引用都指向真实文件；PRODUCT.md 不把**已实现**的事留在「明确不做/待办」里 |
+| `e2e/readme-claims.test.mjs` | README 与 `docs/PRODUCT.md`：四条宿主路由的条数与路径、`/healthz` 落盘五字段、mp `check` 链上的每一道闸都被点名、本地全链路步数、「文档」小节的链接、四份文档的表格没有残缺行；`docs/SECURITY.md` 的每一条代码引用都指向真实文件；PRODUCT.md 不把**已实现**的事留在「明确不做/待办」里；以及 `scripts/` 与 `e2e/` 下每个 `.mjs` 都能被 `node --check` 解析、README 提到的每个 `scripts/*.mjs` 都真的存在（这些开发工具一行判据都没有，坏掉要等到有人真的需要它那天） |
 | `e2e/wire-surface.test.mjs` | 小程序引用的每个 `ev.*` / `cmd.*` 在协议层都存在，且协议层的每个都被小程序引用过——分发是一条**没有 else** 的 if 链，失配的表现是「什么都不发生」；以及附件条数上限在协议层 / 小程序 / 主机三处是同一个数（各写一遍的 `4`，没有任何东西连着） |
 | `e2e/frame-budget.test.mjs` | 生产端三处体积预算（mp 附件顶格 / 一帧流式增量 / 一整页历史）与中继那条 1 MiB 硬帧上限的关系，用**真实 `seal()`** 量而不是公式估；以及 mp 发送前的帧闸必须装得下附件能产出的最坏帧 |
 | `e2e/host-config-docs.test.mjs` | `docs/HOST-SIDE.md` 配置表与 `shell/config.ts` 逐项对齐：表里的键代码里存在、代码里的键表里点名、`DRC_*` 双向对得上——插件配置是"写了不报错、不告警、不生效"那一类 |
