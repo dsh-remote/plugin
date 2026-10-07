@@ -1,11 +1,12 @@
-| dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.16** | 已发 npm。⚠️ 含**未评审**的握手面改造（`hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` / negotiate…，见 §0.10.16 待办 3） |
-| dsh-remote-control/（单包） | **2.0.15** | 已发 npm（`latest`）。发布物精确钉 `dsh-remote-wire@2.0.14`；**工作树里那笔改钉 2.0.16 还没提交**（待办 1） |
-| dsh-remote-server/ | **2.0.15** | 仓里已到 2.0.15（可靠性加固 + 容器化，见 §0.10.17）；**线上跑的还是 `1.0.0-rc.1`**（2026-10-06 17:18 那次切换之后没再动过）；**没有 tag、没有 GitHub Release**；不发 npm（包名被第三方占） |
-| dsh-remote-mp/ | **2.0.16** | 待上传 |
+| dsh-remote-protocol/（包名 dsh-remote-wire） | **2.0.16** | 已发 npm，且已在 `main` 上（不再是 wip 分支）。含 SPEC.md + 六个新模块；**握手面改造仍未评审**（§0.10.18 待办 C） |
+| dsh-remote-control/（单包） | **2.0.16** | npm 上最新是 **2.0.15**；2.0.16（改钉 + 版本号）**已提交、未发版**（§0.10.18 待办 A） |
+| dsh-remote-server/ | **2.0.16** | 仓里已到 2.0.16（可靠性加固 + 容器化，见 §0.10.17；随后又有一笔把 wire 钉跟到 2.0.16）；**线上跑的还是 `1.0.0-rc.1`**（2026-10-06 17:18 那次切换之后没再动过）；**没有 `v2.0.16` tag、没有 GitHub Release**；不发 npm（包名被第三方占） |
+| dsh-remote-mp/ | **2.0.16** | 已 tag；**待上传**。⚠️ 小程序侧的 `cmd.new_session` 仍不发 `workspace`（主机侧早已就绪） |
 
-> ⚠️ **四仓版本号现在不一致**（wire/mp 2.0.16、control/server 2.0.15）。
+> ⚠️ **四仓的 manifest 现在都是 2.0.16，但"发出去"的那半没跟上**：
+> npm 上 wire 是 2.0.16、control 是 **2.0.15**；tag 只有 protocol 与 mp 有。
 > `node scripts/next-version.mjs --check` 会因此报红 —— 那是**真的**，不是闸门坏了。
-> 收口方式见 §0.10.16 待办 1。
+> 收口方式见 §0.10.18 待办 A（四仓版本号本身**已对齐**，缺的是 tag 与发版）。
 
 > ⚠️ **为什么不是 1.0.1**：`dsh-remote-wire@1.0.1` **2025 年就发布过**（私有期编号），
 > npm 版本不可重用。`1.0.2`～`1.0.7`、`1.0.8`… 一直到 `1.9.0` 也基本都被占过。
@@ -67,14 +68,32 @@
 
 ### 待办（按优先级）
 
-1. **插件改钉 2.0.16 那笔未提交**（`packages/plugin/package.json` + `pnpm-lock.yaml`，
-   工作树里是 2.0.16，而 npm 上的 2.0.15 钉的是 2.0.14）。收口方式：
-   跑 `pnpm test` → 提交 → 决定要不要发 control 2.0.16（发的话四仓版本号重新一致，
-   同时也是把 wire 2.0.16 真正接进插件的唯一动作）。
-2. **四仓版本号不一致**（wire/mp 2.0.16、control/server 2.0.15）→ `next-version.mjs --check` 报红。
-   收口见待办 1。
+> ⚠️ **这几条在我写完之后的几分钟里又被推着走了一格**（另一路会话把四仓的 manifest
+> 全推到了 2.0.16）。下面按**当前**状态订正过。
+
+1. **插件 `2.0.16` 已提交、已绿、但没发出去 —— 这是最该先做的一步。**
+   `cbea2ee` 把钉改成 `dsh-remote-wire@2.0.16`、版本号 2.0.15 → 2.0.16，工作树干净，
+   `pnpm -r test` **490/490 绿**。剩下的只有"发"：
+   ```sh
+   cd dsh-remote-control && node ../scripts/next-version.mjs --check   # 先过闸门
+   cd packages/plugin && npm publish --provenance=false --access public
+   cd .. && git tag -a v2.0.16 -m 2.0.16 && git push origin v2.0.16
+   gh release create v2.0.16 --title 2.0.16 --notes "…"
+   ```
+   **注意 CHANGELOG 还缺 2.0.16 那一段**（`cbea2ee` 只改了版本号与钉）。
+   这一版的实际内容是"把 wire 从 2.0.14 接到 2.0.16"——而 wire 2.0.16 带的是
+   未评审的握手面改造，所以**发之前先看待办 3**：那两件事是同一件事的两面。
+2. **tag 缺两个、npm 差一格**（2026-10-07 傍晚实测）：
+   | | manifest | npm | tag |
+   |---|---|---|---|
+   | protocol / `dsh-remote-wire` | 2.0.16 | ✅ 2.0.16 | ✅ v2.0.16 |
+   | control / `dsh-remote-control` | 2.0.16 | ❌ 2.0.15 | ❌ 缺 |
+   | server | 2.0.16 | 不发（包名被占） | ❌ 缺（见 §0.10.17 待办 2） |
+   | mp | 2.0.16 | 不发 | ✅ v2.0.16 |
+   ⇒ `next-version.mjs --check` 现在会报 **control@2.0.16 不大于已发布的最大版本**。
+   那不是闸门坏了，是"改了版本号还没发"——**发完待办 1 它自然就绿了**。
 3. **协议 2.0.16 的握手面改造没有评审，也没有做三端兼容核对。**
-   `hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` 是**握手**改动：中继（线上 2.0.14）与
+   `hello.capabilities` / `MIN_SUPPORTED_PROTOCOL` 是**握手**改动：中继与
    小程序是否都容得下，**没人验过**。至少要跑一遍本地全链路 + 真机配对。
 4. **协议层新能力主机侧一个都没用**：`limits.ts`（预算常量单一来源——插件现在硬编码
    `MAX_ATTACH_TOTAL_BYTES` 等）、`registry.ts`、`classify.ts`、`errors.ts`（可重试判定）、
@@ -103,7 +122,87 @@
 | `shell/status.ts` 的刷新节拍 | 唯一没 `unref` 的定时器（`createOneShotTimers` 早就为此建了 `unrefTimer`） | GUI 宿主本来就长驻；headless 嵌入才受影响 |
 | `pill/routes.ts` 的 `pairImageHandler` catch | 可能二次 `writeHead`（失败发生在 `writeHead(200)` 之后时 `ERR_HTTP_HEADERS_SENT` 逃出） | 依赖宿主是否 `catch` 那个返回的 promise，本轮看不到 `webServer.register` 的调用方 |
 
-## 0.10.17 中继 2.0.15：可靠性加固 + 容器化（2026-10-07 下午）—— 含**没做完的部署**
+## 0.10.18 协议层落地、四仓口径收口（2026-10-07 晚）—— 含**遗留清单**
+
+§0.10.16 把一份协议层改造**扣在 `wip/protocol-negotiation` 上等评审**（理由：
+协议是所有消费方共同依赖的那一份，没评审不该发）。本轮把它接回 `main`、发出去、
+把两个消费仓的钉对齐，并把过程中丢掉的东西补回来。
+
+### 做了什么
+
+| # | 事 | 落点 |
+|---|---|---|
+| 1 | 协议改造从 `wip/protocol-negotiation` cherry-pick 回 `main` | `3d490c9`、`f4abb99` |
+| 2 | 版本号被迫跳到 **2.0.16**：`2.0.15` 已被占用，而那份里**没有**本次的任何东西（它是 2.0.14 的内容改了个号，被 tag 触发的 release workflow 自动发了出去） | `b7d0308` |
+| 3 | `wire@2.0.16` 已发 npm；**核对的是发布物**（解开 tarball 看 `dist/src/wire/` 下六个模块都在），不是假设 | npm |
+| 4 | 两个消费仓改钉 **→ 2.0.16** + 重跑 lockfile；`control` 490 条、`server` 163 过 1 skip，**与换钉前逐条一致** | `69d5d57`、`7844393` |
+| 5 | 四仓版本号对齐 2.0.16 | 四仓 `package.json` |
+| 6 | 伞仓 `e2e/wire-surface.test.mjs` 那条跨仓判据改成**比对导出的常量**——协议层不再内联 `.max(4)`，旧判据的正则抽不到东西（**这正是上一轮扣下改造的直接原因**） | `7da0945` |
+| 7 | 协议仓 `build`/`test` 补 `clean`（§0.10.16 待办 7）。**先造陷阱再修**：手写 `dist/tests/wire/ghost.test.js`，修前它会被跑到 | `481b5a7` |
+| 8 | `README.md` 命令速查块两处陈旧计数（107→152、464→490） | 伞仓 |
+
+`pnpm gates` 八格全 ✅（协议 152 / 中继 164 / 宿主 490 / 伞仓 334 / mp verify ok /
+markdown 35 / scroll 14 / 对比度 304），README 的项数与实测逐格一致。
+
+**server 那条钉此前落后一整个版本**：`1.0.0-rc.1` 是 2.0.14 **之前**那份
+（实测差的是 `cmd.new_session.workspace`，其余是声明顺序）。中继不解析载荷所以没坏，
+但下次协议改动只要碰到**中继会读的字段**（帧名、密文上限、error 码），
+它就会静默按老 schema 行为，而 `--frozen-lockfile` 不会说话。
+
+### 本轮的真话
+
+**A. 我的提交被外部会话 `git reset --hard` 掉过。** `git reflog` 的时间线：
+我提交 `f4cc19d`+`f026ce4` → 另一个会话 `reset: moving to 848ab89` →
+它提交 `f9daa6e`（版本号 → 2.0.15）+ `032f9b2`（订正"本次不发 npm"那句是错的）。
+**我这两笔从 `main` 上消失，但对象还在，`wip/protocol-negotiation` 指着它们**——
+所以本轮是 cherry-pick 回来的，不是重写的。同一轮我在伞仓改的 `wire-surface.test.mjs`
+因为**没提交**而直接丢了，只能重做。
+⇒ §0.2 的"改完立刻 commit"在这台机器上是硬要求；而"开工就建分支"救回了本该丢的两千多行。
+
+**B. 另一个会话做过一件对的事**：它拒绝在没评审时把协议发出去，并把理由连证据写进提交说明。
+本轮接管后**仍未评审**（待办 C），只是把"发不发"换成了"发出去之后把消费仓逐条跑一遍"。
+要说清楚：490 + 163 条全绿验证的是**"加性"这条承诺**，不是握手面的兼容性。两件事别混。
+
+### 遗留清单（下一个接手人从 **待办 D** 开始）
+
+| # | 待办 | 为什么 | 判据落点 |
+|---|---|---|---|
+| **A** | `control`/`server` 的 2.0.16 **没立 tag、没发版**（server 线上仍 `1.0.0-rc.1`） | 号对齐 ≠ 已发布；server 部署要用户定 | `next-version.mjs --check`、`/healthz` |
+| **B** | 三端兼容**没在真链路验过**：`e2e/run.mjs`（17 步）、`live-e2e.mjs`、真机配对都没在"三端都 2.0.16"上跑过 | `hello.capabilities` 是**握手面**字段。schema 里可选，但"中继收到带它的 hello 会怎么处理"只有真跑才知道 | `e2e/run.mjs`、`live-e2e.mjs` |
+| **C** | 协议 2.0.16 的握手面改造**仍未评审** | 已发 npm 却没人逐条读过。**先读 `dsh-remote-protocol/SPEC.md` 附录 D** 那 9 条 GAP | 人读 + `tests/wire/*` |
+| **D** | **三端改造一条都没做**：协议发了一整套能力，零个消费方在用 | 这是本次改造的目的，不是收尾 | 见下一张表 |
+| **E** | `docs/HOST-SIDE.md` 与新告警口径未对齐（`maxFileBytes` 会被夹回并告警、`statusFile` 相对路径会告警） | §0.10.16 待办 5，本轮没动 | `e2e/host-config-docs.test.mjs` |
+| **F** | 刻意未做：`ev.host_info`（能力/限额上报）、v2 消息棘轮（前向保密）、`dshr:` 未按 RFC 7595 注册 | `SPEC.md` §13.2 / §7.6 / §6.1.4 与附录 D 的 GAP-5/6/9 | —— |
+
+### 待办 D 展开：换什么、换成什么（`dsh-remote-wire@2.0.16` 已导出）
+
+| 端 | 该换的 | 换成 |
+|---|---|---|
+| 中继 | `src/server.ts:59-76` 手抄的 `KNOWN_FRAME_NAMES`、`:733-736` 的 `ciphertextsAreBase64`、`:634-708` 的七步分流 | `registry`（`FRAME_TYPES`/`isKnownFrameType`）+ `classifyEndpointFrame()`（返回 `unknown_frame` / `bad_frame` / `bad_ciphertext` / 两条配对特例；**错误码映射写在它的文件头**） |
+| 中继 | `CLIENT_ERROR_TEXT`（`:238-249`）里没有 `unsupported_protocol` | 补一句中文。规范 §12.3 E1：**发给 client 的错误必须带中文 message**，否则手机弹的是 `f.message \|\| f.code` 里的英文码 |
+| 中继 | `:469-475`、`:509` 两处手写 uplink 字面量（全仓唯一两条绕过构造器的出站帧） | `encToRelay` / `encBatchToRelay` |
+| 中继 | 限流 / 表满只回码、不带等待建议 | `makeError(code, message, retryAfterMs)`（规范 §12.2 E2） |
+| 宿主 | `transport/relay.ts:230,273,301,356,392,433,623` 七处手写控制帧（**只有入站帧过 schema**） | `helloForHost` / `pairBegin` / `encToRelay` / `sessionLeave` / `resync` / `ping`——返回 `EndpointFrame` 判别联合，参数表外的字段**类型上写不出来** |
+| 宿主 | 没有 `cmdId` 去重：手机 12 秒超时重发 → `cmd.send_prompt` 执行两次 | `IdempotencyLedger`（时钟注入的纯函数，规范 §10.2） |
+| 宿主 | `uploads.ts:55,114`、`config.ts:140,336` 四处各写一个 `512 * 1024`；`uploads.ts:113` 的 `?? 4` | `limits` 的 `MAX_ATTACHMENT_BYTES` / `MAX_ATTACHMENT_TOTAL_BYTES` / `MAX_IMAGE_ATTACHMENTS` |
+| 宿主 | 不在 `hello` 里报能力 | `capabilities: CapabilityId[]`（`registry` 注册表，§5.3 C1/C3） |
+| 小程序 | **协议面不用改**（全部加性） | `ev.host_info` 那类将来要双向接线：`e2e/wire-surface.test.mjs` 会**双向**拦——协议加了 `ev.*` 而小程序没引用就红 |
+| 小程序 | `cmd.new_session` 仍**不发** `workspace`（主机侧早已就绪，见 §0.10.4 第 4 步） | `client.newSession(workspace)` 透传 + `sessions.onNewSession` 默认带当前分组 + 「＋新建会话」长按选分组 | `e2e/mp-*.test.mjs` |
+
+### 已经做过、**别重做**的
+
+四仓版本号对齐；两个消费仓的改钉 + lockfile；伞仓 `wire-surface` 附件上限判据
+（已改成比对导出常量）；协议仓 `build`/`test` 的 `clean`（已造陷阱验证）；
+`README.md` 两处陈旧计数；`wire@2.0.16` 发布物核对。
+
+### 本轮判据
+
+协议 **152**（六个新模块带来 45 条，107 → 152；15 次变异全部变红，
+其中两条改写成**能编译**的形状重跑过一次——"变异要能编译，否则测的是上一个产物"）；
+宿主 **490**；中继 **163 过 1 skip**；伞仓 `wire-surface` 3 条；协议仓 `format:check` 绿；
+`pnpm gates` 八格全 ✅。
+
+## 0.10.17 中继 2.0.16：可靠性加固 + 容器化（2026-10-07 下午）—— 含**没做完的部署**
 
 三个并行子代理逐行读完 server 的 `src/`（约 2.4 千行），产出**逐条复现过**的缺陷；
 本仓判据 132 → **164 项（163 过 / 1 skip）**，新增两份判据文件。四次提交已推 `origin/main`：
@@ -150,14 +249,14 @@
    状态文件带过去了就不需要重扫。回滚：`docker compose down && systemctl start dsh-remote-control`。
    端口发布必须是 `127.0.0.1:8787:8787`，这样 nginx 那份 `drc.conf` **一行都不用改**。
 
-2. **发版。** server 的 `package.json` 已经是 **2.0.15**（由另一路会话提交，提交说明写明
-   「代码未变」），但**没有 tag、没有 GitHub Release**。`git tag v2.0.15 && git push origin v2.0.15`
+2. **发版。** server 的 `package.json` 已经是 **2.0.16**（由另一路会话提交，另有一笔 7844393 把 wire 钉从 1.0.0-rc.1 跟到 2.0.16；实测 **164 条判据在 2.0.16 上仍然全绿**）,
+   「代码未变」），但**没有 tag、没有 GitHub Release**。`git tag v2.0.16 && git push origin v2.0.16`
    会触发 `release.yml`（typecheck + format + `pnpm test` + 单文件产物 + SHA256SUMS）。
    中继仓**不发 npm**（包名被第三方占），所以推 tag 没有 §0.10.16 那张「tag 一推就发」的风险。
    但**推之前先确认四仓版本号口径**（见待办 3）。
 
-3. **四仓版本号不一致**（wire/mp 2.0.16、control/server 2.0.15）→ `next-version.mjs --check` 报红。
-   与 §0.10.16 待办 1/2 是**同一件事**，别分头收口。
+3. **版本号口径（实测）**：protocol / mp / server 都已在 2.0.16，且 server 的 wire 钉也已跟到 2.0.16（判据全绿）。**control 那一格要先去核实**：`package.json` 读出来是 `1.0.0-rc.1`，与 §0.10.16 说的 2.0.15 对不上，而它已经有 v2.0.14/v2.0.15 两个 tag。`next-version.mjs --check` 现在对 wire/mp 报「已发布过 / 不大于最大值」——那是**发版之后的预期行为**，不是闸门坏了。
+   与 §0.10.16 待办 1/2 相关，但口径已变，收口前先核一遍。
 
 4. **伞仓已同步、闸门已绿**：`96a87e1` 把 `deploy/docker/` 镜像到伞仓 `deploy/`，
    `e2e/deploy-sync.test.mjs` 从 2 份文件扩到 5 份，并新增「容器形态三条硬约束」那条；
