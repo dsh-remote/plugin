@@ -36,23 +36,25 @@
 PSK 从不上网；双方各自从 `(psk, 方向, convId)` 派生 `c2h`/`h2c` 两把密钥，手机用计数器 nonce
 （小程序没有 CSPRNG）。威胁模型与加固清单见 [`docs/SECURITY.md`](docs/SECURITY.md)。
 
-## 2. 当前状态（2026-10-07 晚实测）
+## 2. 当前状态（2026-10-08 07:20 实测）
 
-### 2.1 四仓口径 —— **manifest 都对齐了，发出去的那半没跟上**
+### 2.1 四仓口径 —— **四仓统一 2.0.21，tag / Release / npm 都齐了**
 
-| 仓 | manifest | 最新 tag | npm | 真正在跑的那份 |
-|---|---|---|---|---|
-| `dsh-remote-protocol` | 2.0.16 | ✅ `v2.0.16` | ✅ 2.0.16 | —— |
-| `dsh-remote-control` | 2.0.16 | ❌ 只到 `v2.0.15` | ❌ 2.0.15 | ⚠️ **profile 里装的是 2.0.14** |
-| `dsh-remote-server` | 2.0.16 | ❌ 只到 `v2.0.15` | 不发（包名被第三方占） | ✅ 线上容器 2.0.16 |
-| `dsh-remote-mp` | 2.0.16 | ✅ `v2.0.16` | 不发 | 见 §3.5，要人在微信后台确认 |
+| 仓 | manifest | tag | Release | npm | 真正在跑的那份 |
+|---|---|---|---|---|---|
+| `dsh-remote-protocol` | 2.0.21 | ✅ `v2.0.21` | ✅ | ✅ 2.0.21（**无 attestation**，见 §6） | —— |
+| `dsh-remote-control` | 2.0.21 | ✅ `v2.0.21` | ✅ | ✅ 2.0.21（同上） | ✅ **profile 里已是 2.0.21**（见 §2.3） |
+| `dsh-remote-server` | 2.0.21 | ✅ `v2.0.21` | ✅ | 不发（包名被第三方占） | ⚠️ **线上容器仍是 2.0.16，要升**（见 §3.1） |
+| `dsh-remote-mp` | 2.0.21 | ✅ `v2.0.21` | 不适用（无 release workflow） | 不发 | ⚠️ **尚未上传微信后台**，见 §3.5 |
 
-`node scripts/next-version.mjs --check` 现在会报 **wire@2.0.16 已发布过** 的红 —— **那是预期的**，
-不是闸门坏了（发过的号不可重用）。收口方式见 §3.2。
+`node scripts/next-version.mjs --check` 对 2.0.21 报**红**（"已发布过"）—— **那是预期的**，
+不是闸门坏了。下一个可用的号是 **2.0.22**（`node scripts/next-version.mjs` 会自己算）。
 
-> **版本号为什么是 2.0.16 而不是 1.0.1**：`dsh-remote-wire@1.0.1` 2025 年就发布过（私有期编号），
-> npm 版本不可重用；`1.0.2`…`1.9.0`、`2.0.0`…`2.0.13` 也基本都被占过。
+> **版本号为什么一路走到 2.0.21**：`dsh-remote-wire@1.0.1` 2025 年就发布过（私有期编号），
+> npm 版本不可重用；`1.0.2`…`1.9.0`、`2.0.0`…`2.0.20` 也基本都被占过。
 > 判据是「**大于**所有已发布版本，且两个包上都空着」。已固化成闸门 `next-version.mjs`。
+> 本轮 2.0.17–2.0.21 是同一批改动**分了五个号**——因为每加一个功能就要发一次 npm，
+> 而 npm 版本不可重用。**教训：把一批改动攒齐了一次发，比逐条发省号。**
 
 ### 2.2 线上中继（`wss://drc.provid.cc`，阿里云 cn-shanghai / ECS `47.100.82.15`）
 
@@ -67,155 +69,92 @@ PSK 从不上网；双方各自从 `(psk, 方向, convId)` 派生 `c2h`/`h2c` �
 
 ### 2.3 本机宿主（跑 DSH 的这台 Mac）
 
-- **⚠️ `~/.dsh/profiles/desktop` 里的插件是 2.0.14**（2026-10-07 12:33 装的）。
-  按 2.0.15 / 2.0.16 各自的独有标记核过：`client.cjs` 里没有 `visibilitychange`（墙钟倒计时那条修复），
-  `index.js` 里没有 `encToClient`、`backoffUntil`、`IdempotencyLedger`、`cmd.workspace`。
-  ⇒ **2.0.15 的八处修复与 2.0.16 的两处接线，在这台机器上一行都没生效**，而它们都已经在仓里、判据全绿。
-  补齐见 §3.1。
+- ✅ **profile 里已是 2.0.21**（2026-10-08 06:56 重启后验证）。判据不是"文件在"，
+  而是 `status.json` 的 `probe.applyCount`：**进程加载时刻 06:56:46 晚于 bundle
+  部署时刻 00:13** —— 这才是"新代码在跑"的证据。
+- 四个关键字段：`carrier=services` / `relay=online` / `pill.routes=registered` /
+  `problems=[]`。另外 `workspaceRegistry: true` 且内核侧 `archivedSessions: 55`
+  ⇒ 归档那条路在真机上有料可归档。
 - 主机身份 `hostId=drc-748e9a9ce167`（落在 `~/.dsh/dsh-remote-control/host-id`，0600）。
 - 排错第一入口是 `~/.dsh/dsh-remote-control/status.json`（GUI 宿主里 stdout 没人看）；
   字段含义与 pill 四条路由的写法见 [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) §5。
+- ⚠️ **重启在沙箱里不能用 osascript**：`tell application "DeepSeek Harness" to quit`
+  报**权限违例（-10004）**，`System Events` 同样。可行的替代：
+  `pgrep -f "DeepSeek Harness"` → `kill -TERM <主pid>` → 残留子进程 `kill -9`
+  → `open -a "DeepSeek Harness"`。**动手前先确认没有正在跑的活**
+  （`find ~/.dsh/sessions -mmin -10` 为空 + `status.json` 的 `approvalAsked: 0`）。
 
-### 2.4 闸门（本轮实测，全绿）
+### 2.4 闸门（2026-10-08 实测，全绿）
 
 | 闸门 | 命令 | 实测 |
 |---|---|---|
-| 协议层 | `cd dsh-remote-protocol && pnpm test` | 152 |
-| 中继 | `cd dsh-remote-server && pnpm test` | 178（1 skip） |
-| 宿主插件 | `cd dsh-remote-control && pnpm test` | 497 |
-| 伞仓 e2e | `node --test e2e/*.test.mjs` | 354 |
+| 协议层 | `cd dsh-remote-protocol && pnpm test` | 168 |
+| 中继 | `cd dsh-remote-server && pnpm test` | 197（1 skip） |
+| 宿主插件 | `cd dsh-remote-control && pnpm test` | 524 |
+| 伞仓 e2e | `node --test e2e/*.test.mjs` | 364 |
 | 小程序 | `npm --prefix dsh-remote-mp run check` | 五道闸全过：verify ok / md 35 / scroll 14 / theme / contrast 304 |
-| 本地全链路 | `node e2e/run.mjs` | 17 步，1.9s |
+| 本地全链路 | `node e2e/run.mjs` | 17 步，1.8s |
 | 版本闸 | `node scripts/next-version.mjs --check` | 发版前必须绿；发版后对当前号报红是预期 |
 
 `env -u NODE_OPTIONS pnpm gates` 会把上表跑一遍并与 [`README.md`](README.md) 的「项数」逐格比对，对不上 exit 1。
 **加了判据就跑它**，照着表改 README 里两处数字。
 
+⚠️ **`pnpm gates` 不查代码格式，而 CI 查**（`format:check` 排在 `test` 之前）。
+2026-10-08 这一轮四个仓的 Release workflow 全部在 20~40 秒就红在这一步，
+而本机 gates 全绿。**发版前在每个 Node 仓额外跑一次 `pnpm format:check`。**
+
 ## 3. 待办（真的还没做的）
 
-### 3.1 把 2.0.16 装进 profile 并重启 Harness —— **文件已装好，只差重启**
+> **2026-10-08 重写**：上一版的 §3.1–§3.4 已全部落地（见 §2 的实测），
+> §3.7 已实现。下面只留**还要人做**或**还要机器做**的。
 
-**已装（2026-10-07 22:24）**：`pkg=2.0.16`，并逐个核过 2.0.16 独有的标记——
-`handleInvalidCommand`（本轮 §5-9 的修）、`IdempotencyLedger`、`encToClient`、
-`cmd.workspace` 都在 `index.js` 里；`visibilitychange`（2.0.15 那条墙钟倒计时修）在
-**浏览器面** `client.cjs` 里。装之前 profile 里是 **2.0.14**，这些标记一个都没有。
+### 3.1 升线上的中继容器（唯一还差"部署"的一件事）
 
-⚠️ **装的时候必须给绝对路径的 `DSH_PROFILE`**（见 §6 的环境坑：这个 shell 里它是个裸的
-`desktop`，不给的话脚本直接 `profile not found: desktop` 退出）。
+线上跑的是 **2.0.16**，而代码已经是 2.0.21。本轮改了中继代码
+（七步分流委托 classify + 四个缺陷），所以**要重新构建并换版**：
 
 ```sh
-env -u NODE_OPTIONS DSH_PROFILE="$HOME/.dsh/profiles/desktop" \
-  ./dsh-remote-control/scripts/install-to-profile.sh      # 可重复跑（幂等）
-
-osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 8; open -a "DeepSeek Harness"
+ssh root@47.100.82.15
+cd /opt/dsh-remote-control/dsh-remote-server/deploy/docker
+git pull                      # 或 scp 那份 deploy/docker
+docker compose up -d --build  # build 在起新容器之前完成，中断只有 recreate 那一下
+curl -s https://drc.provid.cc/healthz | grep -o '"version":"[^"]*"'   # 变了才算成
 ```
 
-**重启必须由人来做**：插件跑在 DSH 进程里，从进程内部触发重启等于当场掐掉正在跑的会话
-（历史在盘上不丢，但那一轮会中断）。HMR 只热更 `cordis.patch.yml` 的配置，**不会重新
-`import` dist**；浏览器面同理，要重新加载页面才会重拉 `client.cjs`。
+- **唯一的回滚动作是 `docker compose restart`**（裸机 systemd 那条路已退役）。
+- ⚠️ 换版会**断一次手机通道**（主机侧会自己重连，见 `relay.ts` 的退避）；
+  断线期间手机在聊天页会转圈，属正常。
+- ⚠️ 本轮中继有一处**行为变化**值得留意：`pingBucketCount` 现在被夹到 ≤1024
+  （默认 12，不受影响）；`pair-fail` 多了 `pairingToken` 字段，**更老的主机插件
+  会 strip 掉它**——所以先升中继是安全的（向后兼容），反过来不行。
 
-重启后核 `~/.dsh/dsh-remote-control/status.json` 四个字段：
-`carrier=services` / `relay=online` / `pill.routes=registered` / `problems=[]`。
+### 3.2 把 mp 2.0.21 上传微信后台并选为体验版
 
-### 3.2 发版收口（外部动作，要人定）
+```sh
+cd dsh-remote-mp && node scripts/mp-upload.mjs
+```
 
-| 仓 | 缺什么 | 命令要点 |
-|---|---|---|
-| `dsh-remote-control` | 2.0.16 没发 npm、没 tag | 先跑 `next-version.mjs --check`；`npm publish --provenance=false --access public`；再 `git tag -a v2.0.16 && git push origin v2.0.16`；`gh release create` |
-| `dsh-remote-server` | 2.0.16 没 tag、没 Release（代码未变） | `git tag v2.0.16 && git push origin v2.0.16`（不发 npm） |
+⚠️ 传上去只是"开发版本"，**还要两步脚本替不了的**：
+① 微信公众平台「版本管理 → 开发版本 → **选为体验版**」；
+② 「成员管理」里加体验成员。
+在这两步做完之前，手机上那个 2.0.16 体验版**看不到本轮的归档功能**。
 
-⚠️ **两个仓的 `.github/workflows/release.yml` 在 push tag 时会自动 `npm publish`。**
-本仓的"先评审、后发版"**不是默认成立的**：tag 一推就发。**评审必须在推 tag 之前做完。**
-（2.0.15 那次推 tag 时已经吃过一次这个亏。）
-另外两条实测踩过的坑：本地发 npm 要显式 `--provenance=false`（否则 `EUSAGE: provenance not supported`）；
-**发版命令必须写绝对路径**——命令里的 `cd` 不跨调用生效，误跑会落在伞仓（private）上报 `EPRIVATE`。
+### 3.3 真机复验（要真人 + 真机，e2e 覆盖不了）
 
-### 3.3 三端把协议层的新能力接上（此前记作「待办 D 的剩余部分」）
-
-`dsh-remote-wire@2.0.16` 导出的一整套「规范的可执行部分」，目前**只有两处有消费方**
-（中继的版本闸、宿主的 `cmdId` 去重）。剩下的每一行都是「同一个知识在两个地方各写一遍」：
-
-| 端 | 现在是什么 | 该换成 |
-|---|---|---|
-| 中继 | `KNOWN_FRAME_NAMES` 手抄一份（`src/server.ts:88-105`，只在 `:993` 用） | `registry` 的 `FRAME_TYPES` / `isKnownFrameType` |
-| 中继 | 七步分流内联在 `:948-1005` | `classifyEndpointFrame()`（reason → 错误码的映射写在它文件头） |
-| 中继 | 自带 `ciphertextsAreBase64`（`:1044-1048`） | `classify` 的同名导出 |
-| 中继 | 两条手拼上行帧 `:659-665`（`enc`）、`:699`（`enc-batch`） | `encToRelay` / `encBatchToRelay`。⚠️ **`encToRelay` 没有 `clientId` 参数**，要么扩参数要么留字面量并写清为什么 |
-| 中继 | 限流只回码，不带等待建议；`CLIENT_ERROR_TEXT` 里也不可能出现 `retryAfterMs` | `makeError(code, message, retryAfterMs)`（规范 §12.2 E2），与 `errors.wantsRetryAfter` 对齐 |
-| 中继 | `/api/info` 的 `protocol: 1` 是字面量（`:1253`） | 已 import 的 `PROTOCOL_VERSION` |
-| 宿主 | **五个地方各写一个 `512 * 1024`**（`shell/uploads.ts:55,114`、`shell/config.ts:141,360`、`core/runtime.ts:137`），外加一个 `?? 4`（`shell/uploads.ts:113`） | `limits` 的 `MAX_ATTACHMENT_BYTES` / `MAX_ATTACHMENT_TOTAL_BYTES` / `MAX_IMAGE_ATTACHMENTS` |
-| 宿主 | 七处手写控制帧（`transport/relay.ts:244,287,406,453,494,690`）；`protocol: 1` 也是字面量（`:247`） | `helloForHost` / `pairBegin` / `sessionLeave` / `resync` / `ping`——参数表外的字段**类型上写不出来**，顺手消掉那个字面量 |
-| 宿主 | `hello` 里不报能力 | `capabilities: CapabilityId[]`（`registry` 的注册表，规范 §5.3 C1/C3） |
-| 宿主 | `error` 帧只记日志，不按码分支 | `isRetryableError` / `wantsRetryAfter`（现在只对 `rate_limited` 有反应） |
-| 小程序 | **协议面不用改**（全部加性） | —— |
-
-⚠️ 协议包里两处**注释里的行号已经过期**（`registry.ts:9` 指 `server.ts:59-76`，实际 88-105；
-`classify.ts:6-10` 指 `:634-708` 与 `:733-736`，实际 `:926-1012` 与 `:1044-1048`）。接线时顺手订正。
-
-### 3.4 文档与现网口径对齐
-
-| 文档 | 哪里不对 | 实测是什么 |
-|---|---|---|
-| [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) | `statusFile`（:114）与 `maxFileBytes`（:118）两行**没写**新的告警口径 | `shell/config.ts` 现在会对相对路径发 `warn:statusFile`、对超预算的 `maxFileBytes` 发 `warn:maxFileBytes` 并夹回。配置是"写了不报错、不告警、不生效"那一类，表里少一句就是一个没人知道的开关 |
-| [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) | :18 写产物 `index.js 1242 KB / client.cjs 18 KB` | 实测 **1333 KB / 29 KB**（1.1.0 时代的值） |
-| [`README.md`](README.md) | :60「线上 v1.0.6，rc1 已发布待切」 | 线上是容器 **2.0.16** |
-| [`README.md`](README.md) | :63「四仓统一用同一个版本号（当前 `2.0.14`）」 | **2.0.16** |
-| [`docs/PRODUCT.md`](docs/PRODUCT.md) | :92「rc1 已上传为开发版本」 | mp 已到 2.0.16 |
-
-`pnpm gates` **抓不到上面这些**：它只锚 8 个"项数"格子。改完这几处顺手把 `docs/EXPANSION-PLAN.md` 的
-P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
-
-### 3.5 真机复验（要真人 + 真机，e2e 覆盖不了）
-
-1. **`node e2e/live-e2e.mjs`** 三端真链路（三个真实：真小程序代码 + 真线上中继 + 真内核）。
-   ⚠️ **它会把你自己手机上那条通道当场踢掉**（主机策略是「只允许一台」，新设备一进来就作废其余），
-   而且没有任何提示说这是被脚本踢的——要重扫一次码才能恢复。跑之前先确认那台手机此刻不需要连着。
+1. **`node e2e/live-e2e.mjs`** 三端真链路（真小程序代码 + 真线上中继 + 真内核）。
+   ⚠️ **它会把你自己手机上那条通道当场踢掉**（主机策略是「只允许一台」，
+   新设备一进来就作废其余），而且**没有任何提示说这是被脚本踢的**——
+   要重扫一次码才能恢复。跑之前先确认那台手机此刻不需要连着。
    `--rounds 3` 每轮独立取一张新码；`--unpair` 才会收掉测试自己那条（默认不收）。
-2. `unpair` 后 pill 从「手机离线」变「未配对」，且**不许**要求重新扫码（真机复验遗留项）。
-3. 审批卡闭环（提问闭环已在真机上过过一轮）。
-4. 手机选图 → 发送 → 模型真的看见图（图片附件那条链**只在代码上审过，没上过真机**）。
+2. **归档 / 取消归档**（本轮新功能，唯一没上过真机的路径）：
+   主机侧 `workspaceRegistry: true` 且内核侧有 55 条已归档会话，所以有料可归档。
+   要验的三件事：① 归档一条空闲会话 → 它从列表消失、归档区 +1；
+   ② 归档一条**正在跑**的会话 → 必须被明确拒绝（那句"会话正在运行，不能归档"
+   要原样弹出来，**主机上那个任务不许被停掉**）；
+   ③ 取消归档 → 它回到主列表。
+3. `unpair` 后 pill 从「手机离线」变「未配对」，且**不许**要求重新扫码。
+4. 审批卡闭环（提问闭环已在真机上过过一轮）。
 5. 长会话正文不再卡在 1MB 帧闸门。
-6. **mp 选为体验版**：`node scripts/mp-upload.mjs` 传开发版本后，还要在微信公众平台
-   「版本管理 → 开发版本 → 选为体验版」，再在「成员管理」里加体验成员。**这两步脚本替不了。**
-   ⚠️ `dsh-remote-mp` 仓里 `v2.0.16` tag **不含**「新建会话落进指定分组」那笔
-   （提交 `a989513` 在 tag 之后，`CHANGELOG.md` 记在 `[未发布]`）——后台上传的到底是哪一份，
-   **要在微信后台对一次**，别照 tag 推断。
-
-### 3.6 刻意不做（写下来是为了不用每次重新吵）
-
-`ev.host_info`（能力/限额上报，规范 §13.2 / 附录 D·GAP-5）、v2 消息棘轮（前向保密，§7.6）、
-`dshr:` 按 RFC 7595 注册（§6.1.4 / GAP-9）。
-
-### 3.7 小程序归档会话：**可行性已调研，未实现**（2026-10-07）
-
-结论：**可行，没有硬阻塞**——缺的全是胶水。四层各自缺什么：
-
-| 层 | 现状 | 要补的 |
-|---|---|---|
-| 协议 | 9 条 `cmd.*` 里**没有**归档相关的；`SESSION_STATES` 里却有 `'archived'` | 加 `cmd.archive_session`（⚠️ 名字只能小写下划线：wire-surface 那道闸的正则不认驼峰），进 `PAYLOAD_TYPES` + `registry.CMD_TYPES` |
-| 宿主 | `KernelPort` **没有** archive 方法；载体只有 `ensureRunnable` → `unarchiveSession`（"发指令前自动恢复"那条路） | 端口加 `archiveSession?()`，carrier 探 `workspaceRegistry.archiveSession`，`runtime` 加一个 `case`，发完补推一次列表（本端**不监听** `workspace/changes`，那条在 `unmappedEventTypes` 里） |
-| 内核 | **能力是存在的**：`dsh-workspace` 有 `archiveSession(sessionId, options)` / `unarchiveSession` / `archivedSessionIds`（app.asar 里 `archiveSession` 出现 164 次） | —— |
-| 小程序 | 列表**收到过** archived 行但**直接丢掉**（`sessions.js:391-394`，底部只显示"已隐藏 N 个归档会话"）；每行只有 `bindtap`，**没有**行内长按入口 | 停止丢弃（或给一个"已归档"分组）+ 一个行内入口（现成的 `wx.showActionSheet` 路子，不用新增 wxml 结构，因此不会碰 UI/对比度两道闸） |
-
-三个**真要注意**的：
-
-1. **内核会拒收活跃会话**：`archiveSession` 在会话还在跑时抛 `WorkspaceActiveSessionError`，
-   除非传 `stopActivity:true` —— 而那会**停掉主机上正在跑的工作**，与"插件不改变宿主自己的
-   行为"这条纪律直接冲突。所以默认应当**明确报"会话正在运行，不能归档"**，`stopActivity`
-   要么留给显式选项，要么不做。
-2. **老主机的表现取决于 §5-9 那条修**：宿主从前对不认识的载荷**只记日志**（现在会按 `cmdId`
-   回一条明说原因的执）。小程序**完全不看能力面**，所以不接能力协商的话，在更老的主机上
-   就是 12 秒后一句「主机没有回应」。补法是用协议已有的 `hello.capabilities`
-   （`registry.CAPABILITY_IDS` 里本来就留着 `drc.payload.*` 那一排位置）。
-3. **产品前提要先翻过来**：[`docs/PRODUCT.md`](docs/PRODUCT.md) §4 明写「删除/归档仍不做」，
-   §6 也把"会改掉主机项目结构"排除在 30 秒原则之外。**做之前先改那份文档**——
-   否则就是拿一条"明确不做"当待办做掉，而这份文档回答的是"我们凭什么还存在"。
-
-**零知识不受影响**：载荷照旧走 `enc`；中继连 payload 都不 import（它只认 `frames`/`ids`/
-`negotiate`/`outbound`），新增一条命令对它不可见。
-
-**估量**（最小的"归档 + 取消归档"，不含界面打磨）：协议 1 文件 + 2 判据；宿主 5 文件 + 2 判据；
-小程序 3–4 文件 + 2 判据；再加 `pnpm gates` 的计数刷新与 mp 的 `check`。**没有必须先做的前置。**
 
 ## 4. 已经判定不做 / **别重做的**（结论留着，别再逐条审一遍）
 
@@ -280,6 +219,41 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 - **夹具自己先发过帧时，"发出去没有"要按差值判**：`justPaired()` 在 `_onPaired` 末尾就
   发过一条 `cmd.list_sessions`，断言写死 `frames.length === 1` 会撞上它。
 
+## 5.5 2026-10-08 全库 review 的结论（15 条，全修完并钉了判据）
+
+> 这一节记的是**"审过、修过、不用再查"**，与 §4（判定不做）和 §5（上一轮）同性质。
+> 逐条细节在四仓 `CHANGELOG.md` 的 2.0.21 段。
+
+**全部是"注释承诺了 X，代码做的是 Y"，而症状一律静默。** 每一条都配了
+可变异验证的判据（把实现改回旧行为，判据必须变红）。
+
+| # | 缺陷 | 症状 |
+|---|---|---|
+| 1 | 插件 `settledReplies` 无界增长 | 注释说"与台账同生共死"，实现只问台账"我自己那一个键还在不在"。实测 900 条命令后台账 256、回执表 900（每条 `list_sessions` 的回执带最多 100 条会话摘要） |
+| 2 | 插件：一条坏落盘记录带崩插件 | 注释说"整条丢弃"，实现直接 `open()`。调用点不在 try 内 ⇒ **无 status.json、无 pill、配对链路全无** |
+| 3 | 插件：越界时刻停更 status.json | `toISOString` 在时刻绝对值 > 8.64e15 ms 时抛，而它在**构造快照**的路径上，外面包着一个（正确的）空 catch ⇒ 唯一排错入口永久停更 |
+| 4 | 插件：误伤一张有效的配对码 | `pair-fail` 原先不带 token，主机只能作废"当前展示的那张"。多码并存时作废错的那张 → 那条通道的 PSK 没了 |
+| 5 | 中继：ping 桶数没有上界 | `Array.from({length})` 是照单分配。interval=MAX_SAFE_INTEGER → RangeError，而 **loadConfig 报 0 条 problem**（异常在 createRelay 里）⇒ 照文档调 tick 就启动即崩 |
+| 6 | 中继：观测面计数只增不减 | 每收一个 hello 就 +1、close 只 −1，而 re-hello 是设计内行为 ⇒ "当前没有对端"永久失效 |
+| 7 | 中继：re-hello 留下幽灵成员 | `clientGone` 刻意不动成员表（D3），但换身份时旧 id 永不回来 ⇒ **sweepEmpty（30 分钟回收空会话）完全失效** |
+| 8 | 中继：「配对表满」逐帧写日志 | 绕过本文件自己建的三道闩锁。400 个 pair-begin = 400 行 journald |
+| 9 | 中继：`portNumber` 漏了"只认十进制字面量" | `DRC_PORT=0x22` → 34，三种写法都 0 条 problem |
+| 10 | mp：「＋新建会话」每次都发 `[object Object]` | `bindtap` 把**事件对象**当第一个实参 ⇒ 三级兜底永远走不到。`String({})` 不是空串所以照发 |
+| 11 | mp：退避被打回零 | `onShow` 里 `else { connect() }`，而 connect 会造一个退避重置为 0 的新 socket ⇒ 指数退避永远顶格 1s |
+| 12 | mp：needs-pair 没归零 | 只清 3 个字段，其中 2 个已经不再被写 |
+| 13 | 判据：一条恒绿的占位断言 | `assert.match(wxml, /x/ === null ? /x/ : /x/, '占位')` —— 正则永不为 null，对任何文本都通过 |
+| 14 | 判据：两条方向相反的判据会**同时**恒绿 | 抽字抽空时 `unknown` 与 `unused` 都必为空，而第二条**没有**兜底 |
+| 15 | 判据：三条判据有两份逐字副本 | 把 `pnpm gates` 的项数灌了 3 —— 而那是发现"忘了改文档"的唯一机制 |
+
+### 这一轮顺手记下两条**判据纪律**（与 §5 那两条同族）
+
+- **`String(fn)` 会丢掉参数名**：想从已加载的函数反查签名会拿到
+  `function () { … }`，正则取到的"第一参"是 `function`，一次产出 17 个假阳性。
+  要读**源码文本**。
+- **变异必须能编译**：`if (a && !b)` 改成 `if (true)` 时 `else if` 变成不可达分支，
+  **tsc 直接红、判据根本没跑**——看起来像"变异没被抓到"，实际是它压根没执行。
+  与 §6「判据红了先查判据」同族：先确认变异**跑起来了**。
+
 ## 6. 环境坑与硬纪律
 
 - **所有 pnpm/node 命令带 `env -u NODE_OPTIONS`**：Qoder CLI 会往子 shell 注入一个 `--require` 的 CJS 代理，
@@ -296,6 +270,21 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 - 装/查/打包固定走 **Node 22**（pnpm 11 要 22.13+）；`node --test` 跑的是 `dist`，**先 build**
   （插件的 build 第一步就是 `clean`）。`e2e/run.mjs` 启动时会做 **src↔dist 新鲜度闸门**：
   任一 `.ts` 比它的 `dist/src/*.js` 新就直接红并打印该跑哪条 build——**闸门只报错，不替你 build**。
+- ⚠️ **`pnpm gates` 不查代码格式，而 CI 查** —— 而且 `format:check` 排在 `test`
+  **之前**。2026-10-08 四个仓的 Release workflow 全部在 20~40 秒就红在这一步
+  （本机 gates 全绿），其中 `dsh-remote-protocol/src/wire/negotiate.ts` 的缩进错位
+  来自**更早的提交**，也就是说 main 上已经红了一段时间。
+  **发版前在每个 Node 仓额外跑 `env -u NODE_OPTIONS pnpm format:check`。**
+- ⚠️ **本机发的 npm 包没有 attestation** ⇒ 两个发 npm 的仓会在
+  "Verify provenance landed" 那步红，**而它排在 `Create GitHub Release` 之前**
+  ⇒ Release 建不出来（publish 那步是幂等的，所以它绿、然后 provenance 红、Release 缺失）。
+  恢复路径：`gh release create v2.0.21 --generate-notes --verify-tag` 手工补。
+  2026-10-08 已手工补了 wire 与 control 两个。
+- ⚠️ **在沙箱里重启 Harness 不能用 osascript**：`tell application "DeepSeek Harness" to quit`
+  报权限违例（-10004），`System Events` 同样。可行替代：
+  `pgrep -f "DeepSeek Harness"` → `kill -TERM <主pid>` → 残留子进程 `kill -9`
+  → `open -a "DeepSeek Harness"`。**动手前先确认没有正在跑的活**
+  （`find ~/.dsh/sessions -mmin -10` 为空 + `status.json` 的 `approvalAsked: 0`）。
 - **判据红了先查判据，再查实现。** 变异验证必须**作用在被测的那段逻辑上**且**能编译**——
   否则测的是上一个产物（真的发生过：`pnpm build` 失败、判据却全绿）。
   **"把修复整段删掉它照样绿"说明这条判据是假的**，比没有判据更糟。
@@ -319,6 +308,11 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 env -u NODE_OPTIONS pnpm -C dsh-remote-control test          # 宿主插件（含 build）
 env -u NODE_OPTIONS pnpm -C dsh-remote-server test           # 中继
 env -u NODE_OPTIONS pnpm -C dsh-remote-protocol test         # 协议层
+
+# ⚠️ 发版前额外跑这一条：CI 查格式而 pnpm gates 不查，且它排在 test 之前
+env -u NODE_OPTIONS pnpm -C dsh-remote-protocol format:check
+env -u NODE_OPTIONS pnpm -C dsh-remote-server format:check
+env -u NODE_OPTIONS pnpm -C dsh-remote-control format:check
 npm --prefix dsh-remote-mp run check                         # 小程序五道闸
 env -u NODE_OPTIONS pnpm gates                               # 全部闸门各跑一遍 + README 逐格比对
 env -u NODE_OPTIONS node e2e/run.mjs                         # 本地全链路 17 步
@@ -333,7 +327,10 @@ node scripts/mp-shots.mjs --pages sessions                   # 截图验收
 # 本机开发：起本地中继 / 装插件
 ./dsh-remote-server/scripts/relay-start.sh                   # 127.0.0.1:8787，token 复用 profile 里那份
 ./dsh-remote-server/scripts/relay-start.sh --bundle          # 跑单文件产物（与生产形态一致）
-./dsh-remote-control/scripts/install-to-profile.sh           # 构建 + 装进 profile（装完必须重启 Harness）
+DSH_PROFILE="$HOME/.dsh/profiles/desktop" \
+  ./dsh-remote-control/scripts/install-to-profile.sh      # 构建 + 装进 profile（装完必须重启 Harness）
+# 重启（⚠️ 沙箱里 osascript 会吃 -10004，见 §6 那条）：
+#   pgrep -f "DeepSeek Harness" → kill -TERM <主pid> → 残留子进程 kill -9 → open -a "DeepSeek Harness"
 
 # 线上中继：容器形态（部署手册在 dsh-remote-server/deploy/docker/README.md）
 ssh root@47.100.82.15

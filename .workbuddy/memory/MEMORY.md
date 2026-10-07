@@ -182,9 +182,65 @@ TDesign 裁剪清单与验证）全部见 skill `dsh-mp-ui-dev`**，那里是唯
 - 用户侧三步：重启 Harness / mp 选体验版 / 手机重扫。
 - todo v1 只上实时帧（不进历史回放）；微信扫码直达用户说先不改（URL Link 方案已存档）。
 
-## current release state (updated 2026-10-05 02:00)
+## 2026-10-08 收口之后（三条会反复踩的）
 
-- npm: dsh-remote-wire 1.5.0 (historyItem widened with ev.todo), dsh-remote-control 2.0.5 (adding: pairing QR countdown + no dead code while the relay is offline). Restart Harness is REQUIRED -- the running bundle is still old (pill version 2.0.0), the liveness probe from 2.0.4 is not live and the host goes half-open every ~10 minutes..
-- relay 1.0.4 in production (unchanged this round, docs only); mp 1.1.4 uploaded (todo history replay).
-- user side: restart Harness / pick mp 1.1.4 as trial build / phone re-scan once.
-- 19 Dependabot PRs all merged; TS 7.x typechecks clean in all four repos.
+### 1. 发版前必跑 `pnpm format:check`，它比 test 更早红
+
+CI 的顺序是 `typecheck → format:check → test`，而 **format 排在 test 之前** ——
+所以一个纯缩进的错会让整个 Release workflow 在 20~40 秒就红掉，
+**连 npm 那一步都没走到**，而本机 `pnpm gates` 是绿的（它不查格式）。
+
+2026-10-08 这一轮四个仓的 Release 全部栽在这上面，其中
+`dsh-remote-protocol/src/wire/negotiate.ts` 的缩进错位来自**更早的 a0d644a**，
+不是本轮引入 —— 也就是说 main 上已经红了一段时间。
+**发版前在每个 Node 仓跑一次 `env -u NODE_OPTIONS pnpm format:check`。**
+
+### 2. 本机发的 npm 包没有 attestation ⇒ Release 建不出来
+
+两个发 npm 的仓（wire / control）的 workflow 顺序是
+`publish → Verify provenance landed → Create GitHub Release`，
+而本机 `npm publish --provenance=false` **拿不到 OIDC** ⇒
+`/attestations/<pkg>@<ver>` 永远是 `{"error":"Not found"}`
+⇒ 第二步红 ⇒ **第三步的 GitHub Release 整个没跑**。
+
+publish 那一步是幂等的（版本已在注册表就跳过），所以它绿、
+然后 provenance 那步红、Release 缺失。恢复路径（workflow 注释里写着）：
+`gh release create v2.0.21 --generate-notes --verify-tag` 手工补。
+2026-10-08 已手工补了 wire 与 control 两个。
+
+### 3. 「重启动 Harness」在沙箱里 osascript 会吃 -10004
+
+`osascript -e 'tell application "DeepSeek Harness" to quit'` 报**权限违例**，
+`System Events` 同样。可行的替代：`pgrep -f "DeepSeek Harness"` 拿 pid →
+`kill -TERM <主pid>` → 残留子进程 `kill -9` → `open -a "DeepSeek Harness"`。
+**动手前先确认没有正在跑的活**（`find ~/.dsh/sessions -mmin -10` 为空 +
+`status.json` 的 `approvalAsked: 0`），否则会打断用户手上的工作。
+
+## 当前发布状态（2026-10-08 07:15 更新）
+
+- **四仓统一 2.0.21**，全部 tag + Release 已推（wire / server / control / mp）。
+- npm：`dsh-remote-wire@2.0.21` ✅、`dsh-remote-control@2.0.21` ✅
+  （**两者都无 attestation**，原因见上面第 2 条）。
+- 中继容器：线上仍是 **2.0.16**（`docker compose up -d --build` 可升，代码未变
+  的话只需重启；本轮改了中继代码，**要升**）。
+- 宿主插件：2.0.21 已装进 profile 并重启验证过
+  （`applyCount` 证明加载时刻晚于部署时刻；`workspaceRegistry: true`、
+  内核侧 55 条已归档会话 ⇒ 归档那条路在真机上有料）。
+- mp 2.0.21 **尚未上传微信后台**——`node scripts/mp-upload.mjs` 传开发版本后
+  还要在公众平台「版本管理 → 开发版本 → 选为体验版」+「成员管理」加体验成员，
+  **这两步脚本替不了**。
+- 伞仓 remote 已加（私有 aliyun codeup，不开源）；伞仓 HEAD 领先 origin/master。
+
+## 2026-10-08 新增的跨仓约定
+
+- **`cmd.archive_session` 刻意没有 `stopActivity`**：内核在会话还在跑时抛
+  `WorkspaceActiveSessionError`，除非传 `stopActivity: true` —— 而那会**停掉主机上
+  正在跑的工作**。规范 A1 要求 host 明确拒绝。判据记的是**完整实参列表**而不是
+  只记 id（只记 id 就看不见多出来的第二个参数）。
+- **配对码的 `pair-fail` 带 `pairingToken`（可选）**：多码并存时主机必须只作废
+  **真正失败的那张**，而不是"当前展示的那张"。而形状不合的 `pair-begin-client`
+  **刻意不带** —— 那一帧的 token 不可信，发错就是误伤一张有效的码。
+- **幂等台账新增 `takeEvicted()`**：台账自己有界，而**并着的**那张表（宿主侧缓存
+  每条命令的 `ev.result` 以便重发重放）不会自动收缩。遍历整表对齐是 O(n) 每条
+  命令，而 n 正是要解决的问题 —— 正确形状是**台账报告自己淘汰了谁**。
+
