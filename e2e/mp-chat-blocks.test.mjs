@@ -2922,7 +2922,15 @@ test('重连成功拉一次挂起卡（断链期间挂上的那一帧已经过�
   }
   p._wasOffline = true
   p._onEvent({ kind: 'status', status: 'online' })
-  assert.deepEqual(pulled, [p.data.sessionId], '重连后必须重新问一次')
+  // ⚠️ 断言的是「**至少**拉了一次」，不是「恰好一次」：补拉现在挂在**每一次**连上，
+  // 不再挂在 `_wasOffline` 那个条件下（否则"打开会话时手机本来就离线"会漏掉它，
+  // 用户 2026-10-07 实测）。同一条指令拉两遍没有副作用——主机没有挂起时只回 ok。
+  assert.ok(pulled.length >= 1, '重连后必须重新问一次')
+  assert.ok(
+    pulled.every((id) => id === p.data.sessionId),
+    `补拉必须带本会话 id（实际 ${JSON.stringify(pulled)}）`,
+  )
+  assert.equal(p._wasOffline, false, '夹具自检：曾经断过这个标志要复位')
 })
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3540,4 +3548,67 @@ test('放宽只放行"附件说明"这一种：ok / okay 这种前缀关系不�
   assert.equal(users.length, 2, '「ok」与「okay」被认成同一条了：确认错一条的代价是另一条永远留在"未确认"上')
   assert.equal(users[0].confirmed, false, '「ok」不该被标成已确认')
   assert.equal(users[1].confirmed, true)
+})
+
+/**
+ * 回归（用户 2026-10-07 实测）：**手机离线时进会话，挂起的提问/审批就再也拿不到了。**
+ *
+ * 原来的判据（进会话拉一次 / 重连成功拉一次）都把 client 换成"永远发得出去"的桩，
+ * 所以它们守的是"调到了没有"，守不住"**调的时候在线吗**"。
+ *
+ * 真实链路里 `client.sendCmd()` 只检查 `isPaired()` 与 `this.sock` 存不存在，
+ * **不检查 socket 是否真的开着**——所以离线时 `getPending` 不报错、不抛，
+ * 只是那一条指令被 `sock.send()` 静默丢掉了（返回 false，而调用点是 fire-and-forget）。
+ *
+ * 而补拉那一趟挂在 `evt.status === 'online' && this._wasOffline` 这个条件下，
+ * `_wasOffline` 只由**页面挂上之后**收到的 'connecting' / 'idle' 状态事件置真。
+ * 于是"我打开会话时手机本来就是离线的"这件事**页��看不见**：随后连上、
+ * status 变成 'online'，但 `_wasOffline` 仍是 false → 整段补拉被跳过 →
+ * 那张卡永远不出现。用户只能"当时人在会话里"才看得到。
+ *
+ * 审批走的是同一条路（同一份 `pending`、同一个 `cmd.get_pending`、同一个补拉点），
+ * 所以这两条判据同时锁住两种卡。
+ */
+function offlineClientRig() {
+  const p = readyAtBottom()
+  stubClient(p, () => Promise.resolve(null))
+  const pulled = []
+  let online = false
+  // 忠实复刻真实 client 的静默丢弃：离线时 `sendCmd` 走到 `sock.send()` 失败，
+  // 不抛不提示，只是这一条没出去。
+  p.client.getPending = (sessionId) => {
+    pulled.push(sessionId)
+    return online
+  }
+  p.client.status = 'idle'
+  return { p, pulled, goOnline: () => { online = true } }
+}
+
+test('回归：进会话时手机**本来就不在线** —— 连上后必须补拉一次挂起卡', () => {
+  const { p, pulled, goOnline } = offlineClientRig()
+
+  p.onShow()
+  assert.deepEqual(pulled, [p.data.sessionId], '夹具自检：进会话确实问了一次（这一条在离线时被丢掉了）')
+  assert.equal(p._wasOffline, false, '夹具自检：页面挂上之后没收到过 connecting/idle 事件，所以这个标志是 false —— 这正是漏掉补拉的那一步')
+
+  // 手机连上了。
+  goOnline()
+  p._onEvent({ kind: 'status', status: 'online' })
+
+  assert.equal(
+    pulled.length,
+    2,
+    '连上之后没有补拉：那一次静默丢掉的拉取就这么没了，挂着的提问/审批永远不出现' +
+      '（用户 2026-10-07 实测：当时不在会话里或手机离线，就再也看不到那张卡）',
+  )
+})
+
+test('回归：审批与提问走的是同一条补拉路——两种卡都不能丢', () => {
+  // `cmd.get_pending` 回的是主机 `pending` 表里的**全部**挂起项，两种卡都在里面；
+  // 所以只要补拉发生，审批与提问是一起回来的。这里锁的是"补拉发生"这件事本身。
+  const { p, pulled, goOnline } = offlineClientRig()
+  p.onShow()
+  goOnline()
+  p._onEvent({ kind: 'status', status: 'online' })
+  assert.equal(pulled.length, 2, '审批与提问共用这条补拉路，它断了就是两种卡一起丢')
 })
