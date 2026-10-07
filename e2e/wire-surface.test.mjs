@@ -40,6 +40,9 @@ function mpSources(dir, out = []) {
 
 const TYPES = /'(ev\.[a-z_]+|cmd\.[a-z_]+)'/g
 
+/** 按仓内相对路径读一个文件。 */
+const read = (...parts) => readFileSync(path.join(ROOT, ...parts), 'utf8')
+
 test('小程序引用的每个载荷类型，协议层都真的定义了（否则它落在链尾，什么都不发生）', () => {
   assert.ok(existsSync(MP_DIR), `找不到 ${MP_DIR}：e2e 需要四棵平行仓在场`)
   assert.ok(existsSync(PROTOCOL), `找不到 ${PROTOCOL}`)
@@ -80,5 +83,43 @@ test('协议层的每个载荷类型都被小程序引用过（新增 ev.* 却�
     [],
     `协议层定义了这些类型，小程序却从不引用：${unused.join(', ')}。` +
       '主机发了它们，手机端没有任何分支认领——主机侧看起来一切正常',
+  )
+})
+test('附件条数上限在三处是同一个数（协议层 / 小程序 / 主机），不是各写一个 4', () => {
+  // mp 的 `sendPrompt` 注释写着"两类的条数上限都是 4（协议层同一个数）"，
+  // 而那个"同一个数"在三个仓里各写了一遍：协议层两个 `.max(4)`、小程序 `MAX_ATTACH`
+  // 加两处 `slice(0, 4)`、主机侧 `maxCount ?? 4`。
+  // 四个 4 之间没有任何东西连着——改一处不会有编译错误、不会有测试变红，
+  // 而症状是"带了 5 个，第 5 个静默消失"或者主机侧拒收。
+  const payloads = read('dsh-remote-protocol', 'src', 'wire', 'payloads.ts')
+  const chat = read('dsh-remote-mp', 'miniprogram', 'pages', 'chat', 'chat.js')
+  const client = read('dsh-remote-mp', 'miniprogram', 'core', 'client.js')
+  const uploads = read('dsh-remote-control', 'packages', 'plugin', 'src', 'shell', 'uploads.ts')
+
+  const protocolImages = /images:\s*z\.array\(imageAttachment\)\.max\((\d+)\)/.exec(payloads)
+  const protocolFiles = /files:\s*z\.array\(fileAttachment\)\.max\((\d+)\)/.exec(payloads)
+  assert.ok(protocolImages && protocolFiles, '协议层里找不到 images/files 的 max(...)：抽法或结构变了')
+  assert.equal(
+    protocolImages[1],
+    protocolFiles[1],
+    `协议层自己就不一致：images ${protocolImages[1]} / files ${protocolFiles[1]}。` +
+      '两类附件在 mp 侧走同一个 MAX_ATTACH，上限必须相同',
+  )
+
+  const mpMax = /var MAX_ATTACH = (\d+)/.exec(chat)
+  assert.ok(mpMax, 'chat.js 里找不到 MAX_ATTACH')
+  const slices = [...client.matchAll(/\.slice\(0, (\d+)\)\.map\(/g)].map((m) => Number(m[1]))
+  assert.ok(slices.length >= 2, `client.js 里只抽到 ${slices.length} 处 slice(0, N)：images/files 两处应当都在`)
+  for (const n of slices) {
+    assert.equal(n, Number(protocolImages[1]), `小程序的 slice(0, ${n}) 与协议层 max(${protocolImages[1]}) 不一致`)
+  }
+  assert.equal(Number(mpMax[1]), Number(protocolImages[1]), '小程序的 MAX_ATTACH 与协议层不一致')
+
+  const hostMax = /const maxCount = options\.maxCount \?\? (\d+)/.exec(uploads)
+  assert.ok(hostMax, 'uploads.ts 里找不到 maxCount 的默认值')
+  assert.equal(
+    Number(hostMax[1]),
+    Number(protocolImages[1]),
+    `主机侧的 maxCount 默认 ${hostMax[1]} 与协议层 ${protocolImages[1]} 不一致：超出的那几条会被静默拒收`,
   )
 })
