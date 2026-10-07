@@ -62,6 +62,21 @@ globalThis.wx = {
 beforeEach(() => {
   storage.clear()
   toasts.length = 0
+  /**
+   * **把真存储装回去**。
+   *
+   * 「装能力受限宿主」那两条用例（A1/A2）用的是 `installHost`，它把 `globalThis.wx`
+   * **整个**换成一份 `baseWx`，而 `baseWx.getStorageSync` 是 `() => ''` 的桩。
+   * 那在那条用例里完全正确（它要模拟"老基础库"），可它是全局替换：从那以后每一条
+   * **读配对记录**的用例都会读到空。
+   *
+   * 症状极具误导性：`isPaired()` 为 false 看着"正好"，而真正失败的那句
+   * （`statusText 必须说清是钥匙坏了`）落在一条几条用例之前造成的空存储上。
+   * 这与本文件头记的「全局状态必须归一」是同一条 —— 修在装置里，别去改小程序仓。
+   */
+  globalThis.wx.getStorageSync = (k) => (storage.has(k) ? storage.get(k) : '')
+  globalThis.wx.setStorageSync = (k, v) => storage.set(k, v)
+  globalThis.wx.removeStorageSync = (k) => storage.delete(k)
 })
 
 /**
@@ -785,4 +800,245 @@ test('【W4】长按选分组：只列这一页见过的非空工作区，且没
   none.onNewSessionLongPress()
   assert.equal(sheets2.length, 0, '一个工作区都没有时弹了一个空列表 —— 那比不弹更像坏了')
   assert.match(toasts.join('|'), /工作区/, `必须说清为什么没有可选项，实际：${JSON.stringify(toasts)}`)
+})
+
+// ══════════════════════════════════════════════════════════════════════
+// 十一、HANDOFF §5「已知未修」的收口（2026-10-07 第二轮）：静默 → 必须有回声
+//
+// 编号沿用 HANDOFF §5 的那一栏，两边对着读。这一组全都是同一族缺陷：
+// **能失败、但没人知道它失败了**——所以每条都配一个反向判据，
+// 免得把修法写成"一律拒绝 / 一律不报成功"。
+// ══════════════════════════════════════════════════════════════════════
+
+test('【§5-4】socket 底层不在时 sendCmd 必须返回 false 并说清楚（不是静默丢帧）', () => {
+  // `socket.send()` 在 `_task === null`（重连退避窗口）时返回 false 而**不抛**，
+  // 而 `sendCmd` 原来只在"没配对/没 socket/nonce 落不了盘"三档报错 —— 这一档一条都不报。
+  const broken = justPaired()
+  broken.c.sock = { send: () => false, close: () => {} }
+  const errors = []
+  broken.c.on((e) => {
+    if (e.kind === 'error') errors.push(String(e.message))
+  })
+  const sent = broken.c.sendCmd({ t: 'cmd.interrupt', cmdId: broken.c.newCmdId(), sessionId: 'ses_x' })
+  assert.equal(sent, false, '必须如实返回失败（调用方要靠它决定要不要报成功）')
+  assert.equal(errors.length, 1, '这一档必须留下痕迹：`interrupt`/`answer`/`resolve_permission` 全都不看返回值')
+  assert.match(errors[0], /没有发出去/, `要说清"没发出去"，实际：${JSON.stringify(errors)}`)
+
+  // 反向判据：socket 正常时不许误报 —— 否则这条修会把每次发送都变成一次噪声。
+  const healthy = justPaired('c_healthy')
+  const healthyErrors = []
+  healthy.c.on((e) => {
+    if (e.kind === 'error') healthyErrors.push(String(e.message))
+  })
+  // ⚠️ `justPaired` 自己就发过一条 `cmd.list_sessions`（`_onPaired` 末尾那句），
+  // 所以这里必须**按差值**断言，写死 `1` 会撞上那一条。
+  const before = healthy.frames.length
+  assert.equal(
+    healthy.c.sendCmd({ t: 'cmd.interrupt', cmdId: healthy.c.newCmdId(), sessionId: 'ses_x' }),
+    true,
+    '反向：正常路径必须仍然发得出去',
+  )
+  assert.equal(healthyErrors.length, 0, '反向：正常路径不许凭空报错')
+  assert.equal(healthy.frames.length, before + 1, '反向：正常路径的帧必须真的上网')
+})
+
+test('【§5-13】收到带 retryAfterMs 的限流：窗口内不许再发，且**不许消耗 nonce**', () => {
+  const { c, frames } = justPaired()
+  const errors = []
+  c.on((e) => {
+    if (e.kind === 'error') errors.push(String(e.message))
+  })
+  const counterBefore = c._resume.nonceCounter
+  // ⚠️ `justPaired` 自己就发过一条 `cmd.list_sessions`，所以"没上网"要按**差值**判。
+  const baseline = frames.length
+  // 中继现在会带这个字段（`dsh-remote-server` 同轮接的线）——从前这一端只 toast 掉，
+  // 收到一个精确的毫秒数却照旧立刻重试，与不发没有区别。
+  c._onFrame(JSON.stringify({ t: 'error', code: 'rate_limited', retryAfterMs: 60_000 }))
+
+  const sent = c.sendCmd({ t: 'cmd.list_sessions', cmdId: c.newCmdId() })
+  assert.equal(sent, false, '退避窗口内必须先拒绝')
+  assert.equal(frames.length, baseline, '窗口内一条都不许上网（发过去也只是再被拒一次）')
+  assert.equal(
+    c._resume.nonceCounter,
+    counterBefore,
+    '退避中的命令不许消耗 nonce —— 它本来就发不出去，往前推只是白白丢一个数',
+  )
+  assert.match(errors.join(' | '), /限流/, `要给出"还要等多久"：${JSON.stringify(errors)}`)
+
+  // 反向判据：窗口一过（或新连接）必须照常发，否则闸就写成了"一律拒绝"。
+  c._rateLimitedUntil = 0
+  assert.equal(c.sendCmd({ t: 'cmd.list_sessions', cmdId: c.newCmdId() }), true, '反向：窗口过了必须放行')
+  assert.equal(frames.length, baseline + 1, '反向：放行的那一帧要真的上网')
+})
+
+test('【§5-8】nonce 计数器坏掉的配对记录必须被丢弃（静默的密钥流复用）', () => {
+  const good = {
+    server: RELAY,
+    psk: TEST_PSK,
+    convId: 'c_counter_ok',
+    hostId: 'h1',
+    nonceCounter: 0,
+    pairedAt: 1,
+  }
+  const { nonceCounter: _drop, ...withoutCounter } = good
+  const cases = [
+    ['字符串', { ...good, nonceCounter: '12' }],
+    ['小数', { ...good, nonceCounter: 1.5 }],
+    ['负数', { ...good, nonceCounter: -1 }],
+    ['缺字段', withoutCounter],
+    ['NaN', { ...good, nonceCounter: NaN }],
+  ]
+  for (const [label, record] of cases) {
+    storage.set('drc.pairing.v1', record)
+    const c = new DrcClient().hydrate()
+    assert.equal(c.isPaired(), false, `计数器${label}的记录不能被当成可用配对（否则下次发送会从 1 重新数）`)
+    assert.match(c.statusText, /损坏/, `要与"从没配过"分得开，实际：${JSON.stringify(c.statusText)}`)
+  }
+
+  // 反向判据：合法记录不许被误杀（校验写过头 = 每次启动都让人重扫）。
+  storage.set('drc.pairing.v1', good)
+  const ok = new DrcClient().hydrate()
+  assert.equal(ok.isPaired(), true, '反向：计数器是合法非负整数时必须留下')
+})
+
+test('【§5-7】配对写不进盘要立刻说出来（否则重启后看起来像从没配过）', () => {
+  const c = new DrcClient().hydrate()
+  c.server = RELAY
+  c.psk = TEST_PSK
+  c.sock = { send: () => true, close: () => {} }
+  const errors = []
+  c.on((e) => {
+    if (e.kind === 'error') errors.push(String(e.message))
+  })
+  const original = store.savePairing
+  store.savePairing = () => false
+  try {
+    c._onFrame(JSON.stringify({ t: 'paired', sessionId: 'c_nosave', hostId: 'h1' }))
+  } finally {
+    store.savePairing = original
+  }
+  // **不能**因为写盘失败就丢掉 PSK：手上那把是唯一一份，丢了就是当场让用户重扫。
+  assert.equal(c.isPaired(), true, '写盘失败不许把配对丢掉')
+  assert.ok(
+    errors.some((m) => m.includes('没能存进本机')),
+    `必须当场告诉用户，否则下次启动呈现成"从没配过"：${JSON.stringify(errors)}`,
+  )
+})
+
+test('【§5-11】派发里抛错不许交出这条连接的处理权', () => {
+  // 真实形状是 `_onPaired` 里没包住的 `derivePskKey`（psk 是对端给的），这里用
+  // 同一条路径的可控版本：抛点必须落在**派发内部**，否则测不到 try/catch。
+  const c = new DrcClient().hydrate()
+  const errors = []
+  c.on((e) => {
+    if (e.kind === 'error') errors.push(String(e.message))
+  })
+  c._onPaired = function () {
+    throw new Error('boom')
+  }
+  c._onFrame(JSON.stringify({ t: 'paired', sessionId: 'c_broken', hostId: 'h1' }))
+  assert.ok(errors.some((m) => /没能处理/.test(m)), `抛错必须留痕，实际：${JSON.stringify(errors)}`)
+
+  // 关键：**后面这一帧必须照常被处理**。改回去（try/catch 去掉）时，第一条就会
+  // 把异常抛给测试，这里的断言根本轮不到 —— 那正是缺陷本身。
+  c._onFrame(JSON.stringify({ t: 'peer-left' }))
+  assert.equal(c.status, 'needs-pair', '后面这一帧没人处理 = 这条连接后面所有帧都跟着丢')
+})
+
+test('【§5-9】类型标签截到协议的 64 上界（超了主机整条拒收）', () => {
+  // `extensionOf` 的返回值就是 `fileAttachment.mediaType`，schema 是 `.max(64)`。
+  // 超了不是"少一个字段"：主机 `parseCmdPayload` 整条拒收，手机那边等满 12 秒
+  // 才得到一句「主机没有回应」（另一半修在 `runtime.handleInvalidCommand`）。
+  const p = loadChatPage()
+  p.data = { attachments: [], attachCount: 0 }
+  const metas = []
+  const originalRead = p._readAsBase64
+  p._readAsBase64 = function (filePath, meta, out, next, self) {
+    metas.push(meta)
+    next()
+  }
+  try {
+    p._acceptPickedFiles([{ name: 'a.' + 'x'.repeat(80), path: '/tmp/a', type: 'file', size: 1 }])
+    assert.equal(metas.length, 1, '夹具自检：必须真的走到读文件那一步')
+    assert.equal(metas[0].type.length, 64, `扩展名没有被截到 64：实际 ${metas[0].type.length} 字符`)
+
+    // 反向判据：短扩展名一个字都不许动（截断写过头会把 `report.pdf` 变成 `repo`）。
+    p.data = { attachments: [], attachCount: 0 }
+    p._acceptPickedFiles([{ name: 'report.pdf', path: '/tmp/b', type: 'file', size: 1 }])
+    assert.equal(metas[1].type, 'pdf', '反向：正常扩展名不许被截')
+  } finally {
+    // 页面配置对象是**跨用例共享**的（`require` 有缓存），桩不还原会污染后面的用例。
+    p._readAsBase64 = originalRead
+  }
+})
+
+test('【§5-5】onInterrupt：发不出去时不许说「已发送中断」', () => {
+  const p = loadChatPage()
+  p.data = { sessionId: 'ses_x' }
+  const spoken = []
+  const originalToast = globalThis.wx.showToast
+  globalThis.wx.showToast = (o) => spoken.push(String(o.title))
+  try {
+    p.client = { interrupt: () => false }
+    p.onInterrupt()
+    assert.ok(
+      !spoken.some((t) => t.includes('已发送中断')),
+      `发不出去还报成功 = 用户以为回合停了，实际弹了：${JSON.stringify(spoken)}`,
+    )
+    // 反向判据：发得出去时必须报（否则会写成"永远不报成功"）。
+    p.client = { interrupt: () => true }
+    p.onInterrupt()
+    assert.ok(spoken.some((t) => t.includes('已发送中断')), '反向：真的发出去了要说一声')
+  } finally {
+    globalThis.wx.showToast = originalToast
+  }
+})
+
+test('【§5-6】审批/回答：帧没发出去时卡必须留在原地（清掉就补不回来了）', () => {
+  const p = loadChatPage()
+  p._renderBar = function () {}
+  p._stopCardTick = function () {}
+  const run = (sendResult) => {
+    p.data = {
+      sessionId: 'ses_x',
+      pendingPermission: { requestId: 'ap_1', action: '执行 rm -rf' },
+      pendingQuestion: null,
+      running: false,
+    }
+    p.client = { resolvePermission: () => sendResult }
+    p.onPermissionTap({ currentTarget: { dataset: { decision: 'approve' } } })
+    return p.data.pendingPermission
+  }
+
+  assert.ok(run(false), '发送失败时卡不许被清掉 —— 主机还在等，用户要能再点一次')
+  assert.equal(run(null), null, '反向：发成功了才清卡（否则卡会永远留在屏幕上）')
+  assert.equal(p.data.pendingQuestion, null, '提问卡不能被审批那条路径动到')
+})
+
+test('【§5-10】列表页也听 ev.result{ok:false}（否则"没刷出来"与"主机拒了"长得一样）', () => {
+  const p = loadSessionsPage()
+  const spoken = []
+  const originalToast = globalThis.wx.showToast
+  globalThis.wx.showToast = (o) => spoken.push(String(o.title))
+  try {
+    p._onEvent({
+      kind: 'payload',
+      payload: {
+        t: 'ev.result',
+        ok: false,
+        message: '主机这一代不支持「cmd.list_sessions」，请把主机插件升到最新版',
+      },
+    })
+    assert.ok(
+      spoken.some((t) => t.includes('主机这一代不支持')),
+      `失败回执必须弹出来（chat 页有、本页原来没有）：${JSON.stringify(spoken)}`,
+    )
+    // 反向判据：成功回执不许弹 —— 否则列表页会变成噪声源
+    // （`cmd.list_sessions` 是 fire-and-forget，每次刷新都有一条）。
+    spoken.length = 0
+    p._onEvent({ kind: 'payload', payload: { t: 'ev.result', ok: true, data: { sessions: [] } } })
+    assert.equal(spoken.length, 0, '反向：成功回执不许弹')
+  } finally {
+    globalThis.wx.showToast = originalToast
+  }
 })

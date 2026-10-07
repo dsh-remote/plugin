@@ -363,8 +363,21 @@ describe('重启与续用取证（D3 / unknown_session / 复核 R1）', () => {
       assert.ok(resync, '重启后的主机必须发 resync 声明它持有哪些会话（中继据此删掉没人接的）')
       assert.ok(!resync.sessionIds.includes(convId), 'resync 不许把没密钥的旧会话声明成还在')
 
-      // 手机此刻还以为一切正常（status=online）：这正是 R1 描述的"没有出口"的位置。
-      assert.equal(scene.phone.client.status, 'online')
+      /**
+       * **2026-10-07 改判**：这一句原来钉的是「手机此刻还以为一切正常（status=online）」——
+       * 那正是 R1 描述的"没有出口"的位置，也正是它被当成缺陷的理由。
+       *
+       * 中继现在会在删掉会话时**主动**发 `peer-left`（伞仓 HANDOFF §5-2，
+       * `dsh-remote-server` 那次改判），所以手机在主人发话之前就已经翻到 needs-pair。
+       * 断言因此从"它还蒙在鼓里"翻成"它**不许**蒙在鼓里"：
+       * 被动出口（下一次发送撞 `unknown_session`）依然成立——那一段的观察保留，
+       * 它挡住的是"连被动出口都没了"这种更糟的回退。
+       */
+      await until(() => scene.phone.client.status === 'needs-pair', {
+        timeoutMs: 10_000,
+        trail: scene.phone.trail,
+        label: '手机在主人发话**之前**就收到主动通知（而不是继续显示在线、等下一次发送才发现）',
+      })
       const cmdId = scene.phone.client.newCmdId()
       scene.phone.client.sendCmd({ t: 'cmd.list_sessions', cmdId })
       const observed = await untilAsync(

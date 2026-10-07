@@ -81,9 +81,9 @@ PSK 从不上网；双方各自从 `(psk, 方向, convId)` 派生 `c2h`/`h2c` �
 | 闸门 | 命令 | 实测 |
 |---|---|---|
 | 协议层 | `cd dsh-remote-protocol && pnpm test` | 152 |
-| 中继 | `cd dsh-remote-server && pnpm test` | 177（1 skip） |
-| 宿主插件 | `cd dsh-remote-control && pnpm test` | 494 |
-| 伞仓 e2e | `node --test e2e/*.test.mjs` | 345 |
+| 中继 | `cd dsh-remote-server && pnpm test` | 178（1 skip） |
+| 宿主插件 | `cd dsh-remote-control && pnpm test` | 497 |
+| 伞仓 e2e | `node --test e2e/*.test.mjs` | 354 |
 | 小程序 | `npm --prefix dsh-remote-mp run check` | 五道闸全过：verify ok / md 35 / scroll 14 / theme / contrast 304 |
 | 本地全链路 | `node e2e/run.mjs` | 17 步，1.9s |
 | 版本闸 | `node scripts/next-version.mjs --check` | 发版前必须绿；发版后对当前号报红是预期 |
@@ -147,7 +147,6 @@ osascript -e 'tell application "DeepSeek Harness" to quit'; sleep 8; open -a "De
 | [`docs/HOST-SIDE.md`](docs/HOST-SIDE.md) | :18 写产物 `index.js 1242 KB / client.cjs 18 KB` | 实测 **1333 KB / 29 KB**（1.1.0 时代的值） |
 | [`README.md`](README.md) | :60「线上 v1.0.6，rc1 已发布待切」 | 线上是容器 **2.0.16** |
 | [`README.md`](README.md) | :63「四仓统一用同一个版本号（当前 `2.0.14`）」 | **2.0.16** |
-| [`README.md`](README.md) | :86「e2e 全部 `*.test.mjs`（**311**）」 | **345**（同文件 :129 写的就是 345，自相矛盾） |
 | [`docs/PRODUCT.md`](docs/PRODUCT.md) | :92「rc1 已上传为开发版本」 | mp 已到 2.0.16 |
 
 `pnpm gates` **抓不到上面这些**：它只锚 8 个"项数"格子。改完这几处顺手把 `docs/EXPANSION-PLAN.md` 的
@@ -174,6 +173,37 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 `ev.host_info`（能力/限额上报，规范 §13.2 / 附录 D·GAP-5）、v2 消息棘轮（前向保密，§7.6）、
 `dshr:` 按 RFC 7595 注册（§6.1.4 / GAP-9）。
 
+### 3.7 小程序归档会话：**可行性已调研，未实现**（2026-10-07）
+
+结论：**可行，没有硬阻塞**——缺的全是胶水。四层各自缺什么：
+
+| 层 | 现状 | 要补的 |
+|---|---|---|
+| 协议 | 9 条 `cmd.*` 里**没有**归档相关的；`SESSION_STATES` 里却有 `'archived'` | 加 `cmd.archive_session`（⚠️ 名字只能小写下划线：wire-surface 那道闸的正则不认驼峰），进 `PAYLOAD_TYPES` + `registry.CMD_TYPES` |
+| 宿主 | `KernelPort` **没有** archive 方法；载体只有 `ensureRunnable` → `unarchiveSession`（"发指令前自动恢复"那条路） | 端口加 `archiveSession?()`，carrier 探 `workspaceRegistry.archiveSession`，`runtime` 加一个 `case`，发完补推一次列表（本端**不监听** `workspace/changes`，那条在 `unmappedEventTypes` 里） |
+| 内核 | **能力是存在的**：`dsh-workspace` 有 `archiveSession(sessionId, options)` / `unarchiveSession` / `archivedSessionIds`（app.asar 里 `archiveSession` 出现 164 次） | —— |
+| 小程序 | 列表**收到过** archived 行但**直接丢掉**（`sessions.js:391-394`，底部只显示"已隐藏 N 个归档会话"）；每行只有 `bindtap`，**没有**行内长按入口 | 停止丢弃（或给一个"已归档"分组）+ 一个行内入口（现成的 `wx.showActionSheet` 路子，不用新增 wxml 结构，因此不会碰 UI/对比度两道闸） |
+
+三个**真要注意**的：
+
+1. **内核会拒收活跃会话**：`archiveSession` 在会话还在跑时抛 `WorkspaceActiveSessionError`，
+   除非传 `stopActivity:true` —— 而那会**停掉主机上正在跑的工作**，与"插件不改变宿主自己的
+   行为"这条纪律直接冲突。所以默认应当**明确报"会话正在运行，不能归档"**，`stopActivity`
+   要么留给显式选项，要么不做。
+2. **老主机的表现取决于 §5-9 那条修**：宿主从前对不认识的载荷**只记日志**（现在会按 `cmdId`
+   回一条明说原因的执）。小程序**完全不看能力面**，所以不接能力协商的话，在更老的主机上
+   就是 12 秒后一句「主机没有回应」。补法是用协议已有的 `hello.capabilities`
+   （`registry.CAPABILITY_IDS` 里本来就留着 `drc.payload.*` 那一排位置）。
+3. **产品前提要先翻过来**：[`docs/PRODUCT.md`](docs/PRODUCT.md) §4 明写「删除/归档仍不做」，
+   §6 也把"会改掉主机项目结构"排除在 30 秒原则之外。**做之前先改那份文档**——
+   否则就是拿一条"明确不做"当待办做掉，而这份文档回答的是"我们凭什么还存在"。
+
+**零知识不受影响**：载荷照旧走 `enc`；中继连 payload 都不 import（它只认 `frames`/`ids`/
+`negotiate`/`outbound`），新增一条命令对它不可见。
+
+**估量**（最小的"归档 + 取消归档"，不含界面打磨）：协议 1 文件 + 2 判据；宿主 5 文件 + 2 判据；
+小程序 3–4 文件 + 2 判据；再加 `pnpm gates` 的计数刷新与 mp 的 `check`。**没有必须先做的前置。**
+
 ## 4. 已经判定不做 / **别重做的**（结论留着，别再逐条审一遍）
 
 | 位置 | 是什么 | 为什么不做 |
@@ -195,28 +225,47 @@ P5 那行一起看（它把"HANDOFF 记账"列在收口清单里）。
 | `shutdownForced` | 字段**结构上恒为 0** | 已改成"去看那两行 warn"；改退出码会牵动 systemd/compose 的语义，不值得 |
 | `.tmp/cross-repo-contract-audit.md` | 一份 **2.0.14 时代**的静态审计 | 它的 F1–F4（workspace 五步、出站体积闸）**已在 2.0.15/2.0.16 修掉**，别照它派活；仍开的只有 F5（上表第 1 行）、F6（见 §5）、F8（上表第 2 行） |
 
-## 5. 已知未修（按现状记账，**不是**待办清单）
+## 5. 已知未修 → 2026-10-07 第二轮**已收口**（15 条修了 13 条）
 
-这一节是 2026-10-07 本轮深读新发现的、判过之后**留下不修**的东西。列在这里是为了让下一个接手人
-不必重跑一遍同样的调查，而不是催谁去改。
+这一节原是 2026-10-07 深读新发现、判过之后"留下不修"的东西。**同日已把 13 条修完并钉判据**
+（逐条变异验证：把实现改回旧行为，判据必须变红）。逐条细节在三仓 `CHANGELOG.md`；
+这里只留结论，好让下一个人知道"审过、修过、不用再查"。
 
-| # | 位置 | 症状 | 判断 |
+| # | 问题 | 结果 | 落点 |
 |---|---|---|---|
-| 1 | 中继 `server.ts:775-781` 的注释说版本闸是"所有帧的入口"，而 `acceptProtocol` 的调用在 `case 'hello'` 里面（`:782`） | 业务帧从不校验版本；`peer.protocol` 实际只喂 `/healthz` 计数；`peer.protocolMissing` 是**死字段** | **行为是有意的**（`tests/handshake.test.mjs` 那条测试就叫「版本闸只挡 hello」）。坏的是注释，不是代码 |
-| 2 | 中继 `resync` 删会话时**不通知**客户端（`state.ts:293-294`） | 那些手机要等到自己发下一帧撞 `unknown_session` 才知道 | 已有出口（`unknown_session` → 提示重扫），且少一条主动帧 |
-| 3 | 中继 `:967` 与 `:978` 各调一次 `parseEndpointFrame` | 同一条坏帧解析两遍 | 只在**坏帧**路径上，正常路径不受影响；性能上无所谓 |
-| 4 | mp `client.js:307-310` 是 `sendCmd` 唯一的错误出口 | **socket 对象还在、底层 task 不在**（重连退避窗口）时 `send()` 返回 false，命令被静默丢弃、**不报任何错**；而 `interrupt` / `resolvePermission` / `answer` / `listSessions` / `getPending` 都不看返回值 | 真机已观察到。**这一条最值得优先修**：它是"点了没反应"的又一个来源。注意 nonce 仍然被消耗（是丢帧，不是复用） |
-| 5 | mp `chat.js:2828-2832` | `onInterrupt` **无条件** toast「已发送中断」，不看 `client.interrupt()` 的返回值 | 与上一条同源；两条一起修才有意义 |
-| 6 | mp `chat.js:2838` / `:2885` | 审批/回答**先把卡清掉再发帧**；若那条帧被静默丢弃，主机继续阻塞 180s/300s 而用户手上已经没有卡了 | 同上 |
-| 7 | mp `client.js:482` | `savePairing()` 的返回值被丢掉：存储写失败时配对只在内存里，重启后表现成"从没配过" | 与 `nextNonceFor` 那条纪律同源（那个检查了，这个没检查） |
-| 8 | mp `session-store.js:79-86` | `loadPairing` 不校验 `nonceCounter`，而 `nextNonceFor` 是 `Number(x \|\| 0) + 1` | 手工改过/截断写坏的记录会让计数器回到 1 ⇒ 同一 psk+convId 下**密钥流复用**，正是该文件头承诺的不变量。没有任何路径能发现它 |
-| 9 | mp `chat.js:277-282` 的 `extensionOf` 不截断 | 超长扩展名会做出 `mediaType > 64` 的载荷，而宿主 `relay.ts:592-598` 对 schema 失败的载荷**只记日志、不回执** | 两头都该修：主机不回执 = 手机干等满 12 秒才说"主机没有回应"，根因一个字都不留 |
-| 10 | mp `sessions.js` 没有 `ev.result` 分支 | 列表页发起的命令（如 `cmd.list_sessions`）失败**完全不可见** | 只有 chat 页会把 `ok:false` 弹出来 |
-| 11 | mp `client.js:344-350` | `_onFrame` 的 switch **没有 try/catch**（只有 `JSON.parse` 被包住）；case 里抛出会逃进 wx 回调 | `enc-batch` 的逐项守卫就是为这一类加的，但通用风险还在 |
-| 12 | mp `client.js:386-387` 的 `pong` 分支是死的 | 手机从不发应用层 `ping`；半开连接只能靠中继的 sweep 发现，本地永远不知道 | 与宿主侧那条存活探针不对称（宿主是**专门为此**加的 20s ping） |
-| 13 | mp `client.js:383` | `error` 帧只 toast `f.message \|\| f.code`，`retryAfterMs` 完全没用上；`rate_limited` 没有退避 | 协议层已经把可重试性写好了（`errors.ts`），这一端没用 |
-| 14 | mp `ev.keep_awake_state` / `cmd.keep_awake` **是死的** | 帧没有任何页面渲染，`setKeepAwake` 没有调用方 | ⚠️ 而 `e2e/wire-surface.test.mjs` **照样绿**——那道闸只比字面量，比不出"这个分支到底会不会被走到"。这是它能力边界的一个实例 |
-| 15 | 宿主 `platform/carrier-services.ts` 的 `badWorkspace()` | 它按"手机传来的 workspace 是不可信输入"写的，实际只喂过主机自己推断的值 | `cmd.new_session.workspace` 接线后它才第一次拿到真·手机输入 |
+| 1 | 中继版本闸的注释说"它是所有帧的入口"，实际只在 `case 'hello'` | ✅ 改注释（**代码本来就是对的**，有测试钉着）+ 删掉从未被读的 `peer.protocolMissing` | 中继 `src/server.ts` |
+| 2 | `resync` 删会话时**不通知**客户端 | ✅ **改判**：现在发 `peer-left`，与宽限期到期、`session-leave` 同口径；补一条反向判据防"顺手全通知" | 中继 `src/state.ts` |
+| 3 | 同一条坏帧 `parseEndpointFrame` 调两遍 | ✅ 只解析一次 | 中继 `src/server.ts` |
+| 4 | mp 在重连退避窗口**静默丢命令**（socket 在、task 不在） | ✅ `sendCmd` 发不出去必须返回 false 并报错 | mp `core/client.js` |
+| 5 | `onInterrupt` 无条件 toast「已发送中断」 | ✅ 不看返回值就不报成功 | mp `pages/chat/chat.js` |
+| 6 | 审批/回答**先清卡再发帧** | ✅ 改成先发、再清；发失败时卡留着让用户再点 | 同上 |
+| 7 | `_onPaired` 丢掉 `savePairing()` 的返回值 | ✅ 写失败当场告诉用户（但**不丢 PSK**，那把是唯一一份） | mp `core/client.js` |
+| 8 | `loadPairing` 不校验 `nonceCounter` | ✅ 坏记录 `dropCorrupt`——否则计数器从 1 重数 = **静默的密钥流复用** | mp `core/session-store.js` |
+| 9 | `extensionOf` 不截断 / 宿主 schema 失败只记日志 | ✅ **两端都修**：mp 截到协议的 64 上界；宿主按 `cmdId` 回一条明说原因的执（从前手机干等 12 秒） | mp `chat.js` + 宿主 `runtime.ts` / `transport/relay.ts` |
+| 10 | sessions 页没有 `ev.result` 分支 | ✅ 补上（只弹失败；成功回执不弹，否则每次刷新都是噪声） | mp `pages/sessions/sessions.js` |
+| 11 | `_onFrame` 的 switch 没有 try/catch | ✅ 派发整段兜住：一条帧抛错不许交出**这条连接后面所有帧**的处理权 | mp `core/client.js` |
+| 12 | `pong` 分支是死的（mp 没有本地半开检测） | ⏸ **刻意没做** | 见下 |
+| 13 | `error` 帧的 `retryAfterMs` 没人用 | ✅ **两头都接了**：中继现在按帧闸的 1 秒窗口余量发出去，mp 据此退避且**在 `nextNonceFor` 之前**拒绝（不消耗 nonce），新连接清零 | 中继 `src/server.ts` + mp `core/client.js` |
+| 14 | `cmd.keep_awake` / `ev.keep_awake_state` 在 mp 是死的（无调用方、无渲染） | ⏸ **刻意没做** | 见下 |
+| 15 | `badWorkspace()` 只喂过主机自己推断的值 | ✅ **已消解**：`cmd.new_session.workspace` 接线后，它拿到的**就是**手机传来的路径 | 宿主 `carrier-services.ts` |
+
+### 两条**刻意没做**的（都不是"漏了"，是取舍）
+
+- **#12 本地半开检测**：mp 侧加一个 `ping`+超时探针，能把"发现死连接"从 ~120 秒
+  （中继 sweep 兜底：60s ping、2 次判死）压到几秒。但探针**必须只在前台发**——
+  后台定时器被微信节流，那时打一个必超时的探针只会制造无谓的断连重连。
+  另一个选择是把那个死分支删掉、把"发现"如实写成中继的职责。**需要一次取舍，不适合顺手做。**
+- **#14 `keep_awake`**：要它活就得**加界面**（状态 + 开关），外加 mp 的 UI/对比度两道闸；
+  要删就得连同协议里的字面量一起拿掉，而那是**破坏性**变更。
+  它现在"闸绿着但没接"，正是 wire-surface 只比字面量、比不出"这个分支会不会被走到"的实例。
+
+### 这一轮顺手记下两条**判据纪律**
+
+- **桩没还原，会把失败挪到几条用例之外**：`installHost` 把 `globalThis.wx` **整个**换成
+  `getStorageSync: () => ''`，之后每条读配对记录的用例都读到空——症状是"一半断言看着正好"，
+  而真正的失败原因在几条用例之前。修在装置里（`beforeEach` 把真存储装回去），不是改产品。
+- **夹具自己先发过帧时，"发出去没有"要按差值判**：`justPaired()` 在 `_onPaired` 末尾就
+  发过一条 `cmd.list_sessions`，断言写死 `frames.length === 1` 会撞上它。
 
 ## 6. 环境坑与硬纪律
 
