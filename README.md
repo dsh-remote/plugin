@@ -78,7 +78,7 @@
 ```sh
 # 逐仓装依赖 + 跑各自的闸门（都在仓根）
 cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm test                       # 152
-cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 176（1 skip）
+cd ../dsh-remote-server  && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 177（1 skip）
 cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm install --frozen-lockfile && pnpm test   # 494
 cd ../dsh-remote-mp      && env -u NODE_OPTIONS npm run check                                # verify/theme/contrast
 
@@ -122,7 +122,7 @@ Node 22 的 ESM loader 解析不了它，任何要解析依赖的调用都会挂
 |---|---|---|
 | `cd dsh-remote-protocol && pnpm test` | 帧与载荷 schema、crypto、配对 URI、三平台防休眠命令、**新建会话** | 152 |
 | `node --test e2e/protocol.test.mjs` | 与小程序 `miniprogram/core/codec.js` **逐字节对拍**（284 条向量 + 随机新向量 + 篡改 + 反证） | 18 |
-| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行）+ **容器产物闸门**（两条 FROM 同源、非 root、HEALTHCHECK 判 `ok` 字段、runtime 阶段零依赖、产物断言在构建里、端口只发布回环、`DRC_STATE_FILE` 与卷成对、加固项与 systemd 同口径、`.dockerignore` 该裁的裁该留的留）+ **本轮深审**（两条未认证崩溃打崩进程 / 三处日志洪水 / 配对码一次性与归属 / 落盘 fsync 与未来时间戳 / 时钟回拨冻死限流 / 配置原型链与空串 / 停机排空 / `--version`） | 176（1 skip） |
+| `cd dsh-remote-server && pnpm test` | 中继闭环 + 加固（限流、帧上限、顶号、优雅停机、孤儿会话、诊断计数）+ **产物级零知识断言** + **分发决策闸门**（本仓不发 npm：`private` 必须为 true、工作流里不许出现 publish 步骤；运行时依赖为空、shebang 在第一行）+ **容器产物闸门**（两条 FROM 同源、非 root、HEALTHCHECK 判 `ok` 字段、runtime 阶段零依赖、产物断言在构建里、端口只发布回环、`DRC_STATE_FILE` 与卷成对、加固项与 systemd 同口径、`.dockerignore` 该裁的裁该留的留）+ **本轮深审**（两条未认证崩溃打崩进程 / 三处日志洪水 / 配对码一次性与归属 / 落盘 fsync 与未来时间戳 / 时钟回拨冻死限流 / 配置原型链与空串 / 停机排空 / `--version`） | 177（1 skip） |
 | `cd dsh-remote-control && pnpm test` | 合帧窗口、密钥簿、配对码窗口四判据、配置校验、状态文件、事件词汇表、carrier 调用形状、历史分页、CONNECTING 期停机、**新建会话**、**cmdId 去重**（GAP-4），以及界面上那一半（pill 的四条路由：发码幂等 / 解配幂等 / 写路由的跨站判据是**同源才发得出的自定义头**而不是 `Origin` / 回答里不许出现凭据 / 半途挂不上要回滚已挂的 / 浏览器面产物形状 / **缺 webServer 时主链路逐字段对照 + 一个命令都不许注册 + 配对入口不可用必须留 warn + `webServer` 晚到时 warn 必须自己消失** / **`slots` 晚到时那颗 pill 必须补挂** / **dock 挤不下时那颗 pill 只许省略号不许逐字断行** / **样式表按内容对齐：宿主热更这一半而文档没重载时旧 CSS 必须被换掉** / **配上之后面板从二维码翻回状态视图** / **正文就那三行（中继/状态/版本）且各自拿不到值时不占地方** / **`状态` 按 relay 取值翻译**) | 494 |
 | `npm --prefix dsh-remote-mp run check` | 小程序**五道闸**（`check` = verify + md + scroll + theme:check + contrast）：verify-miniprogram 结构自检（JSON / 页面 / 组件引用 / 自研 JS 的声明一致性）、markdown 渲染（35 项）、**滚动策略（14 项，纯函数层）**、theme:check（主题文件与生成器同步）、对比度（304 组） | 全过 |
 | `node e2e/run.mjs` | 本地全链路：真中继进程 + 真 `apply()` 入口 + 真小程序代码（内核面 mock）。**跑之前先过产物新鲜度闸门**（逐文件比对 src↔dist 的 mtime：改了 src 没 build 时直接红，测的不是旧产物） | 17 步 |
@@ -159,7 +159,7 @@ CI 在**四个开源仓各自**的 `.github/workflows/` 里：主作业 Node 22�
 ### 上面那张表怎么不漂
 
 「项数」那一列只在你真跑过之后才知道，而跑一遍要四个仓各自 build+test——所以它过去
-漂过好几次（92→106、448→457、255→262、对比度 302→304、471→490→494、311→334→341→345、132→164→175→176），每次都是"加了判据忘了改文档"。
+漂过好几次（92→106、448→457、255→262、对比度 302→304、471→490→494、311→334→341→345、132→164→175→176→177），每次都是"加了判据忘了改文档"。
 为此有一条命令：
 
 ```sh

@@ -142,3 +142,45 @@ docker compose -f deploy/docker/compose.yaml down
 chown -R root:root /var/lib/dsh-remote-control   # 单元以 root 跑
 systemctl enable --now dsh-remote-control
 ```
+
+### ⚠️ 从 systemd 切过来时，属主要在**停服务之后**改
+
+2026-10-07 第一次切容器时踩了，这个坑值得单独写一节，因为它**静默丢数据**。
+
+`daemon.json` / compose 都不管属主，容器以 uid 10001 跑，于是切换那一步要
+`chown -R 10001:10001 /var/lib/dsh-remote-control`。**但那必须放在 `systemctl stop` 之后**：
+
+单元里有 `StateDirectory=dsh-remote-control`，而 systemd 会在**每次停止/启动时**
+按单元的 `User=` 把那个目录的属主**改回去**。顺序反了就是：
+
+```
+chown 10001  →  systemctl stop（把属主改回 root）
+             →  起容器（uid 10001 读一个 root 拥有的 600 文件）
+             →  EACCES → state file unreadable, starting empty
+             →  30 秒后第一次落盘，把空状态写回去
+```
+
+最后那步是**不可逆**的：原来的配对记录被空状态覆盖，`conversations: 0`，
+用户必须重新扫码。实测这次就是这样丢了一条会话。
+
+正确顺序：
+
+```sh
+systemctl stop dsh-remote-control        # 先停，StateDirectory 就不再改属主
+chown -R 10001:10001 /var/lib/dsh-remote-control
+chmod 700 /var/lib/dsh-remote-control
+docker compose -f deploy/docker/compose.yaml up -d
+```
+
+**判据**：切完必看这三样，`stateRestored` 那个最要紧 ——
+`stateRestored:0` 而 `conversations:0` 就是"读不到旧状态、被当成空启动"，
+此时 `/healthz` 仍然是 `ok:true`，配对表面也正常，只有一处能看出来。
+
+```sh
+curl -s 127.0.0.1:8787/healthz | grep -o '"stateRestored":[0-9]*'
+docker logs dsh-remote-relay-relay-1 2>&1 | grep -i unreadable   # 必须没有
+```
+
+> `read_only: true` + `cap_drop: ALL` 下，容器**写不进** `/data` 时只会在
+> `/healthz` 的 `stateWriteFailures` 上体现，而配对表面完全正常 ——
+> 与 §0.1 记的那个老坑是同一族，容器只是给它多了一个成因（忘了挂卷 / 属主不对）。
