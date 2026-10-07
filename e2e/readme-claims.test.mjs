@@ -15,6 +15,7 @@
  * 覆盖：项数由 `scripts/report-gates.mjs` 负责（要真跑一遍才能知道），这里只管
  * 不跑也能核的那几类。
  */
+import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -280,6 +281,49 @@ test('PRODUCT.md 不再把已实现的东西列为"明确不做"或"待办"（G1
   for (const n of ['1', '2', '3', '4', '5']) {
     assert.ok(rules.includes(n), `PRODUCT.md §3 少了第 ${n} 条判据（§5 的表按编号引用它）`)
   }
+})
+
+test('scripts/ 与 e2e/ 下每个脚本都能被 node --check 解析（没人跑的工具最容易悄悄坏掉）', () => {
+  // 伞仓的开发工具一行判据都没有：上界修得再好，脚本本身坏掉要等到有人真的需要它
+  // 那天才发现——而那时候它多半是用来救火的。
+  //
+  // `--check` 不执行、也不需要任何依赖，代价接近零，能挡住"括号没合上 / 漏个分号"
+  // 这一整类。**刻意不检查运行期行为**：这些脚本要开发者工具、要真机、要微信后台，
+  // 伞仓没有那些条件，假装能验只会写出恒绿的判据（§0.10.7 记的那条教训）。
+  const dirs = ['scripts', 'e2e']
+  let checked = 0
+  for (const dir of dirs) {
+    const full = path.join(ROOT, dir)
+    if (!existsSync(full)) continue
+    for (const name of readdirSync(full)) {
+      if (!name.endsWith('.mjs')) continue
+      if (dir === 'e2e' && !name.endsWith('.test.mjs') && !['run.mjs', 'mp-sim.mjs', 'live-e2e.mjs'].includes(name)) {
+        continue
+      }
+      const file = path.join(full, name)
+      const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
+      assert.equal(
+        res.status,
+        0,
+        `${dir}/${name} 解析失败：${String(res.stderr || res.stdout).slice(0, 200)}。\n` +
+          '它不会自己坏——是有人在它上面改了什么，而没有任何东西会告诉他。',
+      )
+      checked += 1
+    }
+  }
+  assert.ok(checked >= 10, `只检查了 ${checked} 个脚本：目录结构或命名变了？`)
+})
+
+test('README 里提到的每个 scripts/*.mjs 都真的存在', () => {
+  // 提取放宽成"README 里任何位置出现的 `scripts/<name>.mjs`"：README 的写法有三种
+  // （表格里 `node scripts/x.mjs`、散文里裸文件名 `x.mjs`、以及 `scripts/x.mjs`），
+  // 锚在反引号上的话只能抽到其中一种。第一版就是这么写的，抽出 0 个还以为是自己写错了。
+  const mentioned = new Set(
+    [...README.matchAll(/scripts\/([A-Za-z0-9_.-]+\.mjs)/g)].map((m) => `scripts/${m[1]}`),
+  )
+  assert.ok(mentioned.size >= 2, `只从 README 抽出 ${mentioned.size} 个脚本引用：抽法或写法变了`)
+  const missing = [...mentioned].filter((rel) => !existsSync(path.join(ROOT, rel))).sort()
+  assert.deepEqual(missing, [], `README 提到这些脚本，但盘上没有：${missing.join(', ')}`)
 })
 
 test('docs/ 下每一份文档都被 README 的「文档」小节链接到（孤儿文档会静默烂掉）', () => {
