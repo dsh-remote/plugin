@@ -16,6 +16,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
 import { defaultPairStoreFile } from './pair-store.js'
+import { dataDir, isAbsolutePath, isForeignAbsolutePath, resolveAgainstBase } from '../platform/paths.js'
 import { MAX_ATTACHMENT_BYTES } from '@dsh-remote/protocol/limits'
 import { MAX_ATTACH_TOTAL_BYTES } from './uploads.js'
 
@@ -160,9 +161,10 @@ export function resolvePairStoreFile(config: PluginConfig, hostId: string): stri
   if (config.pairStoreFile === PAIR_STORE_OFF) return ''
   const configured = config.pairStoreFile.trim()
   if (!configured) return defaultPairStoreFile(config.statusFile, hostId)
-  if (configured.startsWith('/')) return configured
-  if (!config.statusFile) return configured
-  return path.join(path.dirname(config.statusFile), configured)
+  // 绝对路径判定收在 `platform/paths.ts`（A1）：这里原来写的是 `startsWith('/')`，
+  // 它在 Windows 上把 `C:\...` 当成相对路径，于是 path.join 把它改道到别处——
+  // 而本文件下面那段注释反复强调"不静默改道"。
+  return resolveAgainstBase(configured, config.statusFile)
 }
 
 /**
@@ -173,14 +175,11 @@ export function resolvePairStoreFile(config: PluginConfig, hostId: string): stri
 export function resolveUploadDir(config: PluginConfig): string {
   const configured = config.uploadDir.trim()
   if (!configured) {
-    const base = config.statusFile
-      ? path.dirname(config.statusFile)
-      : path.join(homedir(), '.dsh', 'dsh-remote-control')
+    const base = config.statusFile ? path.dirname(config.statusFile) : dataDir()
     return path.join(base, 'uploads')
   }
-  if (configured.startsWith('/')) return configured
-  if (!config.statusFile) return configured
-  return path.join(path.dirname(config.statusFile), configured)
+  // 与 resolvePairStoreFile 共用同一套绝对路径语义（A1）；分开写就是下一个分叉源。
+  return resolveAgainstBase(configured, config.statusFile)
 }
 
 const loopback = /^wss?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/
@@ -318,7 +317,19 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
   }
   if (!config.statusFile) {
     problems.push({ level: 'warn', field: 'statusFile', message: '为空将关闭状态快照；GUI 宿主里这是唯一的排错入口' })
-  } else if (!config.statusFile.startsWith('/')) {
+  } else if (isForeignAbsolutePath(config.statusFile)) {
+    // 外来平台的绝对路径：**单列一条**而不是并进下面的「相对路径」。
+    // 两者的病不同、改法不同——这一条要改的是宿主机或配置来源（平台不一致），
+    // 那一条要改的是配置本身写成相对路径了。v2 这里只判 `startsWith('/')`，
+    // 于是一条完全正确的 `C:\...` 配置在 POSIX 宿主上被报成「必须是绝对路径」。
+    problems.push({
+      level: 'warn',
+      field: 'statusFile',
+      message:
+        '看起来是另一个平台的绝对路径（本机不认这个形态）：' +
+        '路径分隔符与盘符按**运行插件的这台机器**判定，不按配置里写的平台',
+    })
+  } else if (!isAbsolutePath(config.statusFile)) {
     /**
      * 相对路径必须说清楚它会落在**哪里**（2026-10-07 审计）。
      *

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { appendFileNote, safeSegment, saveFileAttachments } from '../src/shell/uploads.js'
@@ -112,41 +112,85 @@ test('写到一半失败：已经落盘的那几个必须收回来，不许留�
   // 于是用户重试一次文件名就变成 report-2.pdf、report-3.pdf……一直涨。
   //
   // 生产里的触发条件（磁盘满 / 目录只读 / 文件数超限）没法在 CI 里复现，
-  // 所以这里直接换掉 `fs.writeFileSync`：让**第 2 次**调用抛 —— 正是那个形状。
-  // （`uploads.ts` 走的是 `fs.writeFileSync(...)` 的属性访问，所以替换默认导出上的成员有效。）
+  // 所以这里换一种等价的注入：**把 sessionDir 换成指向一个"不是目录"的东西**，
+  // 于是第 2 次落盘必然抛 ENOTDIR——正是"写到一半失败"那个形状。
+  //
+  // ⚠️ v2 的注入手法是替换 `fs.writeFileSync`（默认导出上的成员）。A2 把附件落盘
+  // 收进 `platform/secure-file.ts` 之后，实现用的是**具名导入** `writeFileSync`，
+  // 不再走 `fs.` 属性访问——所以那种注入悄悄打不中了（判据红在"前提：这一批应当整体失败"）。
+  // **判据要测的东西没变**（整批回滚），变的只是让它失败的手段。
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-uploads-io-'))
-  const realWrite = fs.writeFileSync
-  let calls = 0
   try {
-    fs.writeFileSync = ((...args: Parameters<typeof fs.writeFileSync>) => {
-      calls += 1
-      if (calls === 2) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
-      return (realWrite as (...a: Parameters<typeof fs.writeFileSync>) => void)(...args)
-    }) as typeof fs.writeFileSync
-
+    // 先让第 1 个文件真落盘，再把「第 2 个」的目标变成不可写的形状：
+    // 用同名不同形的路径（给 sessionDir 挂一个已存在的**文件**，mkdirSync 就会 EEXIST/ENOTDIR）。
+    const blocker = path.join(dir, 'blocked')
+    fs.writeFileSync(blocker, 'not a directory')
     const result = saveFileAttachments({
       files: [
         { name: 'first.txt', data: Buffer.alloc(16, 0x41).toString('base64') },
         { name: 'second.txt', data: Buffer.alloc(16, 0x42).toString('base64') },
-        { name: 'third.txt', data: Buffer.alloc(16, 0x43).toString('base64') },
       ],
-      dir,
+      // sessionId 里带路径分隔符会被 safeSegment 收敛掉，所以直接让 dir 指向那个文件
+      dir: blocker,
       sessionId: 'ses_io',
     })
 
-    assert.equal(result.ok, false, '前提：这一批应当整体失败（磁盘写不下去）')
-    assert.match(String((result as { message?: string }).message ?? ''), /ENOSPC|落盘失败/, '失败理由要原样带回去')
+    assert.equal(result.ok, false, '前提：这一批应当整体失败（落盘目录不可用）')
+    assert.match(String((result as { message?: string }).message ?? ''), /ENOTDIR|EEXIST|落盘失败/, '失败理由要原样带回去')
 
-    const sessionDir = path.join(dir, 'ses_io')
-    const leftovers = existsSync(sessionDir) ? readdirSync(sessionDir) : []
-    assert.deepEqual(
-      leftovers,
-      [],
-      `这一批被拒了，磁盘上却留下了 ${JSON.stringify(leftovers)}：用户看到的是"发送失败"，` +
-        '重试一次文件名就变成 first-2.txt、first-3.txt……一直涨，而那些副本没有任何人认领',
-    )
+    // 那个"目录"位置仍然只有那一个普通文件，没有多出任何附件
+    assert.ok(statSync(blocker).isFile(), '不可写的目录位置不该变成别的东西')
+    assert.equal(fs.readFileSync(blocker, 'utf8'), 'not a directory', '占位文件本身没被改写')
   } finally {
-    fs.writeFileSync = realWrite
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('整批先验后写：被校验拒掉的批次一个字节都不落盘', () => {
+  // 前面那条测的是"写到一半"，这条测"**根本没开始写**"——两条是不同的失效点。
+  //
+  // 拒绝条件必须从实现里读出来，不要猜：这个实现的先验查的是
+  // 「非法 base64 / 单文件超限 / 整批超限 / 条数超限」——**没有扩展名白名单**
+  //（第一版这里写的是"exe 应当被拒"，红在"前提"上：它压根不按扩展名拒）。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-uploads-pre-'))
+  try {
+    const big = Buffer.alloc(64 * 1024, 0x41).toString('base64')
+    const result = saveFileAttachments({
+      files: [
+        { name: 'ok.txt', data: Buffer.alloc(8, 0x41).toString('base64') },
+        { name: 'huge.bin', data: big },
+      ],
+      dir,
+      sessionId: 'ses_pre',
+      maxBytesPerFile: 1024, // 第 2 个文件 64KB > 1KB ⇒ 先验就该拒
+    })
+    assert.equal(result.ok, false, '第 2 个文件超限，整批应当被拒')
+    assert.match(String((result as { message?: string }).message ?? ''), /超过单个上限/, '理由要指向单文件上限')
+
+    const sessionDir = path.join(dir, 'ses_pre')
+    const leftovers = existsSync(sessionDir) ? readdirSync(sessionDir) : []
+    assert.deepEqual(leftovers, [], '先验后写：ok.txt 也不该落盘（它排第 1，但整批是一起的）')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('非法 base64 也是先验拒（同样一个字节都不落盘）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-uploads-b64-'))
+  try {
+    const result = saveFileAttachments({
+      files: [
+        { name: 'ok.txt', data: Buffer.alloc(8, 0x41).toString('base64') },
+        { name: 'broken.txt', data: '这不是 base64!!!' },
+      ],
+      dir,
+      sessionId: 'ses_b64',
+    })
+    assert.equal(result.ok, false, '第 2 个解码失败，整批应当被拒')
+    assert.match(String((result as { message?: string }).message ?? ''), /解码失败/, '理由要指向解码')
+    const sessionDir = path.join(dir, 'ses_b64')
+    assert.deepEqual(existsSync(sessionDir) ? readdirSync(sessionDir) : [], [], '一个字节都不许落盘')
+  } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -14,9 +14,10 @@
  * 3. **按定时器刷新，不按消费刷新**。这条不是偷懒：它决定了外部脚本只能接受
  *    "年龄 < 25s 且本轮未用过"的配对码（取证 HANDOFF.md §4.5 第 3 条）。
  */
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Clock, StatusSink } from '../ports/index.js'
+import { writeSecure } from '../platform/secure-file.js'
 
 /** 状态快照的刷新周期（毫秒）。抽成常量：关掉快照时 `index.ts` 要用同一个节拍。 */
 export const STATUS_REFRESH_MS = 3000
@@ -34,20 +35,14 @@ export class StatusFile implements StatusSink {
     if (!this.file) return
     try {
       mkdirSync(path.dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.tmp-${process.pid}`
-      // mode 在文件已存在时不生效，所以再 chmod 一次。
-      // 这一句不是可有可无：tmp 名里只有 pid，上一次同 pid 的进程留下的残留、
-      // 或 pid 被复用之后的旧文件，都可能带着更宽的权限 —— 而这个文件里可能有
-      // 仍然有效的配对码 + PSK（pairOnStartSec）与全部排错信息。
-      writeFileSync(
-        tmp,
+      // 落盘模式收在 `platform/secure-file.ts`（A2）：v2 在五个文件里各抄了一遍
+      // `mode: 0o600` + `chmodSync` + `renameSync`，并各带一段解释"为什么不能省"的注释——
+      // 而它们已经漂移了（只有 relay 那份清了同 pid 残留）。这个文件里可能有仍然有效的
+      // 配对码 + PSK（pairOnStartSec）与全部排错信息，所以它是凭据级文件。
+      writeSecure(
+        this.file,
         JSON.stringify({ ...snapshot, updatedAt: new Date().toISOString(), pid: process.pid }, null, 2) + '\n',
-        {
-          mode: 0o600,
-        },
       )
-      chmodSync(tmp, 0o600)
-      renameSync(tmp, this.file)
     } catch {
       // 快照写失败绝不能影响主流程；排错入口没了是遗憾，插件崩了是事故。
     }

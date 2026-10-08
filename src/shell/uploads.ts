@@ -16,6 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES, MAX_FILE_ATTACHMENTS } from '@dsh-remote/protocol/limits'
+import { safeFileName, writeSecure } from '../platform/secure-file.js'
 
 /** 本仓沿用的旧名 = 协议层的 `MAX_ATTACHMENT_TOTAL_BYTES`（见下面那段注释）。 */
 const MAX_ATTACH_TOTAL_BYTES = MAX_ATTACHMENT_TOTAL_BYTES
@@ -80,7 +81,11 @@ export function safeSegment(raw: string, fallback: string, maxLen = 96): string 
     .replace(/^[._-]+/, '')
     .slice(0, maxLen)
     .replace(/[._-]+$/, '')
-  return cleaned === '' ? fallback : cleaned
+  if (cleaned === '') return fallback
+  // ⚠️ Windows 保留名（CON / PRN / con.txt / COM1…）：v2 到这里就结束了，
+  // 于是 `CON` 原样落盘 → `writeFileSync` 抛 EINVAL → **整批附件回滚**
+  //（用户传 3 张图，其中一张叫 CON，全没了）。端口层修一次就够（A2）。
+  return safeFileName(cleaned)
 }
 
 /** base64 → Buffer。非法字符会被 Buffer 静默忽略，所以先按字符集拒一遍。 */
@@ -173,7 +178,9 @@ export function saveFileAttachments(options: {
         name = dot > 0 ? `${base.slice(0, dot)}-${++n}${base.slice(dot)}` : `${base}-${++n}`
       }
       const file = path.join(sessionDir, name)
-      fs.writeFileSync(file, one.buf, { mode: 0o600 })
+      // 附件走同一个凭据级落盘端口（A2）：它与 status.json / 密钥簿同属"含用户内容
+      // 且不该被别人读到"的目录，权限语义必须一致——而不是各处各写一遍。
+      writeSecure(file, one.buf)
       written.push({ name, path: file, bytes: one.buf.length, mediaType: one.file.mediaType })
     }
   } catch (error) {

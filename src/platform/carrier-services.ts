@@ -27,6 +27,7 @@
  */
 import type { QuestionItem, SessionSummary } from '@dsh-remote/protocol'
 import { canParticipate, guardedSubscribe } from './guard.js'
+import { tailOfPath as tailOfPathByPlatform, workspaceProblem } from './paths.js'
 import type {
   Clock,
   InteractionSink,
@@ -692,25 +693,25 @@ export function createServicesKernel(services: ServicesBundle, options: Services
   /**
    * 一个目录路径能不能当工作区用。返回 '' = 可以，否则是一句人话原因。
    *
-   * 手机传来的 `workspace` 是不可信输入（它就是一条 JSON 里的字符串）。这里只做**形状**判定，
-   * 不去 stat：这个进程可能被限制成看不到用户的目录树（`ProtectHome`、容器），
-   * 一次 `existsSync` 得到的"不存在"会是个**假否定**，而假否定会让新建直接失败——
-   * 比把它交给内核、让内核按自己的规则处理要坏得多。
+   * 手机传来的 `workspace` 是不可信输入（它就是一条 JSON 里的字符串）。
+   *
+   * 形状判定收在 `platform/paths.ts`（A1）——v2 在这里硬写了一条
+   * `^[A-Za-z]:[\\/]` 就把 Windows 路径全判非法，而 `shell/config.ts` 没这么判，
+   * 于是同一个 `C:\Users\x\project` 两处不同命。现在两处共用一张表，
+   * 且表是**按平台参数**判的：POSIX 宿主拒 Windows 形态、Windows 宿主拒 POSIX 形态，
+   * 而不是"这一代内核只在 POSIX 上"那种一刀切（v3 要三平台可跑，见 V3-PLAN §8.3）。
+   *
+   * 仍然**只做形状判定、不 stat**：这个进程可能被限制成看不到用户的目录树
+   *（`ProtectHome`、容器），一次 `existsSync` 得到的"不存在"会是个**假否定**，
+   * 而假否定会让新建直接失败——比交给内核按自己的规则处理要坏得多。
    */
   function badWorkspace(raw: string): string {
-    if (raw.length > 1024) return 'too long'
-    if (raw.includes('\0')) return 'contains NUL'
-    if (!raw.startsWith('/')) return 'not an absolute path'
-    // 只收 POSIX 绝对路径：这一代内核就在 POSIX 上（Windows 明确不实现，见 DESIGN §8），
-    // 而 `C:\...` 这种混进来的字符串会让内核自己抛一条没人看得懂的错误。
-    if (/^[A-Za-z]:[\\/]/.test(raw)) return 'looks like a Windows path'
-    return ''
+    return workspaceProblem(raw)
   }
 
   /** 日志里只留目录最后一段：完整路径对排错没用、对日志是泄露（见 log.ts 的 MAX_LOG_VALUE_CHARS）。 */
   function tailOfPath(raw: string): string {
-    const parts = raw.split('/')
-    return parts[parts.length - 1] || '/'
+    return tailOfPathByPlatform(raw)
   }
 
   /**

@@ -25,10 +25,11 @@
  * 3. **读不到 / 写不进 / 形状不认识，一律降级成"没有会话"，绝不抛**。插件起不来比丢配对更糟
  *    （`index.ts` 的红线：apply() 不许向外抛）。
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { z } from 'zod'
+import { writeSecure } from '../platform/secure-file.js'
 
 /** 一条可持久化的会话记录。**刻意不含 `clientIds`**：成员表是"此刻谁连着"的瞬时态，
  *  进程重启后那一刻一定是空的（没人连着主机）。落盘它会让主机一启动就以为"有人在听"，
@@ -155,13 +156,11 @@ export class PairStore {
     const { file, hostId, log } = this.options
     if (!file) return false
     const body = JSON.stringify({ version: 1, hostId, savedAt: now, conversations }) + '\n'
-    const tmp = `${file}.tmp-${process.pid}`
     try {
       mkdirSync(path.dirname(file), { recursive: true })
-      writeFileSync(tmp, body, { encoding: 'utf8', mode: 0o600 })
-      // mode 只在**创建**时生效，覆盖写不会收紧已有权限 —— 这个目录里同时住着配对凭据，补一次。
-      chmodSync(tmp, 0o600)
-      renameSync(tmp, file)
+      // 落盘模式收在 `platform/secure-file.ts`（A2）。这个目录里同时住着全部会话的
+      // **PSK**——它是整台主机最敏感的一个文件。
+      writeSecure(file, body)
       this.savedAt = now
       this.dirty = false
       return true
@@ -178,13 +177,10 @@ export class PairStore {
       log?.('pair-store save failed (pairing will need a rescan after the next restart)', {
         message: String((error as Error)?.message ?? error).slice(0, 120),
       })
-      // 临时文件留着会变成下一次成功路径上的垃圾：先写出来、后 rename 失败的场景下，
-      // 它的内容是**上一次**的簿，读它比读不到更糟。删掉，读不到才是安全侧。
-      try {
-        unlinkSync(tmp)
-      } catch {
-        /* 本来就没有 */
-      }
+      // 临时文件的清理由 `writeSecure` 负责（它自己知道 tmp 名怎么拼）。
+      // v2 在这里重复了一遍 `unlinkSync(tmp)`，而那条注释说的是对的：
+      // 「先写出来、后 rename 失败的场景下，它的内容是**上一次**的簿，
+      //   读它比读不到更糟」——现在这件事在端口内部做，调用方不再需要知道 tmp 名。
       return false
     }
   }

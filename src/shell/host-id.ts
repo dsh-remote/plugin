@@ -16,8 +16,9 @@
  *    "插件起不来"不是（红线见 index.ts 的 apply()）。
  */
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { writeSecure } from '../platform/secure-file.js'
 
 /** 认下来的身份形状：可读、可 grep、不含路径分隔符。旧写法那种 `h_xxxx` 也在里面。 */
 const HOST_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
@@ -51,13 +52,8 @@ export function resolveHostId(dir: string, configured: string): string {
     mkdirSync(dir, { recursive: true })
     // 文件不在时用 'wx' 抢注：两个实例同时首建，只有一个写得进去，
     // 输的那个会落到下面把赢家的身份读回来。文件在但不认（手改坏、半写）才覆盖修好。
-    writeFileSync(file, `${fresh}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: existing === undefined ? 'wx' : 'w',
-    })
-    // mode 只在**创建**时生效，覆盖写不会收紧已有权限——这个目录里同时住着配对凭据，补一次。
-    chmodSync(file, 0o600)
+    // 落盘模式收在 `platform/secure-file.ts`（A2）——这个目录里同时住着配对凭据。
+    writeSecure(file, `${fresh}\n`, { flag: existing === undefined ? 'wx' : 'w' })
     return fresh
   } catch {
     try {
