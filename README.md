@@ -1,4 +1,4 @@
-# 黑鲸远控 · 宿主插件（`@dsh-remote/plugin`）
+# DSH远控宿主插件（`@dsh-remote/plugin`）
 
 在手机上远程操作 **DeepSeek Harness（DSH）**：下发指令、看流式输出、审批工具调用、回答问题，
 并让主机在任务跑完前**保持唤醒**。
