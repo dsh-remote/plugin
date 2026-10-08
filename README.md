@@ -7,8 +7,8 @@ DSH Remote Control 的**宿主侧插件**：跑在 DeepSeek Harness 进程里，
 ## 安装（装进 DSH profile）
 
 ```sh
-sh scripts/install-to-profile.sh              # 默认 ~/.dsh/profiles/desktop
-DSH_PROFILE=~/.dsh/profiles/tui sh scripts/install-to-profile.sh
+sh scripts/install-to-profile.mjs              # 默认 ~/.dsh/profiles/desktop
+DSH_PROFILE=~/.dsh/profiles/tui sh scripts/install-to-profile.mjs
 ```
 
 装的是**两个自包含单文件产物**（`dist/bundle/index.js` + `dist/bundle/client.cjs`），
