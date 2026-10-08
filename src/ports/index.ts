@@ -158,11 +158,27 @@ export type KernelEvent =
  * "实时看着对、历史看着怪"——靠肉眼很难发现。
  *
  * `nextBeforeSeq` 省略 = 这是最初的一页（没有更早的内容了）。
+ *
+ * `latestSeq` 是**这一页里最大的 seq**（空页时是该会话当前的 seq），它是
+ * `cmd.session_history.since` 的取值来源（V3-PLAN §7 B1）。空页也必须给——
+ * 否则手机在"这期间没有新条目"时没有可记的值，只能记 0（下次整段重拉）或
+ * 记陈旧值（重复收已看过的条目）。
  */
 export interface KernelHistoryPage {
   events: KernelEvent[]
   nextBeforeSeq?: number
+  /** 这一页覆盖到的最大 seq；缺省表示"这一代宿主不支持"（手机据此走 v2 的重拉一页）。 */
+  latestSeq?: number
 }
+
+/**
+ * 读历史时"补差量落在保留窗口之外"。
+ *
+ * 它必须是**一个可识别的失败**，而不是"少给几条"——见 `readHistory` 的注释。
+ * 宿主侧把它映射成协议码 `history_window_exceeded`。
+ */
+export const HISTORY_WINDOW_EXCEEDED = 'history_window_exceeded'
+export type HistoryWindowExceeded = typeof HISTORY_WINDOW_EXCEEDED
 
 /** 平台词汇（`@deepseek-ai/dsh-user-approval` 的 `ApprovalOutcome`）。 */
 export type ApprovalOutcomeValue = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
@@ -244,9 +260,24 @@ export interface KernelPort {
    * "这一代没有这个能力"，而不是回一个空列表——空列表在手机上就是"这个会话没内容"，
    * 那是一个会让人查错方向的假事实。
    *
-   * `options.beforeSeq` 是上一页给的游标（取 `seq < beforeSeq`）；省略表示要最新一页。
+   * ## 两个方向，互斥（V3-PLAN §5.1 / §7 B1）
+   *
+   * - `options.beforeSeq` 是上一页给的游标（取 `seq < beforeSeq`）；省略表示要最新一页。
+   * - `options.since` 是**向前补差量**（取 `seq > since`），断线重连后手机用它要回那几秒。
+   *
+   * 两者**同时给出必须被调用方拒绝**（协议层 schema 已经先拒一道，这里是第二道）：
+   * "两个方向一起走"没有可定义的语义，让实现自己挑一个，挑错的表现是**静默漏消息**。
+   *
+   * ## 保留窗口：超出要**明说**，不许静默从窗口头部开始给
+   *
+   * 内核侧通常只保留最近若干条事件。`since` 落在窗口外时，实现必须报
+   * `history_window_exceeded`（让手机改拉历史），**不能**返回"窗口里能给的那些"——
+   * 那样手机会以为补齐了，中间那段永远补不回来。
    */
-  readHistory?(sessionId: string, options: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage>
+  readHistory?(
+    sessionId: string,
+    options: { beforeSeq?: number; since?: number; limit: number },
+  ): Promise<KernelHistoryPage>
 
   /**
    * 新建一条会话（手机上那个「新建会话」）。

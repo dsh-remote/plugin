@@ -2591,7 +2591,7 @@ test('cmd.new_session：手机指定的 workspace 必须原样交给内核端口
   await clock.advance(1_000)
 
   await runtime.handleCommand(
-    cmd(PAYLOAD_TYPES.cmdNewSession, { workspace: '/Users/linbin/some-project' }),
+    cmd(PAYLOAD_TYPES.cmdNewSession, { workspace: '/Users/x/some-project' }),
     'c_000000000001',
   )
   await settle()
@@ -2599,7 +2599,7 @@ test('cmd.new_session：手机指定的 workspace 必须原样交给内核端口
   assert.equal(seen.length, 1, '夹具自检：newSession 被调了一次')
   assert.equal(
     seen[0]?.workspace,
-    '/Users/linbin/some-project',
+    '/Users/x/some-project',
     '手机指定的落点被丢掉了：会话会建在主机自己推断的目录里，而回执照样 ok:true（无错、无日志、手机上看不出来）',
   )
 })

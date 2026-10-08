@@ -29,7 +29,7 @@ async function summaryOf(kernel: MockKernel, sessionId: string): Promise<Session
 
 test('newSession({workspace}) 必须把工作区记进会话摘要（否则"手机指定的分组生效了"无从断言）', async () => {
   const kernel = new MockKernel({ clock: new FakeClock() })
-  const made = await kernel.newSession!({ workspace: '/Users/linbin/dsh-remote-control' })
+  const made = await kernel.newSession!({ workspace: '/Users/x/dsh-remote-control' })
   assert.equal(made.ok, true)
   const id = made.sessionId ?? ''
   assert.ok(id, '夹具自检：新建要返回 id')
@@ -37,7 +37,7 @@ test('newSession({workspace}) 必须把工作区记进会话摘要（否则"手�
   assert.ok(row, '新建出来的会话必须立刻出现在列表里')
   assert.equal(
     row.workspace,
-    '/Users/linbin/dsh-remote-control',
+    '/Users/x/dsh-remote-control',
     '替身没记 workspace：列表里那一行看不出落点，e2e 断言只能去翻内部状态',
   )
 })

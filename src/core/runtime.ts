@@ -513,10 +513,30 @@ export class HostRuntime {
             reply(false, { message: '主机这一代不支持读取历史（内核端口没有 readHistory 能力）' })
             return
           }
-          const page = await read.call(this.kernel, cmd.sessionId, {
-            ...(cmd.beforeSeq === undefined ? {} : { beforeSeq: cmd.beforeSeq }),
-            limit: cmd.limit ?? HISTORY_LIMIT,
-          })
+          // ⚠️ 互斥的第二道（协议 schema 已先拒一道）：mock 与真实载体是两条实现，
+          // 只靠 schema 那一道会漏。放行的后果是实现自己挑一个方向，挑错即静默漏消息。
+          if (cmd.since !== undefined && cmd.beforeSeq !== undefined) {
+            reply(false, { message: 'since（向前补差量）与 beforeSeq（向后翻页）不能同时给' })
+            return
+          }
+          let page: Awaited<ReturnType<NonNullable<typeof read>>>
+          try {
+            page = await read.call(this.kernel, cmd.sessionId, {
+              ...(cmd.beforeSeq === undefined ? {} : { beforeSeq: cmd.beforeSeq }),
+              ...(cmd.since === undefined ? {} : { since: cmd.since }),
+              limit: cmd.limit ?? HISTORY_LIMIT,
+            })
+          } catch (error) {
+            // 保留窗口之外：**明确说补不回来**，让手机改拉历史（规范 §10.7 S4/S5）。
+            // 这里绝不能退化成"返回窗口内能给的那些"——手机会以为补齐了，
+            // 而中间那段永远补不回来，用户看到的是"消息偶尔少几行"。
+            const reason = String((error as Error)?.message ?? error)
+            if (reason.includes(HISTORY_WINDOW_EXCEEDED)) {
+              reply(false, { message: `断线时间太长，中间那段已经补不回来了（${reason}）` })
+              return
+            }
+            throw error
+          }
           // 条目走**与实时流同一批出站构造器**：形状一致才谈得上"同一套渲染路径"。
           const items: HistoryItem[] = []
           for (const event of page.events) {

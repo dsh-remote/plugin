@@ -1165,12 +1165,12 @@ test('新建会话带 cwd：不给的话宿主用 process.cwd() 兜底（真机�
   const f = fixture()
   const asked: unknown[] = []
   const services = f.bundle({ live: true })
-  // 最近一条会话在 /Users/linbin/dsh-remote-control：用户在做的项目就是它。
+  // 最近一条会话在 /Users/x/dsh-remote-control：用户在做的项目就是它。
   services.sessionQuery = {
     listSessions: () =>
       Promise.resolve([
         {
-          header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/Users/linbin/dsh-remote-control' },
+          header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/Users/x/dsh-remote-control' },
         },
       ]),
   }
@@ -1184,11 +1184,11 @@ test('新建会话带 cwd：不给的话宿主用 process.cwd() 兜底（真机�
   }
   const made = await f.kernel(services).newSession!()
   assert.equal(made.ok, true)
-  assert.deepEqual(asked, [{ cwd: '/Users/linbin/dsh-remote-control' }], '要挂在用户此刻在做的项目上')
+  assert.deepEqual(asked, [{ cwd: '/Users/x/dsh-remote-control' }], '要挂在用户此刻在做的项目上')
 })
 
 test('新建会话的 cwd：配置点名优先于"跟着最近一条会话走"', async () => {
-  const f = fixture({ newSessionCwd: '/Users/linbin/other-proj' })
+  const f = fixture({ newSessionCwd: '/Users/x/other-proj' })
   const asked: unknown[] = []
   const services = f.bundle({ live: true })
   services.sessionQuery = {
@@ -1203,7 +1203,7 @@ test('新建会话的 cwd：配置点名优先于"跟着最近一条会话走"',
     },
   }
   await f.kernel(services).newSession!()
-  assert.deepEqual(asked, [{ cwd: '/Users/linbin/other-proj' }], '配置点名的目录优先')
+  assert.deepEqual(asked, [{ cwd: '/Users/x/other-proj' }], '配置点名的目录优先')
 })
 
 test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cwd（2026-10-06 用户报"落在未分组"）', async () => {
@@ -1218,7 +1218,7 @@ test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cw
     listSessions: () =>
       Promise.resolve([
         { header: { id: 'ses_new_no_cwd', createdAt: 1_700_000_900_000 } }, // 最新、没有目录
-        { header: { id: 'ses_with_cwd', createdAt: 1_700_000_000_000, cwd: '/Users/linbin/dsh-remote-control' } },
+        { header: { id: 'ses_with_cwd', createdAt: 1_700_000_000_000, cwd: '/Users/x/dsh-remote-control' } },
       ]),
   }
   services.sessionController = {
@@ -1233,7 +1233,7 @@ test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cw
   assert.equal(made.ok, true)
   assert.deepEqual(
     asked,
-    [{ cwd: '/Users/linbin/dsh-remote-control' }],
+    [{ cwd: '/Users/x/dsh-remote-control' }],
     '往前扫到一条带 cwd 的就必须用它：request 为 {} 等于把落点交给宿主默认，也就是未分组',
   )
 })

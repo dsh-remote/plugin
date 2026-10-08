@@ -17,8 +17,14 @@ concurrency:
 
 jobs:
   verify:
-    # v3 的目标是三平台可跑；矩阵随阶段 A 的进展补齐 macOS / Windows。
-    runs-on: ubuntu-latest
+    strategy:
+      # 三平台矩阵（V3-PLAN A6 / §8.3）。**「本地全绿」不等于「三平台全绿」**：
+      # win32 上 chmod 只切只读位、路径分隔符不同、\\ 是 UNC 前缀、`npm` 是 `npm.cmd`——
+      # 这些在 macOS 上一个都不会露出来，而它们每一个都曾让 v2 在 Windows 上装不上。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

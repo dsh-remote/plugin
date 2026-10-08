@@ -19,6 +19,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PairStore, defaultPairStoreFile, type StoredConversation } from '../src/shell/pair-store.js'
 import { resolvePairStoreFile, DEFAULT_CONFIG } from '../src/shell/config.js'
+import { skipUnlessPosix as skipUnlessPosixRaw, skipIfCannotChmodDir } from './test-platform.js'
+
+/**
+ * win32 上跳过，且**带原因**：win32 的 chmod 只切只读位，0o600 这类断言永远不成立。
+ * 而「只读目录」那类用例的前置条件造不出来——跳过比「假装通过」诚实
+ * （假绿是这一族里最坏的一种：它让 CI 变绿，而它其实什么都没测）。
+ */
+const POSIX_ONLY = skipUnlessPosixRaw()
+const SKIP_IF_NO_CHMOD_DIR = skipIfCannotChmodDir()
+
+
+
 
 function tempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'drc-pairstore-'))
@@ -49,7 +61,7 @@ test('save → load 原样读回：这就是免扫码重连的全部持久化面
   }
 })
 
-test('写出来的文件是 0600：里面是全部历史会话的 PSK，与 status.json 同一目录', () => {
+test('写出来的文件是 0600：里面是全部历史会话的 PSK，与 status.json 同一目录', POSIX_ONLY, () => {
   const { dir, cleanup } = tempDir()
   try {
     const file = path.join(dir, 'conversations.json')
@@ -60,7 +72,7 @@ test('写出来的文件是 0600：里面是全部历史会话的 PSK，与 stat
   }
 })
 
-test('重复写同一个文件不会把权限放松：mode 只在创建时生效，必须每次补 chmod', () => {
+test('重复写同一个文件不会把权限放松：mode 只在创建时生效，必须每次补 chmod', POSIX_ONLY, () => {
   const { dir, cleanup } = tempDir()
   try {
     const file = path.join(dir, 'conversations.json')
@@ -98,7 +110,7 @@ test('目录不存在时自己建：GUI 宿主首次启动时那个目录可能�
   }
 })
 
-test('写不进（目录是只读文件）时 save 返回 false 而不抛：插件起不来比丢配对更糟', () => {
+test('写不进（目录是只读文件）时 save 返回 false 而不抛：插件起不来比丢配对更糟', SKIP_IF_NO_CHMOD_DIR, () => {
   const { dir, cleanup } = tempDir()
   try {
     const locked = path.join(dir, 'locked')

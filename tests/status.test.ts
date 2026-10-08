@@ -19,6 +19,13 @@ import path from 'node:path'
 import { StatusFile } from '../src/shell/status.js'
 import { DEFAULT_SYSTEM_CLOCK, FakeClock } from '../src/core/clock.js'
 import { redact } from '../src/shell/config.js'
+import { skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
+
+/**
+ * win32 上跳过，且**带原因**：win32 的 chmod 只切只读位，0o600 这类断言永远不成立；
+ * 而只读目录那类用例的前置条件造不出来，跳过比"假装通过"诚实。
+ */
+const POSIX_ONLY = skipUnlessPosixRaw()
 
 /** 一眼假的 token：仓库里不许出现任何真凭据，这条只验形状。 */
 const FAKE_TOKEN = 'fake-token-not-a-real-secret-0123456789abcdef'
@@ -31,7 +38,7 @@ function tempDir(): { dir: string; file: string; cleanup: () => void } {
 
 const modeOf = (file: string): string => (statSync(file).mode & 0o777).toString(8)
 
-test('快照以 0600 落盘：里面可能出现仍然有效的配对码与 PSK', () => {
+test('快照以 0600 落盘：里面可能出现仍然有效的配对码与 PSK', POSIX_ONLY, () => {
   const { file, cleanup } = tempDir()
   try {
     new StatusFile(file, DEFAULT_SYSTEM_CLOCK).write({ carrier: 'services', relay: 'online', conversations: 1 })
@@ -257,7 +264,7 @@ function existsTmp(file: string): boolean {
   }
 }
 
-test('写盘前要再 chmod 一次：tmp 残留/pid 复用不许让新快照沿用旧权限', () => {
+test('写盘前要再 chmod 一次：tmp 残留/pid 复用不许让新快照沿用旧权限', POSIX_ONLY, () => {
   // 现场：tmp 名里只有 pid，上一次同 pid 的进程留下的残留（或 pid 被复用后的旧文件）
   // 可能带着更宽的权限，而 writeFileSync 的 mode 只在**创建**时生效——直接改名就把宽权限
   // 带给了正式文件，而 status.json 里可能有仍然有效的配对码 + PSK（pairOnStartSec）。

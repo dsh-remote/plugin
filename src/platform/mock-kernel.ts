@@ -22,6 +22,7 @@ import type {
   KernelHistoryPage,
   KernelPort,
 } from '../ports/index.js'
+import { HISTORY_WINDOW_EXCEEDED } from '../ports/index.js'
 
 export interface MockKernelOptions {
   clock: Clock
@@ -34,6 +35,14 @@ export interface MockKernelOptions {
   autoApproval?: boolean
   /** 假历史（seq 就是下标）。不给就用一份两轮的默认内容，够验证翻页与渲染。 */
   history?: KernelEvent[]
+  /**
+   * 保留窗口：只保留最近 N 条（模拟内核侧的日志截断）。
+   *
+   * **存在的理由**：没有它，`since` 落在窗口外那条路径在本地永远走不到
+   * ——而"窗口外必须明确报错、不许静默从窗口头部开始给"恰恰是补差量最容易
+   * 写错的地方（写错的后果是手机静默缺一段）。
+   */
+  historyWindow?: number
   /** 读历史时报错（用来验证"能力缺失要明确拒绝，而不是回一张空页"）。 */
   historyError?: string
   /** 新建会话时报错（用来验证"新建失败必须给出可读原因，不许静默"）。 */
@@ -195,15 +204,54 @@ export class MockKernel implements KernelPort {
    * 假历史：`seq` 就是下标，从后往前切一页。
    * 翻页语义与真实载体一致（`beforeSeq` 是**排他**上界、省略游标=到底了），
    * 所以小程序侧的翻页逻辑能在本地闭环里真跑一遍。
+   *
+   * ## 补差量（`since`，V3-PLAN §7 B1/B4）
+   *
+   * - `since` 与 `beforeSeq` **互斥**：同时给要抛（协议层已先拒一道，这里是第二道）。
+   * - `since` 是**排他下界**（取 `seq > since`）：手机记的就是"已看到的最大 seq"，
+   *   把它再发一次就是重复收。
+   * - 落在**保留窗口**之外要抛 `history_window_exceeded`，不许静默从窗口头部开始给
+   *   ——那样手机会以为补齐了，中间那段永远补不回来。
    */
-  async readHistory(sessionId: string, options: { beforeSeq?: number; limit: number }): Promise<KernelHistoryPage> {
+  async readHistory(
+    sessionId: string,
+    options: { beforeSeq?: number; since?: number; limit: number },
+  ): Promise<KernelHistoryPage> {
     if (this.options.historyError) throw new Error(this.options.historyError)
+    if (options.since !== undefined && options.beforeSeq !== undefined) {
+      throw new Error('since 与 beforeSeq 互斥：两个方向一起走没有可定义的语义')
+    }
     const log = this.options.history ?? defaultHistory(sessionId)
+    const window = this.options.historyWindow ?? log.length
+    const earliest = Math.max(0, log.length - window)
+
+    // 向前补差量
+    if (options.since !== undefined) {
+      if (options.since < earliest) {
+        // 窗口外：明确说"补不回来"，让手机改拉历史
+        throw new Error(`${HISTORY_WINDOW_EXCEEDED}: since=${options.since} 早于窗口起点 ${earliest}`)
+      }
+      const from = Math.max(earliest, Math.min(log.length, options.since + 1))
+      const upTo = Math.min(log.length, from + Math.max(1, options.limit))
+      const events = log.slice(from, upTo)
+      return {
+        events,
+        // ⚠️ mock 的 `seq` 就是**下标**（见文件头"假历史：seq 就是下标"），
+        // 而 `KernelEvent` 本身不带 seq——真实载体那边 seq 来自内核事件
+        // （carrier-services.ts:2162 的 `{seq, events}` 分组）。所以这里按下标算，
+        // 别去找 event.seq（找不到，那是 mock 与真实载体的形状差异，不是 bug）。
+        latestSeq: events.length > 0 ? upTo - 1 : options.since,
+      }
+    }
+
     const upTo = options.beforeSeq === undefined ? log.length : Math.max(0, Math.min(log.length, options.beforeSeq))
     const from = Math.max(0, upTo - Math.max(1, options.limit))
+    const events = log.slice(from, upTo)
     return {
-      events: log.slice(from, upTo),
+      events,
       ...(from > 0 ? { nextBeforeSeq: from } : {}),
+      // 空页也要给 latestSeq（手机靠它记"到哪了"）；空页时就是这一页的上界
+      latestSeq: events.length > 0 ? upTo - 1 : Math.max(0, upTo - 1),
     }
   }
 

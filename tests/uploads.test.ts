@@ -5,6 +5,7 @@ import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { appendFileNote, safeSegment, saveFileAttachments } from '../src/shell/uploads.js'
+import { hasPosixModes } from './test-platform.js'
 
 test('safeSegment：路径穿越与隐藏文件都要被挡住', () => {
   assert.equal(safeSegment('../../etc/passwd', 'x'), 'etc_passwd')
@@ -29,7 +30,12 @@ test('saveFileAttachments：保留扩展名、同名加序号、整批先验后�
   assert.equal(one && path.basename(one.path), 'report.pdf')
   assert.equal(one && one.bytes, body.length)
   assert.equal(one && fs.readFileSync(one.path).equals(body), true, '落盘的内容要一个字节都不差')
-  assert.equal(one && fs.statSync(one.path).mode & 0o777, 0o600, '附件不该给别人看')
+  // ⚠️ 权限位这一条**单独**判，不整条 skip：这条用例前面还有"文件名/内容/字节数"
+  // 好几条与平台无关的断言，整条 skip 会让 win32 上白丢它们。
+  // 而 win32 上 chmod 只切只读位，`mode & 0o777 === 0o600` 永远不成立（hasPosixModes）。
+  if (hasPosixModes()) {
+    assert.equal(one && fs.statSync(one.path).mode & 0o777, 0o600, '附件不该给别人看')
+  }
 
   // 同名再来一份：不许覆盖上一份（用户以为发上去了，其实那份被顶掉了）
   const again = saveFileAttachments({

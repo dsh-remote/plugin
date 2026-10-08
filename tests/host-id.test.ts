@@ -14,6 +14,15 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { newHostId, resolveHostId } from '../src/shell/host-id.js'
+import { skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
+
+/**
+ * win32 上跳过，且**带原因**：win32 的 chmod 只切只读位，0o600 这类断言永远不成立。
+ * 而「只读目录」那类用例的前置条件造不出来——跳过比「假装通过」诚实
+ * （假绿是这一族里最坏的一种：它让 CI 变绿，而它其实什么都没测）。
+ */
+const POSIX_ONLY = skipUnlessPosixRaw()
+
 
 function tempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'drc-hostid-'))
@@ -33,7 +42,7 @@ test('配置给了 hostId 就用配置的：既不读文件也不写文件（配
   }
 })
 
-test('第一次加载造一个 drc-<hex> 并以 0600 落盘', () => {
+test('第一次加载造一个 drc-<hex> 并以 0600 落盘', POSIX_ONLY, () => {
   const { dir, cleanup } = tempDir()
   try {
     const id = resolveHostId(dir, '')
