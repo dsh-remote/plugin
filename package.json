@@ -1,31 +1,79 @@
 {
   "name": "dsh-remote-control",
-  "private": true,
-  "version": "0.1.0",
-  "description": "Remote control for DeepSeek Harness: DSH plugin (Host) + self-hostable relay server + WeChat Mini Program client. Payload-level end-to-end encrypted.",
+  "version": "2.0.21",
+  "description": "DSH Remote Control host plugin: pairs a running DeepSeek Harness with the DRC relay so a WeChat Mini Program can send prompts, watch streamed output, and answer approvals. Payload-level E2E encryption; the relay never sees plaintext. Pairing is one click on the status-bar pill (three same-origin routes + a browser half).",
   "type": "module",
   "license": "MIT",
+  "author": "providcc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/providcc/dsh-remote-control.git"
+  },
+  "homepage": "https://github.com/providcc/dsh-remote-control#readme",
+  "bugs": "https://github.com/providcc/dsh-remote-control/issues",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "deepseek",
+    "remote-control",
+    "relay",
+    "websocket",
+    "wechat",
+    "miniprogram",
+    "e2e-encryption",
+    "cordis",
+    "plugin",
+    "qrcode"
+  ],
   "engines": {
     "node": ">=20"
   },
+  "main": "./dist/bundle/index.js",
+  "exports": {
+    ".": "./dist/bundle/index.js",
+    "./client": "./dist/bundle/client.cjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/bundle",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "test": "pnpm -r test",
-    "gates": "node scripts/report-gates.mjs",
-    "e2e": "node e2e/run.mjs",
-    "repos:build": "cd dsh-remote-protocol && env -u NODE_OPTIONS pnpm build && cd ../dsh-remote-control && env -u NODE_OPTIONS pnpm -r build && cd ../dsh-remote-server && env -u NODE_OPTIONS pnpm build",
-    "install:profile": "sh dsh-remote-control/scripts/install-to-profile.sh",
-    "relay:local": "sh dsh-remote-server/scripts/relay-start.sh",
-    "check:mp-ui": "node scripts/check-mp-ui.mjs && node dsh-remote-mp/scripts/check-mp-contrast.mjs",
-    "mp:lazyload": "node scripts/mp-lazyload-report.mjs",
-    "mp:theme": "node dsh-remote-mp/scripts/gen-mp-theme.mjs",
-    "mp:shots": "node scripts/mp-shots.mjs",
-    "mp:probe": "node scripts/mp-probe.mjs",
-    "mp:upload": "node scripts/mp-upload.mjs",
-    "version:next": "node scripts/next-version.mjs",
-    "version:check": "node scripts/next-version.mjs --check"
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p client/tsconfig.json",
+    "build": "pnpm clean && tsc -p tsconfig.json && tsc -p client/tsconfig.json && node ../../scripts/bundle-plugin.mjs",
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\"",
+    "format": "prettier --write . --ignore-path ../../.prettierignore",
+    "format:check": "prettier --check . --ignore-path ../../.prettierignore"
+  },
+  "dependencies": {
+    "dsh-remote-wire": "2.0.21",
+    "qrcode": "^1.5.4",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/node": "^22.9.0"
-  }
+    "@types/node": "^26.6.3",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.3.3",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@11.7.0"
 }

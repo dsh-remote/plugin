@@ -1,0 +1,132 @@
+name: Release
+
+# 打一个 `v*` 标签即发布：先跑一遍完整校验（与 CI 同款，标签也可能打在坏提交上），
+# 版本号对得上标签之后，把插件包发布到 npm（带 provenance），再建一个 GitHub Release。
+#
+# 本仓只发**一个** npm 包：`dsh-remote-control`（2026-10-03 起界面上那一半已折进插件包，只剩 packages/plugin）。
+# 包的产物有两半：宿主侧 `index.js` 与浏览器面 `client.cjs`，都随 `scripts/install-to-profile.sh` 装进 profile。
+#
+# 前置条件（2026-10-03 起只有一条）：npm 侧要有指向本仓 `release.yml` 的
+# **Trusted Publishing**（OIDC）配置：
+#   npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish
+# 之后发布不再用 `NPM_TOKEN` secret（Publish 步骤把 `NODE_AUTH_TOKEN` **显式清空**——留着它
+# 会让 pnpm 在 OIDC 失败时静默回落成 token 发布，包发出去了但没有 attestation，细节见那一步）。
+# `id-token: write` 是本工作流唯一的凭据权限（已给）；provenance 由插件包 package.json 的
+# `publishConfig.provenance: true` 打开，最后由 "Verify provenance landed" 一步独立体检。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: verify, publish to npm, tag release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # 生成 release notes 需要完整历史
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      # 同 CI：lockfile 已提交（协议包上了 npm 之后生成的），冻结安装。
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check, format check, build, tests
+        run: |
+          pnpm typecheck
+          pnpm format:check
+          pnpm test
+
+      - name: Verify the tag matches the published package version
+        env:
+          # 通过 env 传事件字段，避免把可被影响的值直接插进脚本。
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          tag="${TAG_NAME#v}"
+          version="$(node -p "require('./packages/plugin/package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "标签 v$tag ≠ packages/plugin 里的版本 $version"
+            exit 1
+          fi
+          echo "版本一致：$version"
+
+      - name: Publish to npm
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          # **显式清空**，不是"不设"：`actions/setup-node` 收到 `registry-url` 之后会把它的
+          # `token` 输入（默认值 = `github.token`）写进 `NODE_AUTH_TOKEN`，并往 `$NPM_CONFIG_USERCONFIG`
+          # 里落一句 `_authToken=${NODE_AUTH_TOKEN}`——那一句就是 pnpm 静默回落成 token 发布的入口
+          # （v1.1.0 就是这么发出去的：版本发了、工作流绿、attestation 一个没有，日志里只有一行
+          # `Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE … 404`）。清空之后 OIDC 是唯一路径，
+          # Trusted Publishing 没配好就直接红，红得看得见——而且以后谁往这里塞真 token 也回落不了。
+          NODE_AUTH_TOKEN: ''
+        # -r 会跳过 `private: true` 的包，所以这里实际只发 dsh-remote-control 一个；
+        # 无 scope 的包要显式 --access public。
+        #
+        # **幂等**：版本号已经在注册表里就跳过 publish，而不是让它 403 把后面的 Release 一起带走
+        # （协议仓 2026-10-03 那次就是这么缺了 v1.0.1 的公告，细节见 dsh-remote-protocol 的同名步骤）。
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          if [ -n "$(npm view "dsh-remote-control@${version}" version 2>/dev/null || true)" ]; then
+            echo "dsh-remote-control@${version} 已经在注册表里：跳过 publish，往下建 Release"
+            exit 0
+          fi
+          pnpm -r publish --access public --no-git-checks
+
+      # 发完必须**独立验一次 provenance**：工作流绿不等于带 attestation（见上面那条回落）。
+      # ⚠️ 窗口要给到**几分钟**，不是 60s：2026-10-03 发 `dsh-remote-wire@1.0.1` 时 Publish 步骤
+      # 成功、attestation 事后 curl 也确实在，但 60s 的轮询先放弃 → 这一步红 → 后面的
+      # `Create GitHub Release` 整个没跑。**假红比不红更坏**：它把"已发布的版本号不可复用"
+      # 变成一个人去重发同一个号的死路。
+      #
+      # 200s 也输过一回（2026-10-04 发 control `2.0.0`）：Publish 绿、npm 上 2.0.0 在、
+      # attestation 几分钟后 curl 也在，但轮询在它落地之前放弃。靠"Publish 幂等 +
+      # `gh run rerun --failed` 只重跑红的那几步"捞回来的（v2.0.0 的 Release 是重跑补的）。
+      # 所以窗口放到 80 × 5s = 400s：注册表侧的落地延迟是它的事，不该由我们判红。
+      - name: Verify provenance landed
+        env:
+          # 通过 env 传事件字段，避免把可被影响的值直接插进脚本。
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          url="https://registry.npmjs.org/-/npm/v1/attestations/dsh-remote-control@${version}"
+          for i in $(seq 1 80); do
+            body="$(curl -s "$url" || true)"
+            if printf '%s' "$body" | grep -q '"attestations"'; then
+              echo "provenance 已挂上：dsh-remote-control@${version}（第 ${i} 次轮询）"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "发布后 200s 仍查不到 dsh-remote-control@${version} 的 attestation。" >&2
+          echo "先别重发：**版本号一旦发出去就永远不可复用**，重发只会撞 403 或发出另一个号。" >&2
+          echo "也可能只是注册表侧延迟——手工复核一次：curl -s '$url'" >&2
+          echo "确实没有，才是 Trusted Publishing 没配好（或配的 workflow 文件名不是 release.yml）：" >&2
+          echo "  npm trust github dsh-remote-control --repo providcc/dsh-remote-control --file release.yml --allow-publish" >&2
+          exit 1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --generate-notes \
+            --verify-tag

@@ -1,15 +1,20 @@
-node_modules/
+# 构建产物
 dist/
-lib/
+# 依赖
+node_modules/
+# 包管理器的缓存/日志
+.pnpm-store/
 *.log
+npm-debug.log*
+pnpm-debug.log*
+# 编辑器与系统
 .DS_Store
-# apps/server/ 已于 2026-10-03 删除（四仓拆成平行的顶层目录），这条规则随之作废
-.tmp/
-# e2e 跑出来的运行期产物（配对码 spike 图等），不是源码
-.dsh/
-
-# 开源四仓：各自就地 git init、已是独立仓，伞仓不再跟踪（文件仍在磁盘上）
-dsh-remote-protocol/
-dsh-remote-server/
-dsh-remote-control/
-dsh-remote-mp/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+# 覆盖率
+coverage/
+# 配对通道密钥簿落盘：里面是全部历史会话的 PSK（见 src/shell/pair-store.ts）。
+# 真机落点在 ~/.dsh 下不进任何仓库；这条防的是 e2e / 脚本把工作目录指到仓库里。
+conversations-*.json
+conversations-*.json.tmp-*

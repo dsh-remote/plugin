@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的重复推送取消旧运行，节省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      # 工具链固定 22：pnpm 11.7 要求 Node ≥ 22.13（它 import `node:sqlite`）。
+      # 这里原先直接用矩阵版本，于是 node 20 那条腿连 setup-node 的 pnpm 缓存步骤都过不去。
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      # lockfile 已提交（协议包 `dsh-remote-wire@1.0.0` 上了 npm 之后生成的），所以冻结安装。
+      # 协议升版后要重新 `pnpm install` 并提交新的 pnpm-lock.yaml，否则这里会红。
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # 静态检查跑一次就够，两条腿重复跑没有额外信息。
+      - name: Type-check
+        if: matrix.node == '22'
+        run: pnpm typecheck
+
+      - name: Format check
+        if: matrix.node == '22'
+        run: pnpm format:check
+
+      # build 里含 esbuild 打包，打包脚本自带产物断言（外壳形状、体积上限、sidebarRight 存在）。
+      - name: Build
+        run: pnpm build
+
+      # engines 写的是 >=20，那就得真在 20 上把测试跑一遍。跑测试只要 `node --test`
+      # 打 dist/tests，不经 pnpm，所以这里可以把 node 切成矩阵版本。
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 用 find 显式列文件，而不是把 glob 交给 node：`--test` 的位置参数语义在版本之间变过——
+      # node 20 把它当字面路径（`dist/tests/*.test.js` 直接 "Could not find"），node 22 才当 glob。
+      # 每个包的测试数都先断言非零，否则目录一改名就变成"0 个测试全绿"。
+      - name: Run tests on node ${{ matrix.node }}
+        run: |
+          set -e
+          # 2026-10-03 起本仓只有一个包：右栏那一半折进了 packages/plugin
+          # （原来这里是 packages/plugin + 界面上那一半的独立包两个）。
+          cd packages/plugin
+          n="$(find dist/tests -name '*.test.js' | wc -l)"
+          echo "packages/plugin 测试文件数：$n"
+          [ "$n" -gt 0 ] || { echo "packages/plugin 的 dist/tests 下没找到 *.test.js"; exit 1; }
+          find dist/tests -name '*.test.js' -print0 | xargs -0 node --test
+
+      - name: Verify the bundles are self-contained single files
+        run: |
+          set -e
+          # 一次打包产出**两半**：宿主侧 index.js 与浏览器面 client.cjs。
+          # client.cjs 缺件不会在 build 步骤红（esbuild 成功了），所以这里必须点名它——
+          # 漏装浏览器面的表现是"右栏永远不弹"，而宿主日志里一句错都没有。
+          for f in packages/plugin/dist/bundle/index.js \
+                   packages/plugin/dist/bundle/client.cjs; do
+            test -s "$f" || { echo "缺少产物：$f"; exit 1; }
+            printf '  %-56s %s KB\n' "$f" "$(( $(wc -c < "$f") / 1024 ))"
+          done
+          # 浏览器面必须是宿主能识别的模块外壳，否则整页 web boot 失败。
+          head -c 32 packages/plugin/dist/bundle/client.cjs | grep -q 'window.__ModuleLoader__.load' \
+            || { echo "client.cjs 外壳不对"; exit 1; }
