@@ -88,11 +88,59 @@ export function isGreater(a, b) {
   return x.pre > y.pre
 }
 
-/** npm 上某个包的全部已发布版本。 */
-export function publishedVersions(pkg) {
-  const out = execFileSync('npm', ['view', pkg, 'versions', '--json'], { encoding: 'utf8', maxBuffer: 1 << 24 })
-  const parsed = JSON.parse(out)
+/**
+ * 这个 execFileSync 的失败是不是"**这个包在 npm 上不存在**"。
+ *
+ * ## 为什么需要它（2026-10-08，换 scope 时暴露）
+ *
+ * `npm view <不存在的包> versions --json` 会 **exit 1** 并在 stderr 打
+ * `npm error code E404`。而"一个包还没有任何版本"是一个**合法状态**——
+ * 尤其是刚把包搬到一个新 scope 的时候（`@dsh-remote/core` 在第一次发布
+ * 之前就处于这个状态）。
+ *
+ * 原来的 `publishedVersions` 直接 `execFileSync`，于是那个窗口里整个版本闸
+ * **崩掉**（抛栈）而不是报红，而"崩掉"会让人以为是脚本坏了、而不是
+ * "这个包还没发"——排查方向整个错。
+ *
+ * ⚠️ 只认 E404：别的失败（网络断、npm 没装、registry 挂了、权限）
+ * **照旧抛**。把那些也吞成"没发布过"会让闸门在最需要它的时候静默放行。
+ */
+export function isPackageNotFound(error) {
+  if (!error || typeof error !== 'object') return false
+  const stderr = String(error.stderr ?? '')
+  return error.status === 1 && /\bE404\b/.test(stderr)
+}
+
+/** 把 `npm view <pkg> versions --json` 的 stdout 解析成版本数组。 */
+export function parsePublishedVersions(stdout) {
+  let parsed
+  try {
+    parsed = JSON.parse(String(stdout ?? ''))
+  } catch {
+    // 空 stdout（例如 npm 打印的是别的东西）当成"没有版本"，而不是抛——
+    // 这条路上的调用方只关心"有哪些号被占了"。
+    return []
+  }
+  if (parsed === null || parsed === undefined) return []
   return Array.isArray(parsed) ? parsed : [parsed]
+}
+
+/**
+ * npm 上某个包的全部已发布版本。**没发布过 = 空数组**（见 `isPackageNotFound`）。
+ */
+export function publishedVersions(pkg) {
+  let out
+  try {
+    out = execFileSync('npm', ['view', pkg, 'versions', '--json'], {
+      encoding: 'utf8',
+      maxBuffer: 1 << 24,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    if (isPackageNotFound(error)) return []
+    throw error
+  }
+  return parsePublishedVersions(out)
 }
 
 /**
@@ -122,6 +170,39 @@ export function nextVersion(perPackage, options = {}) {
   throw new Error('200 个连续版本号都被占用了——先查是不是 semver 解析出了问题')
 }
 
+/**
+ * 一个**已发布包**的版本号体检（纯函数——刻意不让判据去驱动带 I/O 的那一层）。
+ *
+ * ## 两条判据各自成立，谁也不替谁短路
+ *
+ * 1. **这个号被占过吗**。这里**不能**因为"还没发过"就整段跳过：2.0.8 在 control
+ *    上是空的（当年 2.0.7 之后直接跳到 2.0.9），而它**小于**已发布的 2.0.13。
+ *    第一版就写成 `if (!taken.includes(version)) continue`，于是这道闸**放行了 2.0.8**
+ *    ——恰好是它被写出来要防的那个坑。
+ * 2. **有没有倒退**。`taken` 为空 = 这个包**从没发过**（典型：刚换到新 scope），
+ *    此时这条**必须整条跳过**：`taken.reduce(…, taken[0])` 在空数组上得到
+ *    `undefined`，而 `isGreater(version, undefined)` 会去 `parseVersion(undefined)`
+ *    并抛 —— 症状是闸门崩掉，而不是"新包当然比空集大"这个显然的结论。
+ */
+export function versionProblems(pkg, version, taken) {
+  const problems = []
+  if (taken.includes(version)) {
+    problems.push(
+      `${pkg}@${version} **已经发布过** —— npm 版本不可重用，换一个号（node scripts/next-version.mjs 拿建议）`,
+    )
+  }
+  if (taken.length > 0) {
+    const greatest = taken.reduce((a, b) => (isGreater(b, a) ? b : a), taken[0])
+    if (!isGreater(version, greatest)) {
+      problems.push(
+        `${pkg}@${version} **不大于**已发布的最大版本 ${greatest} —— ` +
+          '发出去等于版本号倒退：latest 会退回去，`^x.y.z` 的消费方拿不到',
+      )
+    }
+  }
+  return problems
+}
+
 function readManifest(repo, manifest) {
   return JSON.parse(readFileSync(path.join(ROOT, repo, manifest), 'utf8'))
 }
@@ -134,23 +215,7 @@ function main(argv) {
       const version = readManifest(entry.repo, entry.manifest).version
       versions.add(version)
       if (!PUBLISHED.some((p) => p.repo === entry.repo)) continue
-      const taken = publishedVersions(entry.pkg)
-      // ⚠️ 这里**不能**因为"还没发过"就 `continue`：2.0.8 在 control 上是空的
-      // （当年 2.0.7 之后直接跳到 2.0.9），而它**小于**已发布的 2.0.13。
-      // 第一版就写成 `if (!taken.includes(version)) continue`，于是这道闸**放行了 2.0.8**
-      // ——恰好是它被写出来要防的那个坑。两件事各判各的，谁也不替谁短路。
-      if (taken.includes(version)) {
-        problems.push(
-          `${entry.pkg}@${version} **已经发布过** —— npm 版本不可重用，换一个号（node scripts/next-version.mjs 拿建议）`,
-        )
-      }
-      const greatest = taken.reduce((a, b) => (isGreater(b, a) ? b : a), taken[0])
-      if (!isGreater(version, greatest)) {
-        problems.push(
-          `${entry.pkg}@${version} **不大于**已发布的最大版本 ${greatest} —— ` +
-            '发出去等于版本号倒退：latest 会退回去，`^x.y.z` 的消费方拿不到',
-        )
-      }
+      problems.push(...versionProblems(entry.pkg, version, publishedVersions(entry.pkg)))
     }
     if (versions.size > 1) {
       problems.push(`各仓版本号不一致：${[...versions].join(' / ')} —— 发版时它们必须同一个号`)
