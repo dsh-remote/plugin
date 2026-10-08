@@ -583,7 +583,7 @@ test('反证：不再宣称"pill 拿 ETag 判断要不要重画"（`<img>` 拿�
   const here = path.dirname(fileURLToPath(import.meta.url))
   // 产物在 `dist/tests/`，所以源码要往上两层（`client-bundle.test.ts` 那条同款）。
   const routes = readFileSync(path.join(here, '..', '..', 'src', 'pill', 'routes.ts'), 'utf8')
-  const client = readFileSync(path.join(here, '..', '..', 'client', 'src', 'pill.ts'), 'utf8')
+  const client = readFileSync(path.join(here, '..', '..', 'src', 'client', 'pill.ts'), 'utf8')
   assert.doesNotMatch(routes, /pill 拿它判断要不要重画/, '那句注释是误导：`<img>` 拿不到 ETag，响应还是 no-store')
   assert.doesNotMatch(client, /headers\.get\(/, '浏览器面从来没读过响应头，别照那句注释去实现')
   assert.match(routes, /ETag: `"\$\{pairingEpoch\(pairing\.qr\)\}"`/, 'ETag 留着（排错用），只是不再宣称有人读它')

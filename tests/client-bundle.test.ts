@@ -1210,7 +1210,7 @@ test('反证：产物里的路由常量与宿主侧定义逐字一致（分叉�
  * （2026-10-04 用户提的误解）。
  */
 test('pill：「手机离线」那一屏要有一句「不用重新扫码」', () => {
-  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../client/src/pill.ts'), 'utf8')
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../src/client/pill.ts'), 'utf8')
   assert.match(
     src,
     /text\('p', 'drc-note', '不用重新扫码'\)/,

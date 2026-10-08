@@ -23,7 +23,7 @@
  * 2026-10-03：浏览器面原来由**第二个 cordis 条目**单独打一份 bundle（那个条目已删除）。
  * 折进主插件之后两半由同一个脚本产出——**因为它们必须同源**：宿主侧路由常量
  * （当时宿主侧那条只读路由与浏览器侧的轮询地址是同一条链的两端，现在那条链整个删了，
- * 剩下的只有 pill 的四条路由 `src/pill/routes.ts` 与 `client/src/pill.ts` 这一对，）
+ * 剩下的只有 pill 的四条路由 `src/pill/routes.ts` 与 `src/client/pill.ts` 这一对，）
  * 分在两个包里各打一次时，两边改一漏一的表现是"右栏永远不弹而日志全绿"（404 在这条路上被容忍）。
  *
  * 类型检查不在这里做：`pnpm typecheck` / `tsc -p tsconfig.json` 负责，
@@ -85,7 +85,7 @@ const bundled = Object.keys(result.metafile?.inputs ?? {})
 
 // ── 浏览器面（右栏自动弹码的轮询端）────────────────────────────────────
 await esbuild.build({
-  entryPoints: [path.join(PLUGIN, 'client', 'src', 'main.ts')],
+  entryPoints: [path.join(PLUGIN, 'src', 'client', 'main.ts')],
   outfile: CLIENT_OUT,
   bundle: true,
   platform: 'browser',

@@ -41,7 +41,7 @@ export const PAIR_IMAGE_ROUTE = '/plugins/dsh-remote-control/pairing.png'
 export const PAIR_STATUS_ROUTE = '/plugins/dsh-remote-control/status'
 export const PAIR_UNPAIR_ROUTE = '/plugins/dsh-remote-control/unpair'
 
-/** 写路由的跨站判据（见文件头）。浏览器面 `client/src/pill.ts` 里是同一个字面量。 */
+/** 写路由的跨站判据（见文件头）。浏览器面 `src/client/pill.ts` 里是同一个字面量。 */
 export const PAIR_MARKER_HEADER = 'x-drc-pair'
 export const PAIR_MARKER_VALUE = '1'
 

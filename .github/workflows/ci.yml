@@ -1,0 +1,34 @@
+# 四包统一的 CI：**typecheck → format:check → test**
+#
+# 顺序不是随意的：format 排在 test **之前**，所以一个纯缩进的错会让整个 workflow
+# 在 20~40 秒就红掉，而本机 `pnpm gates` 是绿的（它不查格式）。2026-10-08 那轮
+# 四个仓的 Release 全部栽在这上面，其中一处缩进错位来自更早的提交——
+# 也就是说 main 上已经红了一段时间。所以这里把顺序钉死。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # v3 的目标是三平台可跑；矩阵随阶段 A 的进展补齐 macOS / Windows。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm format:check
+      - run: pnpm test
