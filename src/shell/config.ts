@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
 import { defaultPairStoreFile } from './pair-store.js'
-import { MAX_ATTACHMENT_BYTES } from 'dsh-remote-wire/limits'
+import { MAX_ATTACHMENT_BYTES } from '@dsh-remote/protocol/limits'
 import { MAX_ATTACH_TOTAL_BYTES } from './uploads.js'
 
 export interface PluginConfig {
@@ -110,7 +110,7 @@ export interface PluginConfig {
    * 于是 DSH 的会话列表里那条永远落在**未分组**（2026-10-04 与 2026-10-06 两次用户报）。
    *
    * 协议层另有 `cmd.new_session.workspace`（手机指明分组，可选字段），等
-   * `dsh-remote-wire` 发版并改钉之后可用——接线顺序见 HANDOFF §0.10.4。
+   * `@dsh-remote/protocol` 发版并改钉之后可用——接线顺序见 HANDOFF §0.10.4。
    * 那时它仍然排在**本项之下**：这是配置文件里写下的一句"这台机器的新会话一律归到这儿"，
    * 不该被任何一次手机点击盖掉。
    */

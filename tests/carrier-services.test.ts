@@ -28,8 +28,8 @@ import {
   type ServicesBundle,
 } from '../src/platform/carrier-services.js'
 import { FakeClock } from '../src/core/clock.js'
-import { parseEvPayload } from 'dsh-remote-wire'
-import { questionRequest } from 'dsh-remote-wire'
+import { parseEvPayload } from '@dsh-remote/protocol'
+import { questionRequest } from '@dsh-remote/protocol'
 
 interface Calls {
   resume: Array<Record<string, unknown>>

@@ -19,7 +19,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MockKernel } from '../src/platform/mock-kernel.js'
 import { FakeClock } from '../src/core/clock.js'
-import type { SessionSummary } from 'dsh-remote-wire'
+import type { SessionSummary } from '@dsh-remote/protocol'
 
 /** 取一条会话摘要：MockKernel.listSessions 要 limit，且它是异步的。 */
 async function summaryOf(kernel: MockKernel, sessionId: string): Promise<SessionSummary | undefined> {

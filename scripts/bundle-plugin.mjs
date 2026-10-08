@@ -36,7 +36,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(here, '..')
-const PLUGIN = path.join(ROOT, 'packages', 'plugin')
+const PLUGIN = ROOT
 const OUT_DIR = path.join(PLUGIN, 'dist', 'bundle')
 const OUT_FILE = path.join(OUT_DIR, 'index.js')
 const CLIENT_OUT = path.join(OUT_DIR, 'client.cjs')

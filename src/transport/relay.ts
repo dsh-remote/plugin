@@ -52,7 +52,7 @@ import {
   resync as resyncFrame,
   seal,
   sessionLeave,
-} from 'dsh-remote-wire'
+} from '@dsh-remote/protocol'
 import { ConversationBook, DEFAULT_PRUNE_POLICY, type PairSlot, type PrunePolicy } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
 

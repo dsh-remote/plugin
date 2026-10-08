@@ -16,9 +16,9 @@
  * **落盘的是 `psk` 而不是两把派生密钥**：派生是纯函数（`derivePskKey`），
  * 存派生结果等于多一份要保持一致的第二真相，而它必须与 psk 永远相等。
  */
-import { generatePsk, randomPairingToken } from 'dsh-remote-wire'
-import type { Direction } from 'dsh-remote-wire'
-import { derivePskKey } from 'dsh-remote-wire'
+import { generatePsk, randomPairingToken } from '@dsh-remote/protocol'
+import type { Direction } from '@dsh-remote/protocol'
+import { derivePskKey } from '@dsh-remote/protocol'
 import type { StoredConversation } from '../shell/pair-store.js'
 
 const C2H: Direction = 'c2h'

@@ -16,7 +16,7 @@
  *    runtime 还没起来时 `createPairing()` 返回 null，而不是"这个插件不存在"。
  */
 import path from 'node:path'
-import { type CmdPayload, type EvPayload, buildPairingUri } from 'dsh-remote-wire'
+import { type CmdPayload, type EvPayload, buildPairingUri } from '@dsh-remote/protocol'
 import { HostRuntime, type RuntimeTransport } from './core/runtime.js'
 import { KeepAwake } from './core/sleep-policy.js'
 import { PairingSlots } from './core/keys.js'

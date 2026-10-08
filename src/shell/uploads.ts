@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES, MAX_FILE_ATTACHMENTS } from 'dsh-remote-wire/limits'
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES, MAX_FILE_ATTACHMENTS } from '@dsh-remote/protocol/limits'
 
 /** 本仓沿用的旧名 = 协议层的 `MAX_ATTACHMENT_TOTAL_BYTES`（见下面那段注释）。 */
 const MAX_ATTACH_TOTAL_BYTES = MAX_ATTACHMENT_TOTAL_BYTES

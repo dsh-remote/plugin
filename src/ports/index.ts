@@ -18,7 +18,7 @@
  *    平台对象一律在适配器里折叠完再出来。这样协议层的 `SessionSummary` 与内核
  *    代际变化之间有一层可测的翻译，而不是满屏 `as any`。
  */
-import type { ModelOption, QuestionItem, SessionSummary } from 'dsh-remote-wire'
+import type { ModelOption, QuestionItem, SessionSummary } from '@dsh-remote/protocol'
 
 /** 内核报告的一条会话在插件内部的形状（还没变成线格式）。 */
 export interface KernelSession {

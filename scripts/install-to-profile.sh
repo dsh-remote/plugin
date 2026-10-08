@@ -33,7 +33,7 @@ set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
-PLUGIN="$ROOT/packages/plugin"
+PLUGIN="$ROOT"
 PROFILE="${DSH_PROFILE:-$HOME/.dsh/profiles/desktop}"
 BUNDLE_ID="dsh-remote-control"
 

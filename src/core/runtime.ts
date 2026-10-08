@@ -19,7 +19,7 @@
  *   由 `outbound.ts` 的构造器产出，参数表里就没有 sessionId。
  */
 import { randomUUID } from 'node:crypto'
-import { isKnownPayloadType } from 'dsh-remote-wire'
+import { isKnownPayloadType } from '@dsh-remote/protocol'
 import type {
   AnswerItem,
   CmdPayload,
@@ -29,10 +29,10 @@ import type {
   ImageAttachment,
   QuestionItem,
   SessionSummary,
-} from 'dsh-remote-wire'
+} from '@dsh-remote/protocol'
 import { appendFileNote, MAX_ATTACH_TOTAL_BYTES, saveFileAttachments } from '../shell/uploads.js'
-import { MAX_ATTACHMENT_BYTES } from 'dsh-remote-wire/limits'
-import { IdempotencyLedger } from 'dsh-remote-wire/idempotency'
+import { MAX_ATTACHMENT_BYTES } from '@dsh-remote/protocol/limits'
+import { IdempotencyLedger } from '@dsh-remote/protocol/idempotency'
 import {
   keepAwakeState,
   messageDelta,
@@ -49,7 +49,7 @@ import {
   retryNotice,
   compactionNotice,
   toolEvent,
-} from 'dsh-remote-wire/outbound'
+} from '@dsh-remote/protocol/outbound'
 import type { ApprovalDecision, AskUserQuestionAnswerValue, KernelEvent, KernelPort } from '../ports/index.js'
 import { DeltaWindow, DEFAULT_WINDOW_OPTIONS, type WindowOptions } from './window.js'
 import type { KeepAwake } from './sleep-policy.js'

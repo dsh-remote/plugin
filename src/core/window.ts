@@ -22,7 +22,7 @@
  * `part` 在**同一条 messageId 内连续**，跨 flush、跨切帧都不归零，
  * 否则手机上"分片是否完整"这件事没有任何可核对依据。
  */
-import type { EvMessageDelta } from 'dsh-remote-wire'
+import type { EvMessageDelta } from '@dsh-remote/protocol'
 import type { Clock } from '../ports/index.js'
 
 export interface WindowOptions {
