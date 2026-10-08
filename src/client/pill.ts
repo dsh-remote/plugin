@@ -292,6 +292,39 @@ export function secondsText(ms: number): string {
   return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`
 }
 
+/**
+ * 宿主没给设计变量时的**兜底值** —— 收在一处，V3-PLAN F1。
+ *
+ * ## 为什么要收
+ *
+ * v2 之前这七个色值**字面量散在 CSS 模板里 21 处**，其中
+ * `--dsw-alias-label-secondary` 还出现了**两个不同的兜底值**（`#6b7280` 与
+ * `#5f6368`）——同一条语义在同一个组件里有两个"没有宿主变量时的颜色"，
+ * 而没有任何东西会报这件事。
+ *
+ * ## 这些值是**兜底**，不是我们的设计
+ *
+ * 它们是宿主 DSH 的设计变量取不到时的替身。真正的颜色由宿主给；
+ * 而宿主给的是哪一套，是宿主的事（它要看起来像"宿主亲生的"）。
+ * 我们自己的语义名是 `--drc-*`（映射表见 `docs/DESIGN-TOKENS.md`），
+ * **值故意与小程序不同**——两端服务不同的主人。
+ */
+const FALLBACK = {
+  'state-success-primary': '#52c41a',
+  'state-warn-primary': '#faad14',
+  'state-error-primary': '#ff4d4f',
+  'label-primary': '#1f2329',
+  'label-secondary': '#6b7280',
+  'label-tertiary': '#9aa0a6',
+  'label-dimmed': '#9aa0a6',
+  'bg-layer-1': '#ffffff',
+  'border-l1': 'rgba(0, 0, 0, 0.1)',
+  'interactive-bg-hover': 'rgba(0, 0, 0, 0.04)',
+} as const
+
+/** `var(--dsw-alias-<key>, <fallback>)` —— 一处拼装，值只来自 FALLBACK。 */
+const hostVar = (key: keyof typeof FALLBACK): string => `var(--dsw-alias-${key}, ${FALLBACK[key]})`
+
 const CSS = `
 .drc-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 8px;
   border: 0; border-radius: 999px; background: transparent; color: inherit; font: inherit;
@@ -301,46 +334,46 @@ const CSS = `
      = 一个字」，于是「已连 1 台」竖着排成四行（2026-10-03 真屏幕截图）。 */
   flex: 0 1 auto; white-space: nowrap; }
 .drc-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.drc-pill:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04)); }
-.drc-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--dsw-alias-label-dimmed, #9aa0a6); }
-.drc-dot[data-tone="wait"] { background: var(--dsw-alias-state-warn-primary, #faad14); }
-.drc-dot[data-tone="on"] { background: var(--dsw-alias-state-success-primary, #52c41a); }
-.drc-dot[data-tone="error"] { background: var(--dsw-alias-state-error-primary, #ff4d4f); }
+.drc-pill:hover { background: ${hostVar('interactive-bg-hover')}; }
+.drc-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: ${hostVar('label-dimmed')}; }
+.drc-dot[data-tone="wait"] { background: ${hostVar('state-warn-primary')}; }
+.drc-dot[data-tone="on"] { background: ${hostVar('state-success-primary')}; }
+.drc-dot[data-tone="error"] { background: ${hostVar('state-error-primary')}; }
 .drc-panel { position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30; width: 240px;
-  padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.1)); border-radius: 12px;
-  background: var(--dsw-specific-tip, var(--dsw-alias-bg-layer-1, #ffffff));
+  padding: 10px 12px; border: 1px solid ${hostVar('border-l1')}; border-radius: 12px;
+  background: var(--dsw-specific-tip, ${hostVar('bg-layer-1')});
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; }
 /* 抬头一行：左侧状态，右侧动作。两颗按钮都收在这个右上角（2026-10-03 重设计的要求）。 */
 .drc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .drc-head-label { font-weight: 600; }
-.drc-head-label[data-tone="off"] { color: var(--dsw-alias-label-secondary, #6b7280); }
-.drc-head-label[data-tone="wait"] { color: var(--dsw-alias-state-warn-primary, #faad14); }
-.drc-head-label[data-tone="on"] { color: var(--dsw-alias-state-success-primary, #52c41a); }
-.drc-head-label[data-tone="error"] { color: var(--dsw-alias-state-error-primary, #ff4d4f); }
+.drc-head-label[data-tone="off"] { color: ${hostVar('label-secondary')}; }
+.drc-head-label[data-tone="wait"] { color: ${hostVar('state-warn-primary')}; }
+.drc-head-label[data-tone="on"] { color: ${hostVar('state-success-primary')}; }
+.drc-head-label[data-tone="error"] { color: ${hostVar('state-error-primary')}; }
 .drc-actions { display: flex; gap: 6px; flex: 0 0 auto; }
-.drc-btn { padding: 2px 10px; border: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.1));
+.drc-btn { padding: 2px 10px; border: 1px solid ${hostVar('border-l1')};
   border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
   white-space: nowrap; }
-.drc-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04)); }
+.drc-btn:hover { background: ${hostVar('interactive-bg-hover')}; }
 /* 正文那三行（中继 / 状态 / 版本）：键左值右（space-between），值被截断时省略号——
    和那颗 pill 同一套"挤不下就截文字不撑容器"。第一行带那条分隔线，后两行只留行距。 */
 .drc-info { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
   white-space: nowrap; margin-top: 8px; padding-top: 6px;
-  border-top: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.08)); }
+  border-top: 1px solid ${hostVar('border-l1')}; }
 .drc-info + .drc-info { margin-top: 2px; padding-top: 0; border-top: 0; }
 .drc-key { flex: 0 0 auto; color: var(--dsw-alias-label-tertiary); }
 .drc-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .drc-qr { display: block; width: 200px; height: 200px; margin: 8px auto 0; image-rendering: pixelated; }
-.drc-count { margin: 8px 0 0; text-align: center; color: var(--dsw-alias-label-secondary, #5f6368);
+.drc-count { margin: 8px 0 0; text-align: center; color: ${hostVar('label-secondary')};
     font-size: 12px; font-variant-numeric: tabular-nums; }
-  .drc-count[data-kind="urgent"] { color: var(--dsw-alias-state-warn-primary, #faad14); font-weight: 600; }
+  .drc-count[data-kind="urgent"] { color: ${hostVar('state-warn-primary')}; font-weight: 600; }
   .drc-code { margin: 8px 0 0; text-align: center; font-weight: 600; font-size: 14px; letter-spacing: 2px; }
   /* 引导行：比 note 重一档（第一次用的人要看清），但不加图标不加底色——
      这一屏的主角是二维码，多一个色块就成了推销而不是引导。 */
-  .drc-guide { margin: 8px 0 0; text-align: center; color: var(--dsw-alias-label-secondary, #5f6368); font-size: 12px; }
+  .drc-guide { margin: 8px 0 0; text-align: center; color: ${hostVar('label-secondary')}; font-size: 12px; }
   .drc-note { margin: 4px 0 0; text-align: center; color: var(--dsw-alias-label-tertiary); }
-.drc-note[data-kind="failed"] { color: var(--dsw-alias-state-error-primary, #ff4d4f); }
+.drc-note[data-kind="failed"] { color: ${hostVar('state-error-primary')}; }
   /* 离线那一屏的第一行说明要跟上面那行拉开一点。**必须写在 .drc-note 之后**：
      两者特异度相同（都只一个类），后来的赢——写在前面的 margin-top 会被
      .drc-note 的 margin: 4px 0 0 整条覆盖成死规则（2026-10-06 修）。 */
