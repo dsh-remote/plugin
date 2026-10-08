@@ -72,7 +72,7 @@
 | T2 | 帧大小上限 | ≥ 256 KiB（现网值）；超限是硬断开 1009，收紧会直接掐断流式输出 | mp-client §8-23 |
 | T3 | 顺序性 | 同一会话**必须串行投递**，客户端无去重/排序能力 | mp-client §3.6 |
 | T4 | 保活 | **只能靠 WS 层 ping**（客户端与 host 都不发应用层 `ping`）；改判应用层心跳会周期性踢掉空闲客户端 | relay §5.4 |
-| T5 | 关闭码 | `1001` 停机、`1013` 繁忙、`1009` 超限、`1008` 限流、`4001` 鉴权爆破、`4008` 配对爆破、`4000` 顶号——客户端的重连策略依赖这些语义 | relay §9-18 |
+| T5 | 关闭码 | `1001` 停机、`1013` 繁忙、`1009` 超限、`1008` 限流、`4001` 鉴权爆破、`4008` 配对爆破、`4000` 顶号。⚠️ **中继会发这些码，但当前两端都不消费它们**：小程序 `core/socket.js:214` 的 `t.onClose(() => this._onClose())` **丢弃了 code 参数**；宿主 `transport/relay.ts:366-370` 只把它写进日志、重连是无条件的。所以「客户端的重连策略依赖这些语义」**是一句尚未实现的承诺**——要依赖就先补实现（见 `V3-PLAN.md` §9.2.2） | relay §9-18 |
 | T6 | WS 路径 | 保持"根路径与任意路径都可 upgrade"；收窄成 `/ws` 会让已发布的地址全部连不上 | relay §9-20 |
 | T7 | HTTP 端点 | `/healthz` 字段集 `ok/version/uptimeSec/hosts/clients/conversations/pendingPairs/shuttingDown`、`/api/info{publicUrl,protocol}`；`/api/pair-status` **默认必须 404**（否则给 6 位码装了免认证判定 oracle） | relay §5.6 |
 | T8 | 中继地址来源 | 小程序不硬编码任何域名，地址来自二维码 `s=` 或用户手填（`ws://`/`wss://` 任意 host:port/path 都必须接受）。生产沿用 `wss://drc.provid.cc` 只为省掉微信后台 socket 白名单变更 | 本次实测：`mp/` 全量 grep 无硬编码中继地址；`drc.serverUrl` 为运行时存储 |
