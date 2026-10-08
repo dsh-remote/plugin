@@ -1909,6 +1909,94 @@ test('cmd.session_history：条目走与实时流同一批出站构造器，游�
   assert.equal(JSON.stringify(page.items).includes('run_state'), false)
 })
 
+test('cmd.session_history 补差量：since 被逐字转发给内核端口（接线证明，B4）', async () => {
+  // 这一条测的是**接线**，不是 mock 的取值语义（那个在 history-resume.test.ts）：
+  // 没有它，mock 通过也说明不了 runtime 真的把 `since` 递下去了——
+  // 而漏掉它的表现是"手机发了 since、主机当没这回事，返回最新一页"，
+  // 界面上看起来只是"重连后消息没补齐"。
+  const { runtime, transport, kernel } = fixture()
+  const asked: Array<{ sessionId: string; since?: number; limit: number }> = []
+  kernel.readHistory = (sessionId, options) => {
+    asked.push({ sessionId, ...options })
+    return Promise.resolve({
+      events: [
+        { kind: 'delta' as const, sessionId, messageId: 'm9', text: '断线期间的第 9 条', done: true },
+      ],
+      latestSeq: 9,
+    })
+  }
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.broadcasts.length = 0
+  transport.replies.length = 0
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 7, limit: 5 }), 'c_000000000001')
+  await settle()
+
+  assert.deepEqual(
+    asked,
+    [{ sessionId: 'ses_live', since: 7, limit: 5 }],
+    'since 必须逐字传给内核端口：不传等于主机当没这回事（症状是"重连后没补齐"）',
+  )
+  // 回执里要带 latestSeq —— 它是手机下一次 since 的取值来源
+  const pages = transport.replies
+    .map((item) => item.payload)
+    .filter((payload) => payload.t === PAYLOAD_TYPES.evSessionHistory)
+  assert.equal(pages.length, 1, '补差量的结果同样只回给发起者')
+  assert.equal(
+    (pages[0] as { latestSeq?: number }).latestSeq,
+    9,
+    '回执必须带 latestSeq：手机靠它记"到哪了"，缺了就只能整段重拉',
+  )
+})
+
+test('cmd.session_history：since 与 beforeSeq 同时给要明确拒绝（接线层的第二道）', async () => {
+  const { runtime, transport, kernel } = fixture()
+  let called = 0
+  kernel.readHistory = () => {
+    called += 1
+    return Promise.resolve({ events: [] })
+  }
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.replies.length = 0
+
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 3, beforeSeq: 9 }),
+    'c_000000000001',
+  )
+  await settle()
+
+  assert.equal(called, 0, '两个方向一起走没有可定义的语义：不该真的去读历史')
+  const failures = transport.replies
+    .map((item) => item.payload)
+    .filter((payload) => payload.t === 'ev.result' && payload.ok === false)
+  assert.equal(failures.length, 1, '要明确回一个失败，而不是当没这回事')
+})
+
+test('cmd.session_history 补差量：落在保留窗口之外要明说，不许静默给窗口内的（接线证明）', async () => {
+  const { runtime, transport, kernel } = fixture()
+  kernel.readHistory = () => Promise.reject(new Error('history_window_exceeded: since=2 早于窗口起点 12'))
+  runtime.start()
+  await settle()
+  transport.pair('c_000000000001')
+  transport.replies.length = 0
+
+  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 2 }), 'c_000000000001')
+  await settle()
+
+  const failures = transport.replies
+    .map((item) => item.payload)
+    .filter((payload) => payload.t === 'ev.result' && payload.ok === false)
+  assert.equal(failures.length, 1, '窗口外必须回失败：静默返回"能给的那些"会让手机以为补齐了')
+  const pages = transport.replies
+    .map((item) => item.payload)
+    .filter((payload) => payload.t === PAYLOAD_TYPES.evSessionHistory)
+  assert.equal(pages.length, 0, '绝不能同时回一页历史：那正是"假装补齐了"的形状')
+})
+
 test('cmd.session_history：待办快照也走同一条路径（一页最后一条 = 那一页截止时的清单）', async () => {
   const { runtime, transport, kernel } = fixture()
   kernel.readHistory = (sessionId) =>

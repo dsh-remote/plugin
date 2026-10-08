@@ -51,6 +51,7 @@ import {
   toolEvent,
 } from '@dsh-remote/protocol/outbound'
 import type { ApprovalDecision, AskUserQuestionAnswerValue, KernelEvent, KernelPort } from '../ports/index.js'
+import { HISTORY_WINDOW_EXCEEDED } from '../ports/index.js'
 import { DeltaWindow, DEFAULT_WINDOW_OPTIONS, type WindowOptions } from './window.js'
 import type { KeepAwake } from './sleep-policy.js'
 import type { Clock } from '../ports/index.js'
@@ -550,6 +551,10 @@ export class HostRuntime {
               cmdId: cmd.cmdId,
               items,
               ...(page.nextBeforeSeq === undefined ? {} : { nextBeforeSeq: page.nextBeforeSeq }),
+              // ⚠️ `latestSeq` 必须一起带出去（规范 §10.7 S3）：它是手机下一次
+              // `since` 的取值来源。第一版只加了 schema 与端口字段，漏了这里——
+              // 于是手机永远收不到游标，重连后整段重拉，而 schema 与 mock 两侧都看不出。
+              ...(page.latestSeq === undefined ? {} : { latestSeq: page.latestSeq }),
             }),
           )
           return
