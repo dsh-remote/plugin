@@ -36,7 +36,6 @@
 import { WebSocket } from 'ws'
 import { randomBytes } from 'node:crypto'
 import {
-  type CapabilityId,
   type CmdPayload,
   type EndpointFrame,
   type EvPayload,
@@ -53,42 +52,21 @@ import {
   seal,
   sessionLeave,
 } from '@dsh-remote/protocol'
+import { HOST_CAPABILITIES } from '../core/capabilities.js'
 import { ConversationBook, DEFAULT_PRUNE_POLICY, type PairSlot, type PrunePolicy } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
 
 /**
- * 本插件在 `hello` 里声明的能力（规范 §5.3 C1/C3）。
+ * 本插件在 `hello` 里声明的能力：**清单本体搬到了 `core/capabilities.ts`**。
  *
- * **只列真正接上了的**，逐条对应一处实现：
- * - `attachments`：`shell/uploads.ts` + `core/runtime.ts` 的整批先验后写；
- * - `history`：`cmd.session_history` 走游标分页（`runtime.ts` 的 historyFace）；
- * - `new-session.workspace`：`cmd.new_session.workspace` 已接线（`carrier-services.ts` 的
- *   `badWorkspace()` 拿到的就是手机传来的路径，不是自己推断的）；
- * - `get-pending`：`cmd.get_pending` 有实现；
- * - `keep-awake`：`cmd.keep_awake` + `ev.keep_awake_state` 有实现（mp 侧没界面，见 HANDOFF §5-14）；
- * - `model`：`ev.model` 有实现；
- * - `retry-compaction`：`ev.retry` / `ev.compaction` 都有（真机各 18 次）；
- * - `idempotency`：`IdempotencyLedger` 按 cmdId 去重（规范 §10.2）；
- * - `resync`：鉴权后发 `resync`。
+ * 搬家的理由：v3 的 `ev.host_info.caps`（规范 §13.2）要用**同一份**清单，
+ * 而它是 `core/runtime.ts` 发的 —— 留在这一层就得让 core 反向依赖 transport，
+ * 或者把清单抄第二遍。清单是"本插件支持什么"，与"怎么把这些字节送出去"无关。
  *
- * **刻意不列**：`drc.host.info`（`ev.host_info` 还没做，HANDOFF §3.6）、
- * `drc.crypto.v2`（棘轮是规划中的破坏性变更）、`drc.pairing.token`（6 位码单独输入那条路已删）。
- * 列一个没实现的能力 = 手机按"支持"表现，而实际会干等 12 秒——比不列更糟。
+ * ⚠️ 这一份是**构建级**的（喂 `hello`，在认证前、`runtime.start()` 之前就要发出去，
+ * 那一刻内核端口的能力面还没探过）。`ev.host_info` 用的是 `effectiveCapabilities()`
+ * 那份**运行级**的 —— 差别与理由写在 `core/capabilities.ts` 的文件头。
  */
-const HOST_CAPABILITIES: readonly CapabilityId[] = [
-  'drc.v1',
-  'drc.pairing.qr',
-  'drc.payload.attachments',
-  'drc.payload.history',
-  'drc.payload.new-session.workspace',
-  'drc.payload.get-pending',
-  'drc.payload.keep-awake',
-  'drc.payload.model',
-  'drc.payload.retry-compaction',
-  'drc.cmd.idempotency',
-  'drc.data.enc-batch',
-  'drc.host.resync',
-]
 
 export interface RelayClientOptions {
   url: string
@@ -127,6 +105,52 @@ export interface RelayClientOptions {
   onConversationGone: (conversationId: string) => void
   /** 某个客户端离开，但**会话保留**（D3）：它下次用同一个 convId 回来时还能接上。 */
   onClientLeft: (conversationId: string, clientId: string) => void
+  /**
+   * **某个客户端回到了这条会话**（与 `onClientLeft` 严格成对）——2026-10-08 补。
+   *
+   * ## 为什么必须由本文件来判、而不是由调用方去猜
+   *
+   * "手机回来了"这件事在链路上**没有一条专门的帧**。中继侧那条无 token 的
+   * `peer-joined` 重放 2026-10-06 就删掉了（`server.ts` 里留着取证注释：它当年把
+   * hostId 塞进 clientId 字段，语义就是错的），而 `peerJoinedForHost` 的
+   * `pairingToken` 是**必填**参数 ⇒ 现在中继只会在**配对那一刻**通知主机。
+   * 于是"手机回前台 / 切回网络"这条路上，主机**什么都不会收到**：
+   * 它既不知道客户端离开过（`peer-left` 会到），也不知道它回来了。
+   *
+   * 而主机确实知道 —— 只是没人把那个事实说出来：`peer-left` 会把这台手机从
+   * `conversation.clientIds` 里摘掉（不摘的话 status.json 里"有几台手机"永远清不掉），
+   * 此后**第一帧解得开的密文**到达时它又被加回去。那次"加回去"就是"它回来了"。
+   *
+   * ## 为什么必须修（规范 §13.2 L4）
+   *
+   * L4 写的是 host MUST 在**（重）连上**与能力变化时各发一次 `ev.host_info`。
+   * 缺了这一条，"重连"那一半从来没有发生过 —— 而它的后果正好是本轮 B4 要的东西：
+   * 手机在 `_onHelloOk` 里把 `hostCaps` 清成 null（那是对的：新连接 = 上一代的能力面
+   * 作废），此后**再也收不到**新的 `ev.host_info`，于是 `supportsResume()` 恒为 false、
+   * 断线重连永远走整页重读。`index.ts` 那段"这个位置同时覆盖新配对与重连"的注释
+   * 是**照设计意图写的**，不是照实际调用链写的（实际只有配对那一半）。
+   *
+   * ## 为什么在**解密的循环之前**触发
+   *
+   * 帧顺序是判据的一部分：手机重连后必定先发 `cmd.list_sessions`（`_onHelloOk`），
+   * 而页面是在**收到它对应的 `ev.session_changed`** 时才把 status 翻成 `online`，
+   * 并在那一刻调 `_tryLoadDelta()`。所以 `ev.host_info` 必须排在那条回执**之前**
+   * 走出去，手机才可能在同一个批次里"先知道能力位、再做补差量的决定"。
+   *
+   * ⚠️ **真正决定顺序的是"同一个 tick"，不是"在这段代码里的第几行"**（2026-10-08 实测）：
+   * `onCommand` 是 `void runtime.handleCommand(...)`，而 `handleCommand` 是 async、
+   * 处理 `cmd.session_history` 时必然先 `await readHistory(...)`，所以**无论如何**它的回执
+   * 都排在本次帧处理之后。把这一行挪到 `decryptedAny` 那一段（循环之后）跑 e2e —— **仍然绿**。
+   * 把触发推迟一个 tick（`setTimeout(..., 0)`，即"别在帧处理路径里干重活"那种写法）
+   * —— **立刻红**，报的是 `ev.host_info` 掉到了最后一条。
+   * 所以这一条的判据在 `e2e/wire-resume-delta.test.mjs` 的帧顺序断言上，而它挡的是
+   * "**推迟宣告**"这一类改法，不是"挪一行"。放在循环之前只是顺带更稳（不依赖下游是异步的）。
+   *
+   * 代价是"加回成员"这一刻还没验 MAC。可接受，理由两条：`frame.clientId` 不是
+   * 发送方自称的，是中继按**已认证连接**填进去的；而且它触发的动作只是"再报一次
+   * 自己的能力面"，既不含密钥也不改状态。
+   */
+  onClientRejoined?: (conversationId: string, clientId: string) => void
   /**
    * 按 `peer-joined` 回传的 pairingToken 取本地那张码。
    * 取不到必须返回 null 并由调用方拒绝这条配对——**不允许**退化成"取最新的一张"，
@@ -319,9 +343,38 @@ export class RelayClient {
     return restored
   }
 
+  /**
+   * **传输诊断**（进 status.json 的 `diagnostics.transport`，V3-PLAN §7 阶段 F4）。
+   *
+   * 为什么要有：`relay`/`relayProblem` 只说"此刻连没连上"，而排错真正要答的是
+   * **"它连得上吗"**——一条长期停在 `connecting` 且不报错的链（版本不匹配）
+   * 与一条每 3 秒重连一次的链（网络/白名单）在字段上完全一样。
+   * `connects > 1` 就是"它至少掉过一次"，`lastConnectedAtSec` 让"多久没连上过"可读。
+   */
+  private readonly transportCount = { connects: 0, connectAttempts: 0, disconnects: 0 }
+  private connectedAtMs: number | null = null
+  get transport(): {
+    connects: number
+    connectAttempts: number
+    disconnects: number
+    /**
+     * 距上次**连上**过了多少秒；从未连上是 `null`。
+     *
+     * ⚠️ 是 `null` 而不是 0：「0」会被读成"0 秒前刚连上"，而那与"从来没连上过"
+     * 是两件完全不同的事 —— 后者正是最该被人看见的一种。
+     */
+    lastConnectedAtSec: number | null
+  } {
+    const now = this.options.clock.now()
+    const lastConnectedAtSec =
+      this.connectedAtMs === null ? null : Math.max(0, Math.floor((now - this.connectedAtMs) / 1000))
+    return { ...this.transportCount, lastConnectedAtSec }
+  }
+
   connect(): void {
     if (this.stopped) return
     this.closeSocket()
+    this.transportCount.connectAttempts += 1
     this.options.log('relay connecting', { url: this.options.url })
     let socket: WebSocket
     try {
@@ -344,6 +397,8 @@ export class RelayClient {
     socket.on('open', () => {
       this.options.clock.clearTimeout(timeout)
       this.attempts = 0
+      this.transportCount.connects += 1
+      this.connectedAtMs = this.options.clock.now()
       // D5：主机与客户端共用一条注册帧。PSK 从不上网（D1），这里只有 host token。
       //
       // ⚠️ `capabilities` 是**本插件真实支持的那几张**（规范 §5.3 C1/C3），不是全集。
@@ -365,6 +420,8 @@ export class RelayClient {
     this.startProbe(socket)
     socket.on('close', (code, reason) => {
       this.options.clock.clearTimeout(timeout)
+      this.transportCount.disconnects += 1
+      this.connectedAtMs = null
       this.emitState('offline', `连接关闭 ${code} ${reason ? reason.toString() : ''}`.trim())
       this.options.log('relay closed', { code })
       this.scheduleReconnect(`closed ${code}`)
@@ -708,7 +765,14 @@ export class RelayClient {
     // 成员表是空的（配对刚发生），此后进来的每一帧才带得上 clientId。
     // 漏了这一步的话 `clientCount()` 恒为 0，status.json 里"有几台手机"
     // 永远是 0 —— 那不是"没人连"，是没人记。
+    //
+    // ⚠️ **"本来不在表里"是唯一能读到"客户端回来了"的地方**（2026-10-08）：
+    // `peer-left` 摘成员、这里加成员，两次之间的第一次加回就是它回来了。
+    // 配对那一刻**不会**重复触发——`peer-joined` 分支已经把它记进去了（下面那一段）。
+    // 回调为什么必须在解密之前触发：见 `RelayClientOptions.onClientRejoined` 的注释。
+    const rejoined = frame.clientId !== undefined && !conversation.clientIds.has(frame.clientId)
     if (frame.clientId) conversation.clientIds.add(frame.clientId)
+    if (rejoined && frame.clientId) this.options.onClientRejoined?.(frame.sessionId, frame.clientId)
     const records = frame.items ?? (frame.ciphertext === undefined ? [] : [{ ciphertext: frame.ciphertext }])
     let decryptedAny = false
     for (const record of records) {

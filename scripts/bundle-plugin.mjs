@@ -40,8 +40,30 @@ const PLUGIN = ROOT
 const OUT_DIR = path.join(PLUGIN, 'dist', 'bundle')
 const OUT_FILE = path.join(OUT_DIR, 'index.js')
 const CLIENT_OUT = path.join(OUT_DIR, 'client.cjs')
-/** 装进 profile 后这个 bundle 的 id，也是 loader 认的那个名字。 */
-const BUNDLE_ID = 'dsh-remote-control'
+/**
+ * 装进 profile 后这个 bundle 的 id，也是 loader 认的那个名字。
+ *
+ * ⚠️ 必须等于**包的完整名**（package.json 的 name）：浏览器面那个外壳的 `id`
+ * 会被 `@deepseek-ai/dsh-client-modules` 拿去 `graphRows` 里按 loader entry 名查，
+ * 名字对不上就注册不上（表现是"整页 web boot 失败"或"pill 永不出现"）。
+ * 2026-10-08 起插件以**标准 pnpm 依赖**安装（`node_modules/@dsh-remote/plugin`），
+ * 所以这里是作用域名而不是旧的 `dsh-remote-control`。
+ *
+ * 注意与**运行时 id**分开：`dsh-remote-control` 仍是数据目录
+ * （`~/.dsh/dsh-remote-control`）、四条 pill 路由前缀与 pill 注册进槽位用的 `PILL_ID`，
+ * 它们都是硬编码常量，不随包名变——改包名不会丢配对。
+ *
+ * ⚠️ **订正（2026-10-08）**：这里原来写的是"...与 client 模块自己注册的名字，
+ * 它们都是硬编码常量，不随包名变"——**那句是错的**，而它是会害人的那种错：
+ * `src/client/main.ts` 的 `export const name` **必须等于包名**
+ * （那句上面的注释写的是"装载器按 loader entry 名（= 包名）来认这一半"）。
+ * 45cd1ec 已经把它改成作用域名，而 `client-bundle.test.ts` 里那条断言还写死
+ * `dsh-remote-control`，于是在 HEAD 上红了一段时间没人管（八格闸门只看项数，
+ * 看不出红）。
+ * 现在那条断言改成**从 package.json 读**，两边不会再漂。
+ * ⇒ 顺带一条纪律：**"应当等于包名"的值不许在判据里写死字符串。**
+ */
+const BUNDLE_ID = '@dsh-remote/plugin'
 /** pill 弹窗里那行「版本」读的就是它（`src/version.ts` 里的 `__DRC_VERSION__`）。 */
 const PLUGIN_VERSION = JSON.parse(readFileSync(path.join(PLUGIN, 'package.json'), 'utf8')).version
 

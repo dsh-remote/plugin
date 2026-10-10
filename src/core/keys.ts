@@ -296,6 +296,12 @@ export class PairingSlots {
   constructor(
     private readonly now: () => number,
     private readonly maxSlots = 32,
+    /**
+     * 码源。**留这个口子是为了让"撞码"这件事可以被确定性地构造出来测**
+     * （真随机源下撞码是 ~3e-5 的事件，写成判据就是一条概率性的闸门，
+     * 而概率性的闸门在 CI 上表现为"偶尔红一次"——那比没有闸门更坏）。
+     */
+    private readonly tokenSource: () => string = randomToken,
   ) {}
 
   /** 新建一张码。超上限时淘汰最旧的（而不是拒绝新建），因为"发不出去"比"少一张"更糟。 */
@@ -305,13 +311,38 @@ export class PairingSlots {
       if (oldest) this.slots.delete(oldest.token)
     }
     const created: PairSlot = {
-      token: randomToken(),
+      token: this.freshToken(),
       psk: generatePskValue(),
       expiresAt: this.now() + ttlMs,
       createdAt: this.now(),
     }
     this.slots.set(created.token, created)
     return created
+  }
+
+  /**
+   * 取一个**此刻没被占用**的码。
+   *
+   * ## 为什么必须查重（2026-10-08）
+   *
+   * 原来这里是裸的 `this.slots.set(randomToken(), …)`：表按 token 索引，
+   * 而码只有 6 位（1e6 个值，见 `randomToken`）。撞上**存活**那张时，
+   * `set` 会把它的 PSK **静默覆盖**——旧码留在屏幕上、留在 `status.json` 里，
+   * 但它已经不在表里了，`resolveFor()` 取回来的是新那张的 PSK。
+   * 存活上限是 32，所以每次撞的概率 ≈ 3.2e-5：罕见，但**没有任何痕迹**，
+   * 而它的症状（"扫了配不上"）会被归咎于网络。
+   *
+   * ## 为什么重试有上界、且到顶了**不抛**
+   *
+   * 配对路径上抛异常会把"发码"整个能力带崩（`apply()` 的头号红线是不带崩宿主）。
+   * 而连撞 `TOKEN_RETRY_LIMIT` 次的实际概率在真随机源下是 (32/1e6)^64 量级 ——
+   * 也就是说走到兜底分支只可能发生在**码源本身坏了**的时候（例如注入了一个常量），
+   * 那时"退回覆盖旧槽"正是原来那个行为，不会比现在更坏。
+   */
+  private freshToken(): string {
+    let token = this.tokenSource()
+    for (let i = 1; i < TOKEN_RETRY_LIMIT && this.slots.has(token); i++) token = this.tokenSource()
+    return token
   }
 
   /**
@@ -355,6 +386,13 @@ export class PairingSlots {
 function randomToken(): string {
   return randomPairingToken()
 }
+
+/**
+ * `freshToken` 的重试上界（见它的注释：走到兜底只可能发生在码源坏了的时候）。
+ * 取 64 而不是 3~5：真随机源下多试几次的成本是几次内存查表，
+ * 而放宽上界换来的是"兜底分支在正常情形下**不可能**被走到"这个性质。
+ */
+const TOKEN_RETRY_LIMIT = 64
 
 function generatePskValue(): string {
   return generatePsk()

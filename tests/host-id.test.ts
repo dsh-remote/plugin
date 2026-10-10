@@ -14,7 +14,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { newHostId, resolveHostId } from '../src/shell/host-id.js'
-import { skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
+import { skipIfCannotChmodDir, skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
 
 /**
  * win32 上跳过，且**带原因**：win32 的 chmod 只切只读位，0o600 这类断言永远不成立。
@@ -22,7 +22,6 @@ import { skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
  * （假绿是这一族里最坏的一种：它让 CI 变绿，而它其实什么都没测）。
  */
 const POSIX_ONLY = skipUnlessPosixRaw()
-
 
 function tempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'drc-hostid-'))
@@ -96,23 +95,30 @@ test('文件里是不认的形状（被人手改坏 / 半写）→ 现造一个�
   }
 })
 
-test('目录不可写时退回一次性身份：这一轮不稳定，但插件必须照常起', () => {
-  const { dir, cleanup } = tempDir()
-  try {
-    const locked = path.join(dir, 'locked')
-    mkdirSync(locked)
-    chmodSync(locked, 0o500)
+test(
+  '目录不可写时退回一次性身份：这一轮不稳定，但插件必须照常起',
+  // ⚠️ 前提是"那个目录真的写不进去"。Linux 上以 root 跑时 chmod 0500 拦不住写，
+  // 前提不成立而断言照跑 ⇒ 红在一个指不到真地方的错误上（2026-10-08 在 Linux 腿实测）。
+  // skip 的原因由探针给出，不是一句"平台不支持"。
+  skipIfCannotChmodDir(),
+  () => {
+    const { dir, cleanup } = tempDir()
     try {
-      const id = resolveHostId(locked, '')
-      assert.match(id, /^drc-[0-9a-f]{12}$/, `写不进去时也要给一个能用的身份，实际是 ${id}`)
-      assert.equal(statExists(path.join(locked, 'host-id')), false)
+      const locked = path.join(dir, 'locked')
+      mkdirSync(locked)
+      chmodSync(locked, 0o500)
+      try {
+        const id = resolveHostId(locked, '')
+        assert.match(id, /^drc-[0-9a-f]{12}$/, `写不进去时也要给一个能用的身份，实际是 ${id}`)
+        assert.equal(statExists(path.join(locked, 'host-id')), false)
+      } finally {
+        chmodSync(locked, 0o700)
+      }
     } finally {
-      chmodSync(locked, 0o700)
+      cleanup()
     }
-  } finally {
-    cleanup()
-  }
-})
+  },
+)
 
 test('statusFile 被关掉（空串）时调用方传空目录：不去猜 CWD，直接一次性身份', () => {
   assert.match(resolveHostId('', ''), /^drc-[0-9a-f]{12}$/)

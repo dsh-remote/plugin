@@ -92,7 +92,7 @@ test('workspaceProblem：三条与平台无关的红线，顺序也有讲究', (
   assert.equal(workspaceProblem(exact, 'darwin'), '', '1024 字符是允许的：阈值是「超过」不是「达到」')
 })
 
-test('tailOfPath：Windows 路径不再返回整串（v2 的 split(\'/\') 在那上面失效）', () => {
+test("tailOfPath：Windows 路径不再返回整串（v2 的 split('/') 在那上面失效）", () => {
   assert.equal(tailOfPath('/Users/x/project', 'darwin'), 'project')
   assert.equal(tailOfPath('/Users/x/project/', 'darwin'), 'project', '结尾分隔符不算一段')
   assert.equal(tailOfPath('C:\\Users\\x\\project', 'win32'), 'project', 'v2 在这里返回整串路径')
@@ -109,7 +109,11 @@ test('dataDir：稳定运行时标识，改它会让在用装机找不到自己�
   assert.equal(dataDir('darwin', { home: '/Users/x' }), '/Users/x/.dsh/dsh-remote-control')
   assert.equal(dataDir('linux', { home: '/home/x' }), '/home/x/.dsh/dsh-remote-control')
   // ⚠️ 这条是「不许顺手改目录名」的判据：路由前缀、status.json、密钥簿都指着它。
-  assert.match(dataDir('win32', { home: 'C:\\Users\\x' }), /\.dsh[\\/]dsh-remote-control$/, '目录名 dsh-remote-control 是稳定标识')
+  assert.match(
+    dataDir('win32', { home: 'C:\\Users\\x' }),
+    /\.dsh[\\/]dsh-remote-control$/,
+    '目录名 dsh-remote-control 是稳定标识',
+  )
 })
 
 test('resolveAgainstBase：绝对原样、相对按 base 解析、外来路径在 POSIX 上不解析', () => {
@@ -133,8 +137,7 @@ test('resolveAgainstBase：绝对原样、相对按 base 解析、外来路径�
 test('反向判据：把 win32 的盘符判定去掉，上面三条 workspace 断言必须立刻红', () => {
   // 这条不是装饰——它证明前面那张表**真的在测**判定本身，
   // 而不是碰巧全绿（比如"外来形态那条"其实恒为空集）。
-  const fake = (raw: string, platform: Platform) =>
-    platform === 'win32' ? raw.startsWith('/') : raw.startsWith('/')
+  const fake = (raw: string, platform: Platform) => (platform === 'win32' ? raw.startsWith('/') : raw.startsWith('/'))
   // 模拟「只认 POSIX 形态」的实现：win32 上盘符与 UNC 全部失效。
   assert.equal(isAbsolutePath('C:\\x', 'win32'), true, '真实实现认盘符')
   assert.equal(fake('C:\\x', 'win32'), false, '模拟实现不认盘符 ⇒ 判据能抓住这个差异')

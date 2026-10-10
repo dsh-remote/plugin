@@ -3,9 +3,13 @@
 # 刻意**不写 inject 闸门**：本插件对每个内核面都做软探测，
 # 写闸门只会让"某一代宿主缺某个服务"时整行不激活、插件静默不加载——
 # 那比带着次优配置跑起来更难排查（取证 docs/legacy-spec/host-plugin-cordis.md §2.2/§2.3）。
+# `name` 必须是**包的完整名**——loader 用它去解析模块，写成别的名字的表现是
+# "文件都在、bundles 列表里也有，插件就是不加载"。`id` 是**运行时 id**，故意与包名
+# 分开：数据目录 `~/.dsh/dsh-remote-control`、四条 pill 路由前缀都跟着它，
+# 所以改包名不会丢已落盘的配对。
 - insert:
     - id: dsh-remote-control
-      name: dsh-remote-control
+      name: '@dsh-remote/plugin'
       config:
         enabled: true
         serverUrl: ws://127.0.0.1:8787

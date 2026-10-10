@@ -31,9 +31,17 @@ import type {
   SessionSummary,
 } from '@dsh-remote/protocol'
 import { appendFileNote, MAX_ATTACH_TOTAL_BYTES, saveFileAttachments } from '../shell/uploads.js'
-import { MAX_ATTACHMENT_BYTES } from '@dsh-remote/protocol/limits'
+import { APPROVAL_OPTIONS as APPROVAL_OPTIONS_ZH } from '../copy/zh.js'
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILE_ATTACHMENTS,
+  MAX_IMAGE_ATTACHMENTS,
+  MAX_TEXT_CHARS,
+} from '@dsh-remote/protocol/limits'
+import { detectBackend } from '@dsh-remote/protocol/sleep'
 import { IdempotencyLedger } from '@dsh-remote/protocol/idempotency'
 import {
+  hostInfo,
   keepAwakeState,
   messageDelta,
   model,
@@ -50,7 +58,15 @@ import {
   compactionNotice,
   toolEvent,
 } from '@dsh-remote/protocol/outbound'
-import type { ApprovalDecision, AskUserQuestionAnswerValue, KernelEvent, KernelPort } from '../ports/index.js'
+import type { EvHostInfo } from '@dsh-remote/protocol'
+import { effectiveCapabilities, imageAttachmentsSupported } from './capabilities.js'
+import type {
+  ApprovalDecision,
+  ApprovalOutcomeValue,
+  AskUserQuestionAnswerValue,
+  KernelEvent,
+  KernelPort,
+} from '../ports/index.js'
 import { HISTORY_WINDOW_EXCEEDED } from '../ports/index.js'
 import { DeltaWindow, DEFAULT_WINDOW_OPTIONS, type WindowOptions } from './window.js'
 import type { KeepAwake } from './sleep-policy.js'
@@ -81,6 +97,15 @@ export interface RuntimeOptions {
   /** 文件附件落盘目录（`shell/uploads.ts`）；空串时主机拒收文件附件。 */
   uploadDir: string
   maxFileBytes: number
+  /**
+   * `ev.host_info.host` 的来源（规范 §13.2）。
+   *
+   * 为什么是注入而不是 core 自己去读 `process.platform`：这样单测能给一个确定的平台，
+   * 从而让 `state.sleep` 的推导（`detectBackend`）可以被钉住 —— 否则判据会随 CI 机器变。
+   * 缺省值见 `DEFAULTS`。
+   */
+  hostMeta?: () => Pick<EvHostInfo['host'], 'platform' | 'arch'> &
+    Partial<Pick<EvHostInfo['host'], 'profile' | 'dshVersion'>>
   log?: (message: string, fields?: Record<string, string | number | boolean | undefined>) => void
 }
 
@@ -114,11 +139,40 @@ interface PendingInteraction {
   reason?: string
 }
 
-const APPROVAL_OPTIONS = [
-  // 'reject' 这个词是手机端的行为分支条件，不能改（F10）。
-  { id: 'approve', label: '允许一次' },
-  { id: 'reject', label: '拒绝' },
-]
+// 文案与 `id` 都来自共享表（`copy/zh-cn.json`，V3-PLAN §7 阶段 F2）。
+// ⚠️ 这里曾经是三个写死的中文字面量，而小程序演示数据里另有一份 —— 改一处就漂。
+// ⚠️ `id` 是手机端的行为分支条件，不能改（F10）；`label` 是给用户看的字，两端必须逐字相同。
+// ⚠️ scope 说明**没有删掉**，只是换了一行承载 —— 小程序那张卡在按钮下面渲染
+// 「「始终允许」仅限本次会话内的同类操作，会话结束即失效」（`APPROVAL_SCOPE_HINT`）。
+// 所以宿主这里只写「始终允许」；**别的客户端接这张卡时，有义务自己把那半句边界补出来。**
+//
+// ⚠️ 那一层 `.map` 不是装饰：共享表是 `readonly` 的，而载荷类型要的是可变的
+// `{id,label}[]`。这里做**一次**浅拷贝（全进程一个实例，没有任何地方改它），
+// 好过为了省一次 map 去改协议的类型 —— 载荷可变性是协议层的既有约定，不该被文案表带偏。
+const APPROVAL_OPTIONS = APPROVAL_OPTIONS_ZH.map((option) => ({ ...option }))
+
+/**
+ * 「本次会话内始终允许」的记表键：`会话 id + 审批类别`。
+ *
+ * ## 为什么键里带**类别**而不是只有会话
+ *
+ * 「始终允许」必须限定在**一类动作**上。若只按会话记，那么用户批准过一次
+ * `Bash` 之后，同一会话里 `Write` 之类的其它工具也会被放行——而他批准的是那一类。
+ *
+ * ## 类别取 `info.action`（宿主给的稳定机器名）
+ *
+ * 不取 `reason`（人话、会变），也不取工具的完整命令行（那就变成逐条授权了，
+ * 等于没有"始终"）。`action` 是宿主给的**类别**，粒度正好。
+ */
+const approvalScopeOf = (sessionId: string | undefined, action: string | undefined): string =>
+  // ⚠️ 分隔符必须写成 `\u0000` 转义，不要写成字面 NUL 字节。
+  // 字面 NUL 会让 git 与 ripgrep 把整个文件当成二进制：`git diff` 看不到改动、
+  // `git grep` 搜不到这个文件里的函数 —— 改一个函数会漏掉全部调用点。
+  // 转义写法与字面写法行为逐字节相同。
+  `${sessionId ?? ''}\u0000${action ?? ''}`
+
+/** `ev.host_info.host` 的缺省来源：如实读本进程的平台。抽成命名函数是为了能被 `??` 回退到。 */
+const defaultHostMeta = (): EvHostInfo['host'] => ({ platform: process.platform, arch: process.arch })
 
 const DEFAULTS: RuntimeOptions = {
   listingRefreshMs: 15_000,
@@ -138,6 +192,7 @@ const DEFAULTS: RuntimeOptions = {
    */
   uploadDir: '',
   maxFileBytes: MAX_ATTACHMENT_BYTES,
+  hostMeta: defaultHostMeta,
 }
 
 /** 一次列表最多给手机多少条会话（与中继侧的会话上限同源，取证 §5.3）。 */
@@ -155,6 +210,98 @@ export class HostRuntime {
   private readonly window: DeltaWindow
 
   private readonly pending = new Map<string, PendingInteraction>()
+
+  /**
+   * 「本次会话内始终允许」的记表：`会话 + 审批类别 → 'allowed-once'`。
+   *
+   * ## 它为什么在内存里、且随 `stop()` 清空
+   *
+   * V3-PLAN §9.1 拍板：scope 是**本次会话内**，不是"这一类工具永久"也不是全局。
+   * 于是它必须满足两条：① 不落盘（落盘就变成"永久"了，而永久授权的语义与风险
+   * 都比这一项大得多）；② 生命周期与既有的 `pending` 表一致（`stop()` 清空）。
+   *
+   * ## 它不进 `status.json`
+   *
+   * 它是**决策台账**，不是诊断面。放进去会让一个"用户做过什么决定"变成
+   * 一份可被外部脚本读到的记录——而那与"授权只在本会话有效"这件事的
+   * **前提**（出了这个进程就失效）直接矛盾。
+   *
+   * 但它**要有计数**（`alwaysAllowedHits`）：否则"为什么这次没弹审批"
+   * 在排错时无迹可寻——与既有那四个 `approval*` 字段同一条理由。
+   */
+  private readonly sessionAllowed = new Map<string, ApprovalOutcomeValue>()
+
+  /**
+   * 「本次会话内始终允许」命中过几次（上面那段注释里承诺的 `alwaysAllowedHits`，
+   * 2026-10-09 补上——**它在那条注释写下的当天就是缺的**，而今天用户报的
+   * 「审批窗卡着、手机没有弹窗」正好落在这一格：命中时**刻意一帧都不发**，
+   * 而界面上「为什么这次没弹」过去无迹可寻）。
+   *
+   * ⚠️ 它归 runtime 而不是 `carrier-services` 的 `faces`：那条判定
+   * （`approvalScopeOf` 查表）就在这一层，而 `faces` 数的是**参与器**收到过几次。
+   * 两边都数"参与"，混在一起就会有人以为它们该相等。
+   */
+  private sessionAllowedHits = 0
+
+  /**
+   * 这台主机**此刻**对手机宣告的附件限额（`ev.host_info.limits` 里那两条）。
+   *
+   * ⚠️ 抽成方法而不是就地算：`diagnostics.attachmentLimits` 要报**同一个值**
+   * （2026-10-10 补）。理由是一整晚反复出现的那条纪律 ——
+   * 一个决定如果没有读数，用户报"发不了图"时 doctor 就只能回去读代码：
+   * 分不清"主机报的是 0（手机拦得对）"还是"报的是 4（那才是手机/链路的锅）"。
+   *
+   * ⚠️ 做成方法而不是构造时常量：`this.kernel` 是后到的（端口在 `ctx.inject` 里才有），
+   * 与 `imageFace` 那条注释同一个理由。
+   */
+  attachmentLimits(): { maxImageAttachments: number; maxFileAttachments: number } {
+    return {
+      maxImageAttachments: imageAttachmentsSupported(this.kernel) === 'no' ? 0 : MAX_IMAGE_ATTACHMENTS,
+      maxFileAttachments: this.options.uploadDir ? MAX_FILE_ATTACHMENTS : 0,
+    }
+  }
+
+  /**
+   * 附件限额的现场读数（`diagnostics.attachmentLimits`）。
+   *
+   * 与 `alwaysAllowedHits` 同一条纪律：**每个新字段都要有谁读它**，
+   * 读者是 `scripts/host-doctor.mjs` 与 `docs/HOST-SIDE.md` §5。
+   */
+  get attachmentLimitsForDiagnostics(): { images: number; files: number } {
+    const limits = this.attachmentLimits()
+    return { images: limits.maxImageAttachments, files: limits.maxFileAttachments }
+  }
+
+  get alwaysAllowedHits(): number {
+    return this.sessionAllowedHits
+  }
+
+  /**
+   * **发帧之前就被判掉**的次数，按理由分开（2026-10-09 用户报「审批窗/提问窗卡着、
+   * 手机没有弹窗」时补）。
+   *
+   * ## 为什么这一格是上一轮那批计数里最大的缺口
+   *
+   * 现场读数：`approvalCalls = 10` 而 `outbound.permission_request = 2`；
+   * `questionsCalls = 1` 而 `outbound` 里**连 `question_request` 这个键都没有**
+   * ——**提问帧一次都没发出去过**。而参与器那侧的三条分流（held / no-target / no-answerer）
+   * 解释不了它：卡确实被 `participate` 交到了 sink 上（`questionsSignalHandoff = fused`），
+   * 是在**这一层**、在 `replyTo` 之前就被判掉的。
+   *
+   * | 键 | 判掉它的语句 | 是不是缺陷 |
+   * |---|---|---|
+   * | `noClient` | `!conversationId \|\| !transport.hasClient(...)` ⇒ `return 'decline' / null` | **要查**：其它事件发得出去、这里发不出去，就是它 |
+   * | `aborted` | `info.signal?.aborted` ⇒ 一张卡都不发，整条交还桌面 | **多半不是缺陷**：平台自己撤回了这次请求（回合被取消 / 超时），发出去就是一张点不动的死卡 |
+   *
+   * ⚠️ 这两条**必须分开数**：上一条可能是 bug，第二条是正确行为。
+   * 混成一个"被拒 N 次"，就等于把"该修的"和"不该修的"捆在一起 ——
+   * 而它们要的处置完全不同（前者要改代码，后者什么都不要改）。
+   */
+  private readonly interactionDeclines = { noClient: 0, aborted: 0 }
+
+  get declined(): { noClient: number; aborted: number } {
+    return { ...this.interactionDeclines }
+  }
   /**
    * 手机上**此刻有清单**的会话（`todo/write` 发过非空清单、且还没被下一轮清掉）。
    *
@@ -304,6 +451,10 @@ export class HostRuntime {
     // `runtime.stop()` → `relay.stop()`（见 index.ts），此刻通道还活着，发得出去；
     // 不带的话（原来就是这样）卡片一直亮到 TTL 走完，用户对着一个没人处理的审批干等。
     for (const [id] of [...this.pending]) this.settle(id, undefined, 'withdrawn')
+    // 「本次会话内始终允许」的记表与 pending 同生命周期：出了这个进程就失效。
+    // 不清的话，下一次 `apply()` 复用同一个 runtime 实例时会把上一段会话的授权带过来
+    //——而那正是这个功能**承诺不做**的事（§9.1：scope 是本次会话内）。
+    this.sessionAllowed.clear()
   }
 
   /**
@@ -383,6 +534,25 @@ export class HostRuntime {
             }
           }
           let text = cmd.text
+          /**
+           * 正文长度的**执行点**（规范 §13.2 L2）。
+           *
+           * `ev.host_info.limits.maxTextChars` 报的必须是主机此刻真正执行的值，
+           * 所以这个数要么在这里真的被拒，要么就不该报出去——报一个没人执行的限额
+           * 等于给手机一个空头承诺（它会据此放行一段我们其实不收的正文）。
+           *
+           * 为什么放在最前面：附件整批校验与落盘是有副作用的（写盘），
+           * 一条注定要被拒的请求不该先往用户磁盘上落文件。
+           *
+           * 为什么用 `length` 而不是字节数：手机侧那条 `MAX_TEXT_PER_BLOCK` 也是按
+           * 字符算的，两端同一个口径才不会在中间留出一段"手机放行、主机拒收"的正文。
+           */
+          if (text.length > MAX_TEXT_CHARS) {
+            reply(false, {
+              message: `这条消息太长了（${text.length} 字，上限 ${MAX_TEXT_CHARS} 字），请分几条发`,
+            })
+            return
+          }
           const images: ImageAttachment[] = Array.isArray(cmd.images) ? cmd.images : []
           // 图片附件（2026-10-05 用户：正文里不要再出现路径）。
           //
@@ -507,6 +677,10 @@ export class HostRuntime {
           return
         }
         case 'cmd.session_history': {
+          // 没带 `since` = 这一页是"整页重读"而不是"补差量"。它本身不是故障
+          // （首屏就是整页），但**和补差量混在一起就看不出续传有没有在跑**，
+          // 所以单独记一笔（见 resume getter）。
+          if (cmd.since === undefined) this.resumeCount.noCap += 1
           // 能力缺失时**明确拒绝**：回一张空页在手机上是"这个会话没内容"，
           // 那是一个会让人查错方向的假事实。能力面差异是真实存在的（见 KernelPort）。
           const read = this.kernel.readHistory
@@ -533,10 +707,17 @@ export class HostRuntime {
             // 而中间那段永远补不回来，用户看到的是"消息偶尔少几行"。
             const reason = String((error as Error)?.message ?? error)
             if (reason.includes(HISTORY_WINDOW_EXCEEDED)) {
+              this.resumeCount.tooDeep += 1
               reply(false, { message: `断线时间太长，中间那段已经补不回来了（${reason}）` })
               return
             }
             throw error
+          }
+          if (cmd.since !== undefined) {
+            // 补到了东西 = 续传生效；空页 = 游标之后确实没有新事件（也可能是补齐了，
+            // 手机把 `latestSeq` 推到了末尾）——两者都不是故障，所以分成两个读数而不是一个。
+            if (page.events.length > 0) this.resumeCount.hits += 1
+            else this.resumeCount.misses += 1
           }
           // 条目走**与实时流同一批出站构造器**：形状一致才谈得上"同一套渲染路径"。
           const items: HistoryItem[] = []
@@ -560,6 +741,15 @@ export class HostRuntime {
           return
         }
         case 'cmd.get_pending': {
+          /**
+           * 手机问了一次「你那边还有挂着的东西吗」。这两个计数是**这一类症状唯一的分诊入口**
+           * （`diagnostics.pendingAsks`，见那个 getter 的注释里的那张表）。
+           */
+          this.getPendingCount.calls += 1
+          this.getPendingCount.lastAt = this.clock.now()
+          // 先拍下"此刻手上有几张"，**再**开始重放：这一格是分诊的关键，
+          // 它回答"手机问的那一刻那张卡在不在"（见 pendingAsks 的注释）。
+          this.getPendingCount.last = { pending: this.pending.size, replayed: 0 }
           // 手机主动拉还挂着的审批/提问（重连、进会话页时各一次）。
           // 与 peer-joined 的重发同一批帧构造器（同一 requestId，手机按卡覆盖），
           // 只是触发方从主机变成手机——普通 socket 重连中继不通知主机，
@@ -573,6 +763,8 @@ export class HostRuntime {
             this.replyTo(conversationId, frame)
             replayed += 1
           }
+          this.getPendingCount.replayed += replayed
+          if (this.getPendingCount.last !== null) this.getPendingCount.last.replayed = replayed
           reply(true, { data: { replayed } })
           return
         }
@@ -670,6 +862,115 @@ export class HostRuntime {
   }
 
   /**
+   * **续传诊断**（进 status.json 的 `diagnostics.resume`，V3-PLAN §7 阶段 F4）。
+   *
+   * 为什么必须有这组计数：`since` 差量续传（B3/B4）**失败时不报错**——协议设计成
+   * "补不回来就退回整页重读"，于是"手机一直在重拉整段历史"这件事在界面上与
+   * "续传一直生效"长得一模一样（都是"消息都在"），差别只在流量与时间。
+   * 上一轮补 B4 时真机上的那个缺陷（重连后主机不再宣告能力面 ⇒ 差量**永不**生效且不报错）
+   * 就是这样藏了很久的——它只在计数上现形。
+   *
+   * 四个读数各自对应一条降级路径，`hitRate` 是它们的比值：
+   * - `hits`：带 `since` 且补到了东西；
+   * - `misses`：带 `since` 但返回空页（游标之后真的没有新事件，也是合法的）；
+   * - `noCap`：手机**没带** `since`（老主机缺能力位 / 老手机）⇒ 走整页；
+   * - `tooDeep`：`since` 落在保留窗口外，协议明确拒收，手机改拉历史（规范 §10.7 S4）。
+   */
+  private readonly resumeCount = { hits: 0, misses: 0, noCap: 0, tooDeep: 0 }
+  /**
+   * ⚠️ **不给 `hitRate`**：它是 `hits / (hits+misses+tooDeep)` 的派生量，
+   * 而每个字段存在的理由是"有谁读它"（F4）。派生量放进来就多一个没人读的键，
+   * 而且它必然与三个计数不同步（谁先更新谁说了算）。
+   * 要看命中率的人用 `scripts/host-doctor.mjs`——它按同一条公式算给你看。
+   */
+  get resume(): { hits: number; misses: number; noCap: number; tooDeep: number } {
+    return { ...this.resumeCount }
+  }
+
+  /**
+   * 挂起卡那条链的可观测读数（`diagnostics.pendingAsks`，出到 `status.json`）。
+   *
+   * ## 为什么非有不可（2026-10-09 用户报「小程序端的 question 弹窗不弹」）
+   *
+   * 那一类症状有**四种**根因，长得一模一样：手机上什么都没有。
+   * 而这四个数把它们**一次分开**，不用猜：
+   *
+   * | 读数 | 说明 |
+   * |---|---|
+   * | `now` / `oldestSec` | 主机此刻还挂着几张、最久等了多久。`now > 0` ⇒ **主机手里有那张卡**，它该能被重放 |
+   * | `getPendingCalls` | 手机问过几次。`0` ⇒ **手机从来没来问**（没上线 / 没进会话页 / 老版本不认这条命令） |
+   * | `lastGetPendingReplayed` | **最近那一次**补拉重放了几帧。`0` ⇒ 它问的时候主机一帧都给不出 |
+   * | `lastGetPendingPending` | 最近那一次补拉时主机手上有几张。**拿它和 `now` 比**，才分得出「问早了」与「真丢了」 |
+   * | `lastGetPendingAgoSec` | 最近一次是多久之前。`now > 0` 而它很大 ⇒ 手机在那之后就没再问过 |
+   * | `getPendingReplayed` | 累计重放帧数（含主机在 `peer-joined` 上主动补的那条路） |
+   *
+   * ⚠️ **为什么"最近那一次"要单独一格，而不用那个累计值**（2026-10-09 review 时自己抓到的）：
+   * 累计值只要**曾经**重放过任何一帧就再也不动了，于是"手机问了、主机一帧都没给出去"
+   * 这条判断会在当天稍晚**永久闭嘴** —— 而那正是最该报警的时刻。
+   * 这就是"判据制造缺陷"那一族：格子看起来在守某件事，实际上一旦被别的路径满足就永远绿。
+   *
+   * 同理**不能只看 `lastGetPendingReplayed = 0` 就下结论**：那张卡可能是**问完之后**才挂上的，
+   * 那种情况下 0 是完全正常的。所以必须配 `lastGetPendingPending` 一起读
+   * （分诊表在 `scripts/host-doctor.mjs` 与 `docs/HOST-SIDE.md` §5）。
+   *
+   * ⚠️ **`waiting`（上面那个 getter）早就存在，但它只进了 pill 面板**，
+   * 而面板恰恰是"用户在手机上看不到的那台机器"——于是排错的人手上什么都没有。
+   * 这条是同一个读数的第二个出口，不是新的一套状态模型。
+   */
+  get pendingAsks(): {
+    now: number
+    oldestSec: number
+    getPendingCalls: number
+    getPendingReplayed: number
+    lastGetPendingReplayed: number | null
+    lastGetPendingPending: number | null
+    lastGetPendingAgoSec: number | null
+  } {
+    const { count, oldestSec } = this.waiting
+    const last = this.getPendingCount.last
+    return {
+      now: count,
+      oldestSec,
+      getPendingCalls: this.getPendingCount.calls,
+      getPendingReplayed: this.getPendingCount.replayed,
+      lastGetPendingReplayed: last === null ? null : last.replayed,
+      lastGetPendingPending: last === null ? null : last.pending,
+      lastGetPendingAgoSec:
+        this.getPendingCount.lastAt === null
+          ? null
+          : Math.max(0, Math.floor((this.clock.now() - this.getPendingCount.lastAt) / 1000)),
+    }
+  }
+
+  /**
+   * `cmd.get_pending` 的收发计数。**只有计数，没有别的**：
+   * "重放了几帧"才是能定性的一格（`replayed=0` 与 `replayed>0` 是两条完全不同的排查方向）。
+   */
+  /**
+   * 此刻挂着的、**属于这条会话**的那些（`sessionId` 缺省 = 全部）。
+   *
+   * ⚠️ 必须与 `cmd.get_pending` 的重放循环**逐字同判据**：
+   * 那两个数是同一个分诊表上的分子与分母，口径一旦不同就得出"帧丢了"的假结论
+   * （2026-10-09 深度 review 的 A2）。
+   */
+  private pendingForSession(sessionId: string | undefined): PendingInteraction[] {
+    const out: PendingInteraction[] = []
+    for (const item of this.pending.values()) {
+      if (sessionId !== undefined && item.sessionId !== sessionId) continue
+      out.push(item)
+    }
+    return out
+  }
+
+  private readonly getPendingCount = {
+    calls: 0,
+    replayed: 0,
+    lastAt: null as number | null,
+    /** 最近那一趟的现场：`pending` 是**问的那一刻**主机手上有几张，`replayed` 是那趟给出去几帧。 */
+    last: null as { pending: number; replayed: number } | null,
+  }
+
+  /**
    * 有几件事正挂在手机上等回答，以及**最久的那件已经等了多久**（秒）。
    *
    * 为什么这条要出到界面上（而不只是内部状态）：一张挂起的审批阻塞着远端一条正在跑的回合，
@@ -723,6 +1024,82 @@ export class HostRuntime {
 
   private replyTo(conversationId: string, payload: EvPayload): void {
     this.countOutbound(payload, this.transport.reply(conversationId, payload))
+  }
+
+  /**
+   * 本端**此刻**的能力、限额与自身信息（规范 §13.2，附录 D·GAP-5 的收口）。
+   *
+   * ## 为什么它必须是"此刻"而不是"构建时"
+   *
+   * - `caps` 走 `effectiveCapabilities(this.kernel)`：宿主这一代没有
+   *   `sessionQuery.readSession` 时，`drc.payload.resume` **不许**被报出去——
+   *   否则手机按"支持"表现，断线重连发 `since`，然后永远收不到差量页。
+   * - `limits.maxFileAttachments` 看 `uploadDir`：没配落盘目录的主机**真的**不收
+   *   文件附件（`cmd.send_prompt` 那条 `reply(false, …)` 就是证据），
+   *   所以它必须报 0，而不是报协议上界的 4。
+   *
+   * 这条义务（L2"报的是 host **此刻真正执行**的值，不是配置的名义值"）是整条
+   * §13 的支点：报名义值等于把一个空头承诺发给手机，而手机据此置灰/放行。
+   */
+  hostInfoPayload(): EvHostInfo {
+    const meta = (this.options.hostMeta ?? defaultHostMeta)()
+    return hostInfo({
+      host: { ...meta, carrier: this.kernel.carrier },
+      caps: effectiveCapabilities(this.kernel),
+      limits: {
+        /**
+         * **图片上限跟着"这台内核此刻有没有图片通路"走**（2026-10-09 真机取证）。
+         *
+         * 与下面 `maxFileAttachments` 同一个形状、同一套理由：那两个数字回答的是
+         * "这台主机**此刻**真的能收几张"，不是"协议上界是几张"。文件那条早就这么做了
+         * （没配 `uploadDir` 就报 0），图片这条原来一直报协议上界 4 ——
+         * 于是在一台**内核根本没有图片通路**的主机上（web profile 的 dsh 0.1.0-rc.6：
+         * `dsh-llm-deepseek` 对任何图片内容直接抛 `UNSUPPORTED_CONTENT`），
+         * 手机照样让用户选图、压缩、传完整个附件，才在发送那一刻被拒。
+         *
+         * 报 0 之后，手机在**选之前**就能知道（`limits` 是它读得到的东西）。
+         * 取证、三态与取舍见 `capabilities.ts` 的 `imageAttachmentsSupported`。
+         */
+        ...this.attachmentLimits(),
+        maxAttachmentBytes: this.options.maxFileBytes,
+        maxTextChars: MAX_TEXT_CHARS,
+      },
+      /**
+       * `state.sleep` 从**平台**推导，不从 `SleepPort.backend()` 取。
+       *
+       * 那条路走不通的原因：`backend()` 的类型是自由字符串（`ev.keep_awake_state.backend`
+       * 本来就接受任意名字，测试桩用的是 `'fake-caffeinate'`），而
+       * `ev.host_info.state.sleep` 是**闭枚举**——手机要按它三态分支。
+       * `detectBackend(platform)` 才是规范给的那条映射，也是 `SystemSleepBackend`
+       * 内部实际用的那一条（`backend()` 就是 `detectBackend(this.osName)`），
+       * 所以这里推导与那里取值**同源**。等价性由 `sleep.test.ts` 钉着。
+       */
+      state: { sleep: detectBackend(meta.platform) },
+    })
+  }
+
+  /**
+   * 把 `ev.host_info` 发给某一条会话。
+   *
+   * 规范 L4：host MUST 在**（重）连上**与**能力变化**时各发一次。
+   *
+   * - "（重）连上"由 `index.ts` 的 `onPeerJoined` 触发 —— 它同时覆盖新配对与重连
+   *   （重连那一帧不带 pairingToken，但一样会走到那个回调）。
+   * - "能力变化"目前**不可达**：`caps` 只随进程内的内核端口变，而端口在
+   *   `start()` 时定型、之后不再换。所以不假装有一条能力变化事件 —— 假装的那个
+   *   只会在真需要它的那一天（例如将来支持热插拔载体）变成一句空话。
+   *
+   * 永不抛：它挂在 `peer-joined` 那条路上，异常会把配对流程带崩（`apply()` 的红线）。
+   */
+  sendHostInfo(conversationId: string): boolean {
+    if (!this.started) return false
+    try {
+      this.replyTo(conversationId, this.hostInfoPayload())
+      return true
+    } catch (error) {
+      this.log('host info send failed', { message: messageOf(error) })
+      return false
+    }
   }
 
   /** 内核事件入口。合帧与顺序规则都在这几行里。 */
@@ -985,7 +1362,17 @@ export class HostRuntime {
     signal?: AbortSignal
   }): Promise<ApprovalDecision> {
     const conversationId = this.pickConversation(info.sessionId)
-    if (!conversationId || !this.transport.hasClient(conversationId)) return 'decline'
+    if (!conversationId || !this.transport.hasClient(conversationId)) {
+      // ⚠️ **这一格是 2026-10-09 那次现场的主要嫌疑**：`permission_request` 发不出去、
+      // 而其它事件发得出去。理由必须留在日志里：下一次只看到一个计数没法往下查。
+      this.interactionDeclines.noClient += 1
+      this.log('approval dropped before any frame: no conversation with a live client', {
+        sessionId: info.sessionId,
+        conversationId: conversationId ?? '(none)',
+        conversations: this.transport.conversationIds().length,
+      })
+      return 'decline'
+    }
     /**
      * **进来就已经 abort 的信号：当场交还桌面，一张卡都不发**（2026-10-06）。
      *
@@ -998,6 +1385,7 @@ export class HostRuntime {
      * 这一判必须在 `sleep.hold()` 与首帧之前——那样连锁都不用挂。
      */
     if (info.signal?.aborted) {
+      this.interactionDeclines.aborted += 1
       this.log('approval already withdrawn by the platform, handing back to the desktop', {
         sessionId: info.sessionId,
         reason: String(info.signal.reason ?? ''),
@@ -1009,6 +1397,17 @@ export class HostRuntime {
     // 到期时刻只算一次：首帧与将来可能的重发（`replayPending`）用同一个，
     // 主机侧的超时表从第一次问出就开始走，重发时顺延等于骗手机的倒计时。
     const expiresAt = new Date(Date.now() + this.options.approvalTimeoutMs).toISOString()
+    // ⚠️ 查表放在**挂 waterfall 之前**：「本次会话内始终允许」要真的省掉打扰，
+    // 而不只是在事后记一笔。若放在之后，每次请求照样走一遍审批流（照样占住 host 的一次交互、
+    // 照样给桌面 UI 一次机会），用户仍然被打断——那就只实现了"记账"，没实现"始终允许"。
+    const scope = approvalScopeOf(info.sessionId, info.action)
+    const remembered = this.sessionAllowed.get(scope)
+    if (remembered) {
+      // 这一格必须在**返回之前**记：命中即返回，之后再没有别的语句会执行到。
+      this.sessionAllowedHits += 1
+      this.log('approval answered by session-scoped allow-list', { sessionId: info.sessionId, action: info.action })
+      return remembered
+    }
     // `return await` + finally：executor 里抛出（或 resolve 路径的任何异常）都不会让
     // releaseHold 被跳过 —— 旧写法里一次抛出就是一条永久泄漏的挂锁（机器再也不睡）。
     try {
@@ -1063,10 +1462,19 @@ export class HostRuntime {
     signal?: AbortSignal
   }): Promise<AskUserQuestionAnswerValue | null> {
     const conversationId = this.pickConversation(info.sessionId)
-    if (!conversationId || !this.transport.hasClient(conversationId)) return null
+    if (!conversationId || !this.transport.hasClient(conversationId)) {
+      this.interactionDeclines.noClient += 1
+      this.log('question dropped before any frame: no conversation with a live client', {
+        sessionId: info.sessionId,
+        conversationId: conversationId ?? '(none)',
+        conversations: this.transport.conversationIds().length,
+      })
+      return null
+    }
     // 与审批同一条：**已经 abort 的 signal 永远不会再触发监听器**，所以必须在
     // hold 与首帧之前判掉，否则手机上是 300 秒的死卡、挂锁也一直挂着（见审批那里的取证）。
     if (info.signal?.aborted) {
+      this.interactionDeclines.aborted += 1
       this.log('question already withdrawn by the platform, handing back to the desktop', {
         sessionId: info.sessionId,
         reason: String(info.signal.reason ?? ''),
@@ -1123,12 +1531,20 @@ export class HostRuntime {
     // 那张提问卡被一个审批答案收掉，而平台拿到一个它没问过的决定。
     if (!item || item.kind !== 'approval') return false
     /**
-     * **白名单**（F10）：手机逐字回传我们下发的 `options[].id`，合法的只有两个
-     * `'approve'` / `'reject'`。原来写的是"不是 reject 就放行一次"——那是 fail-open：
+     * **白名单**（F10）：手机逐字回传我们下发的 `options[].id`，合法的只有
+     * `'approve'` / `'reject'`（v3 加了 `'approve-session'`）。
+     * 原来写的是"不是 reject 就放行一次"——那是 fail-open：
      * 未知词（`deny` / `decline` / `cancel`，或者旧版小程序回传的别的形状）会被当成
      * **允许**，一次误判就是替用户放行了一条工具调用。认不出的一律按拒绝。
      */
-    const outcome: ApprovalDecision = decision === 'approve' ? 'allowed-once' : 'rejected'
+    const outcome: ApprovalDecision =
+      decision === 'approve' ? 'allowed-once' : decision === 'approve-session' ? 'allowed-session' : 'rejected'
+    // 「本次会话内始终允许」：记住这把钥匙的形状，让同一会话里后续同类请求不再打扰用户。
+    // 键取 **会话 + 审批类别**（`approvalScopeOf`），不是 requestId——同一会话里
+    // 同一类工具重复问才是打扰的来源。
+    if (decision === 'approve-session') {
+      this.sessionAllowed.set(approvalScopeOf(item.sessionId, item.action), outcome)
+    }
     this.settle(requestId, outcome)
     return true
   }
@@ -1243,6 +1659,9 @@ export class HostRuntime {
       }
     }
     if (replayed > 0) this.log('pending replayed', { conversationId, count: replayed })
+    // 与 `cmd.get_pending` 那条**同一个计数**：两条路（手机来问 / 主机在 peer-joined 上主动补）
+    // 重放出去的是同一种帧，排错时不该因为走的哪条路而给出两个数。
+    this.getPendingCount.replayed += replayed
     return replayed
   }
 

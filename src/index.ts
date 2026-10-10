@@ -3,7 +3,7 @@
  *
  * 职责边界（取证 docs/legacy-spec/host-plugin-cordis.md §1）：这个文件只做三件事
  * —— 读配置并校验、探测内核载体、把内核端口/中继客户端/运行时/防休眠接起来并持续写状态快照。
- * 配对入口只有状态栏那颗 pill（`pill/start.ts` 那四条路由）。业务逻辑都在 `core/`，
+ * 配对入口只有状态栏那颗 pill（`pill/start.ts` 那六条路由）。业务逻辑都在 `core/`，
  * 平台知识都在 `platform/`。
  *
  * 三条不可违反的纪律：
@@ -31,6 +31,7 @@ import { createOneShotTimers, DEFAULT_SYSTEM_CLOCK } from './core/clock.js'
 import { StatusFile, STATUS_REFRESH_MS } from './shell/status.js'
 import { resolveHostId } from './shell/host-id.js'
 import { PairStore } from './shell/pair-store.js'
+import { describeSelfHosting } from './shell/self-hosting.js'
 import {
   DEFAULT_CONFIG,
   readConfig,
@@ -43,6 +44,7 @@ import {
 import { startPill, type PillHandle } from './pill/start.js'
 import { guardedSubscribe } from './platform/guard.js'
 import { type LivePairing, type PillStatus } from './pill/routes.js'
+import { readMiniprogramImage } from './pill/miniprogram.js'
 import { PLUGIN_VERSION } from './version.js'
 import type { KernelPort, Clock } from './ports/index.js'
 
@@ -233,7 +235,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   let relay: RelayClient | undefined
   let startedCarrier = ''
   /**
-   * 状态栏那颗 pill 的四条路由（配对的唯一入口）。`undefined` = 还没起 / 起不动。
+   * 状态栏那颗 pill 的六条路由（配对的唯一入口）。`undefined` = 还没起 / 起不动。
    * 它**不在主链路上**：没有 `webServer` 时它就是 undefined，配对、中继、命令一行都不受影响
    * ——这正是原来"拆成两个包"所提供的隔离，现在由 `startPill` 的软探测提供。
    */
@@ -312,6 +314,29 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
           if (id !== conversationId) relay?.voidConversation(id)
         }
         runtime?.start()
+        /**
+         * `ev.host_info`（规范 §13.2 L4）：配对那一刻先发一次。
+         *
+         * ⚠️ **这里只覆盖"新配对"这一半**（2026-10-08 订正）。原文写的是
+         * 「同时覆盖新配对与重连（不带 token…都会走到这里）」——那句话是照**设计意图**
+         * 写的，不是照调用链写的：中继侧那条无 token 的 `peer-joined` 重放
+         * 2026-10-06 就删了（`server.ts` 留着取证注释），而 `peerJoinedForHost` 的
+         * `pairingToken` 是必填参数 ⇒ 本回调**只在配对时触发**。
+         *
+         * 重连那一半现在挂在 `onClientRejoined` 上（见下面那个回调）——
+         * 少了一半的后果不是"少一帧"，是手机在 `_onHelloOk` 里把 `hostCaps` 清成 null
+         * 之后**再也收不到**新的能力面，于是 `supportsResume()` 恒为 false、
+         * B4 的差量续传在真机上永不生效（而且不报错）。
+         *
+         * 为什么必须在 `runtime?.start()` **之后**：`sendHostInfo` 里第一句就是
+         * `if (!this.started) return false` —— `start()` 之前内核端口的能力面还没用上，
+         * 报出去的能力位会是空的，手机据此按"什么都不支持"表现（静默降级）。
+         *
+         * 它自带 try/catch：这一帧发不出去不该把配对流程带崩。
+         */
+        if (runtime && !runtime.sendHostInfo(conversationId)) {
+          log('host info not sent', { conversationId })
+        }
         void runtime?.pushSessions('peer-joined')
         // 挂着的审批/提问在配对那一刻重发一遍（同一 requestId）：手机退后台、断线、
         // 停在列表页期间错过的那一帧，回来后靠这一遍补上；已结算的不在 pending 里，
@@ -334,6 +359,33 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       },
       onClientLeft: () => {
         void runtime?.pushSessions('client-left')
+      },
+      /**
+       * 客户端**回来**了（规范 §13.2 L4 的"重连"那一半，2026-10-08 接线）。
+       *
+       * 与 `onPeerJoined` 里那次是**同一帧、同一个理由**：手机在 `_onHelloOk` 里
+       * 把 `hostCaps` 清成 null（新连接 = 上一代能力面作废），必须有人把当前这份
+       * 重新告诉它，否则 `supportsResume()` 恒为 false —— 断线重连永远走整页重读，
+       * 而 B4 要的"只有差量到达"永远不会发生，并且**两端都不报错**。
+       *
+       * ## 刻意不做的三件事
+       *
+       * - **不 `voidConversation` 别的通道**：那是"只允许一台"的策略，属于
+       *   **新配对**。回到自己那条会话不该把别的会话踢掉（中继重启后从盘上恢复出
+       *   多条会话时，这一脚会误伤另一台正在用的手机）。
+       * - **不 `runtime.start()`**：重连不是启动点。恢复出来的会话在进程启动时就已经
+       *   起过内核订阅（`restoreConversations` 那条路），这里再调一次是空操作。
+       * - **不 `pushSessions`**：手机重连后**自己会发** `cmd.list_sessions`
+       *   （`_onHelloOk`），列表本来就要回来一份。再推一次只是多一帧，
+       *   而这一帧在判据里长得像"主机主动推了列表"，会掩盖"那条命令到底发没发出去"。
+       *
+       * `sendHostInfo` 自带 try/catch 且失败返回 false：这里只留痕，不让它抛进中继的
+       * 帧处理循环（那会把这一帧后面所有逻辑一起带走）。
+       */
+      onClientRejoined: (conversationId) => {
+        if (runtime && !runtime.sendHostInfo(conversationId)) {
+          log('host info not sent (client rejoined)', { conversationId })
+        }
       },
       onConversationGone: (conversationId) => log('conversation gone', { conversationId }),
       onCommand: (conversationId, cmd: CmdPayload) => void runtime?.handleCommand(cmd, conversationId).catch(() => {}),
@@ -623,11 +675,60 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       },
       pairing: describeActivePairing(),
       keepAwake: snapshot,
+      /**
+       * **诊断三件套**（V3-PLAN §7 阶段 F4：自部署 / 传输 / 续传命中率）。
+       *
+       * 为什么单独一块而不是散进上面的字段：`relay`/`relayProblem`/`conversations`
+       * 答的是"此刻是什么样"，这三组答的是"**一直**是这样吗"——而排错里最贵的问题
+       * 恰恰是后一种（续传永远不生效但界面正常、链路每 3 秒重连一次但字段一直绿）。
+       *
+       * **每个字段都有谁读它**（F4 的判据）：`scripts/host-doctor.mjs`
+       * （只读白名单 + 非 0 退出码，与 `packages/relay/scripts/relay-doctor.mjs` 同款），
+       * 字段清单见 docs/HOST-SIDE.md §5。改了字段不接进 doctor 会被
+       * `e2e/status-diagnostics.test.mjs` 判红。
+       */
+      diagnostics: {
+        selfHosting: describeSelfHosting(config.serverUrl),
+        transport: relay?.transport ?? null,
+        resume: runtime?.resume ?? null,
+        /**
+         * 挂起卡（审批 / 提问）那条链的读数（2026-10-09）。
+         *
+         * **为什么必须出到快照**：`waiting`（张数 + 最久等了多久）早就算好了，
+         * 但它只进了 pill 面板 —— 而面板恰恰是"用户在手机上根本看不到的那台机器"。
+         * 症状是"手机上没有那张卡"，四种根因（手机没问 / 问了但已超时 / 主机没挂 / 手机没渲染）
+         * 长得一模一样，这四个数一次分开，别再靠猜。读法见 `runtime.ts` 的 `pendingAsks`。
+         */
+        pendingAsks: runtime?.pendingAsks ?? null,
+        /**
+         * 「本次会话内始终允许」命中过几次。
+         *
+         * 单独成一格而不是并进 `pendingAsks`：它回答的是**为什么这次没弹审批**，
+         * 而那一格回答的是"此刻有几张卡在等"——两件事，时机不同、读者也不同。
+         * 计数归 runtime（`approvalScopeOf` 查表就在那一层），见那里的注释。
+         */
+        alwaysAllowedHits: runtime?.alwaysAllowedHits ?? 0,
+        /**
+         * **发帧之前就被判掉**的次数，按理由分开。
+         *
+         * 这一格是"手机上没有那张卡"最直接的嫌疑：现场 `permission_request` 发不出去，
+         * 而其它事件（`tool_event` / `message_delta`）发得出去 —— 差的就是这一格。
+         * `noClient` 可能是缺陷，`aborted` 多半是正确行为（平台自己撤回了请求）。
+         * 混在一起数就分不出该修哪一个。
+         */
+        interactionDeclines: runtime?.declined ?? null,
+        /**
+         * 附件限额（2026-10-10 补）。⚠️ 这一格存在的理由是**用户报过两次"发不了图"**：
+         * 没有它，doctor 分不清"主机报的是 0（手机拦得对）"还是"报的是 4（那才是
+         * 手机/链路的锅）"，只能回去读代码。
+         */
+        attachmentLimits: runtime?.attachmentLimitsForDiagnostics ?? null,
+      },
       kernel: kernel?.describe() ?? null,
       // 出站计数：手机上"没收到 X"的第一现场对比点（插件没发 vs 发了但路上丢了）。
       outbound: runtime?.stats ?? null,
       probe,
-      // 配对入口（那颗 pill 的四条路由）为什么没起，是"配不了对"唯一的排查入口：
+      // 配对入口（那颗 pill 的六条路由）为什么没起，是"配不了对"唯一的排查入口：
       // 这里直接把软探测的结果带出来。
       pill: pillRoutes?.probe ?? { webServer: 'not-started' },
       // token 永远不出现真值；这条有测试锁住。
@@ -1317,9 +1418,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     log('no kernel carrier available', { hint: '需要 sessions 服务，或把 mockBridge 打开做开发' })
   }
 
-  // ── 配对入口：状态栏那颗 pill 的四条路由 ────────────────────────────
+  // ── 配对入口：状态栏那颗 pill 的六条路由 ────────────────────────────
   //
-  // **配对唯一入口就是这四条路由**（`/drc` 命令 2026-10-03 整个删掉了）。
+  // **配对入口就是这几条路由**（`/drc` 命令 2026-10-03 整个删掉了）；
+  // 其中 `miniprogram.jpg` 是设置页右栏那张静态小程序码，与配对本身无关。
   // 主链路先成立：这一半起不来时，上面接好的那些一行都不许被回滚。
   //
   // 整段再包一层 try 不是冗余：`startPill` 内部已经层层兜住，但"层层兜住"是设计不是证明。
@@ -1328,11 +1430,12 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   try {
     pillRoutes = startPill(ctx, {
       enabled: config.pill.enabled,
-      // 四条路由要的四件事：幂等发码、只读看当前码、读连接状态、退出配对。
+      // 路由要的那几件事：幂等发码、只读看当前码、读连接状态、退出配对、那张静态小程序码。
       ensureFresh: () => ensureFreshPairing(),
       current: () => currentPairing(),
       status: () => pillStatus(),
       unpair: () => unpairAll(),
+      miniprogramCode: () => readMiniprogramImage(),
       log,
     })
   } catch (error) {
@@ -1353,7 +1456,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     stop(): void {
       // 复查定时器要先撤：停机之后它们再去写 status.json，写的是已经过期的取证。
       oneShot.cancelAll()
-      // pill 那四条路由也要一起收：它是不在主链路上的旁路，所以单独一句。
+      // pill 那六条路由也要一起收：它是不在主链路上的旁路，所以单独一句。
       pillRoutes?.stop()
       status.stop()
       for (const hook of stopHooks) {

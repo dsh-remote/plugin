@@ -180,8 +180,21 @@ export interface KernelHistoryPage {
 export const HISTORY_WINDOW_EXCEEDED = 'history_window_exceeded'
 export type HistoryWindowExceeded = typeof HISTORY_WINDOW_EXCEEDED
 
-/** 平台词汇（`@deepseek-ai/dsh-user-approval` 的 `ApprovalOutcome`）。 */
-export type ApprovalOutcomeValue = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+/**
+ * 平台词汇（`@deepseek-ai/dsh-user-approval` 的 `ApprovalOutcome`）。
+ *
+ * `allowed-session`（v3 新增，V3-PLAN §9.1）= 用户在手机上点了
+ * **「始终允许」**（该按钮的完整语义是"本次会话内始终允许"，那半句边界写在
+ * 小程序卡片的说明行上；按钮文案 2026-10-08 改短）。它的语义边界**只到本会话结束**：
+ * - **不是**"这一类工具永久允许"（那需要跨会话的持久化策略）；
+ * - **不是**全局（那会让一次手滑变成长期敞口）。
+ *
+ * 落地方式是宿主侧记一张 `(sessionId, 工具/动作类别) → 本次会话已允许` 的表，
+ * 挂在 `runtime` 上、**随 `stop()` 清空**（与既有的 `pending` 表同一条生命周期纪律）。
+ * 所以平台不需要认识这个值——我们仍然回 `allowed-once` 给它，
+ * 只是**不再为同一会话里后续的同类请求打扰用户**。
+ */
+export type ApprovalOutcomeValue = 'allowed-once' | 'allowed-session' | 'rejected' | 'cancelled' | 'unavailable'
 
 /** 平台侧的答案形状（`selected` 装的是**选项 label**，不是我们的 id）。 */
 export interface AskUserQuestionAnswerValue {
@@ -295,6 +308,22 @@ export interface KernelPort {
    * 所以形状校验（绝对路径 / 长度 / 非 Windows 形状）属于实现，端口不收未校验的值。
    */
   newSession?(args?: { workspace?: string }): Promise<{ ok: boolean; sessionId?: string; message?: string }>
+
+  /**
+   * 图片通路的**现场读数**（三态字符串，与 `status.json` 的 `kernel.attachmentFace` 同源）。
+   *
+   * ## 为什么它是端口的一部分，而不只是 `describe()` 里的一行日志
+   *
+   * `sendPrompt` 的失败只有等用户**选完图、传完附件、按下发送**才看得见
+   * （`platform/carrier-services.ts` 的 `submitWithImages` 那个 `rejected`）。
+   * 而"这台主机能不能收图"这件事，`ev.host_info` 必须**提前**报出去
+   * ——`limits.maxImageAttachments`，手机据此在选之前就置灰。
+   *
+   * ⚠️ **可选**：没声明这条的载体（mock、夹具）一律按"未知"处理，
+   * 也就是照旧报协议上界——把"没声明"当成"没有"会让那些载体**真的失去**图片功能，
+   * 那是一次功能回退，而这里要避免的是**谎报**。三态规则见 `core/capabilities.ts`。
+   */
+  imageFace?(): string
 
   /** 订阅会话事件；返回退订函数。实现必须拒绝订阅 waterfall（见 guard.ts）。 */
   subscribe(onEvent: (event: KernelEvent) => void): () => void

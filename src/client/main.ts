@@ -15,13 +15,14 @@
  *    只靠软探测（`inject: []`）的表现是"屏幕上永远没有这颗 pill"：apply 跑在槽位服务之前，
  *    2026-10-03 删掉右栏那半之后在真机上被打中（当时 262 项单测全绿）。写进闸门换来正确的
  *    激活时机；退路留着，是为了在"这一代宿主没把 slots 当服务给"时还能挂上并留下一行 warn。
- *    配对入口在这类宿主上不存在（`/drc pair` 与文本码同日删了）：宿主侧那四条路由挂没挂，
+ *    配对入口在这类宿主上不存在（`/drc pair` 与文本码同日删了）：宿主侧那六条路由挂没挂，
  *    `status.json` 的 `pill` 探针查得到；浏览器这一半只能靠 DevTools 里那行 warn。
  * 3. **拿不到 `react` 就什么都不做**。装载器给不出 react 时 `mountPill` 返回 false，
  *    这里只留一行 warn——它不许变成抛错。
  */
 
 import { findCreateElement, mountPill } from './pill.js'
+import { mountSettingsSection } from './settings.js'
 
 interface ClientContext {
   slots?: unknown
@@ -30,7 +31,8 @@ interface ClientContext {
   effect?(execute: () => (() => unknown) | void): unknown
 }
 
-export const name = 'dsh-remote-control'
+/** 必须与包的完整名一致：装载器按 loader entry 名（= 包名）来认这一半。 */
+export const name = '@dsh-remote/plugin'
 
 /**
  * cordis 服务名列表（不是 `dsh.client.inject` 那份**包名**列表，那份只管装载顺序）。
@@ -43,14 +45,39 @@ export const name = 'dsh-remote-control'
 export const inject = ['slots']
 
 export function apply(ctx: ClientContext): void {
+  const createElement = findCreateElement()
+
+  // ① 会话里那颗 pill（`conversation.composer.dock`，需要会话才渲染）。
+  //
+  // 到这一步只能是 mountPill 自己没兜住的意外；它不许变成"整页起不来"。
   try {
-    mountPill(ctx, findCreateElement())
+    mountPill(ctx, createElement)
   } catch (error) {
-    // 到这一步只能是 mountPill 自己没兜住的意外；它不许变成"整页起不来"。
-    try {
-      console.error('[dsh-remote-control] pill 挂载抛错（已吞掉）：', error)
-    } catch {
-      /* 控制台也可能不可用 */
-    }
+    swallow('pill 挂载抛错（已吞掉）', error)
+  }
+
+  /**
+   * ② 设置页里的「远程控制」分区（`settings.section`，**不需要会话**）。
+   *
+   * 这一条是配对的**正门**：pill 挂的槽位只在有会话时渲染（宿主那条条件是
+   * `sessionId !== void 0`），所以"打开浏览器、还没有任何会话"的人找不到出码入口
+   * （2026-08-09 用户报的就是这个）。设置页是 root 作用域，两端都渲染。
+   *
+   * ⚠️ 两块**各自 try**：一个挂不上不许把另一个带走。宿主遇到抛出的组件会把那一条
+   * 整块清空，而这里连"挂不上"都不该发生（两个 mount 都自带兜底）。
+   */
+  try {
+    mountSettingsSection(ctx, createElement)
+  } catch (error) {
+    swallow('设置分区挂载抛错（已吞掉）', error)
+  }
+}
+
+/** 降级留痕：任何一条路抛错都只留一行日志，绝不把异常递回宿主。 */
+function swallow(what: string, error: unknown): void {
+  try {
+    console.error(`[dsh-remote-control] ${what}：`, error)
+  } catch {
+    /* 控制台也可能不可用 */
   }
 }

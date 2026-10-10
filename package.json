@@ -1,6 +1,6 @@
 {
   "name": "@dsh-remote/plugin",
-  "version": "2.0.21",
+  "version": "3.0.6",
   "description": "DSH Remote Control 的宿主侧插件：把本机 DeepSeek Harness 与中继配对，微信小程序可发指令、看流式输出、回答审批。载荷级端到端加密。",
   "type": "module",
   "license": "MIT",
@@ -33,11 +33,16 @@
     ".": "./dist/bundle/index.js",
     "./client": "./dist/bundle/client.cjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
+    "copy",
     "dist/bundle",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "docs/images/miniprogram-qr.jpg",
+    "icon.svg",
+    "locale"
   ],
   "dsh": {
     "bundle": {
@@ -45,12 +50,16 @@
     },
     "client": {
       "platform": "web",
-      "inject": []
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "provenance": false,
+    "_whyNoProvenance": "2026-08-09 决定：同 protocol —— 无受支持 CI ⇒ 不带 provenance 发布（取舍记录见 docs/RELEASE.md）。"
   },
   "scripts": {
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
@@ -61,7 +70,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@dsh-remote/protocol": "workspace:*",
+    "@dsh-remote/protocol": "^3.0.0",
     "qrcode": "^1.5.4",
     "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",
@@ -75,5 +84,6 @@
     "prettier": "^3.3.3",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@11.7.0"
+  "packageManager": "pnpm@11.7.0",
+  "icon": "./icon.svg"
 }

@@ -19,7 +19,7 @@ import path from 'node:path'
 import { StatusFile } from '../src/shell/status.js'
 import { DEFAULT_SYSTEM_CLOCK, FakeClock } from '../src/core/clock.js'
 import { redact } from '../src/shell/config.js'
-import { skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
+import { skipIfCannotChmodDir, skipUnlessPosix as skipUnlessPosixRaw } from './test-platform.js'
 
 /**
  * win32 上跳过，且**带原因**：win32 的 chmod 只切只读位，0o600 这类断言永远不成立；
@@ -131,30 +131,37 @@ test('statusFile 为空字符串就是关闭整个功能：不建文件、不装
   }
 })
 
-test('写失败（目录不可写）不许影响主流程：排错入口没了是遗憾，插件崩了是事故', () => {
-  const { dir, cleanup } = tempDir()
-  try {
-    const readonly = path.join(dir, 'locked')
-    mkdirSync(readonly, { mode: 0o500 })
-    const status = new StatusFile(path.join(readonly, 'nested', 'status.json'), DEFAULT_SYSTEM_CLOCK)
-    assert.doesNotThrow(
-      () => status.write({ carrier: 'services' }),
-      `目录不可写时把异常抛了出去（chmod=${modeOf(readonly)}）`,
-    )
-    assert.equal(existsTmp(path.join(readonly, 'status.json')), false, '失败后不许留下半成品')
+test(
+  '写失败（目录不可写）不许影响主流程：排错入口没了是遗憾，插件崩了是事故',
+  // ⚠️ 同样要"那个目录真的写不进去"：Linux 以 root 跑时 chmod 0500 拦不住写，
+  // 前提不成立会让后半句（"不许留下半成品"）反过来红（因为它写成功了）。
+  // 2026-10-08 在 Linux 腿实测到。
+  skipIfCannotChmodDir(),
+  () => {
+    const { dir, cleanup } = tempDir()
+    try {
+      const readonly = path.join(dir, 'locked')
+      mkdirSync(readonly, { mode: 0o500 })
+      const status = new StatusFile(path.join(readonly, 'nested', 'status.json'), DEFAULT_SYSTEM_CLOCK)
+      assert.doesNotThrow(
+        () => status.write({ carrier: 'services' }),
+        `目录不可写时把异常抛了出去（chmod=${modeOf(readonly)}）`,
+      )
+      assert.equal(existsTmp(path.join(readonly, 'status.json')), false, '失败后不许留下半成品')
 
-    // 另一种失败形状：父路径是个普通文件，mkdirSync 直接 ENOTDIR。
-    const notADir = path.join(dir, 'afile')
-    writeFileSync(notADir, 'x')
-    assert.doesNotThrow(
-      () => new StatusFile(path.join(notADir, 'status.json'), DEFAULT_SYSTEM_CLOCK).write({ carrier: 'mock' }),
-      'ENOTDIR 抛了出去',
-    )
-  } finally {
-    chmodSync(path.join(dir, 'locked'), 0o700)
-    cleanup()
-  }
-})
+      // 另一种失败形状：父路径是个普通文件，mkdirSync 直接 ENOTDIR。
+      const notADir = path.join(dir, 'afile')
+      writeFileSync(notADir, 'x')
+      assert.doesNotThrow(
+        () => new StatusFile(path.join(notADir, 'status.json'), DEFAULT_SYSTEM_CLOCK).write({ carrier: 'mock' }),
+        'ENOTDIR 抛了出去',
+      )
+    } finally {
+      chmodSync(path.join(dir, 'locked'), 0o700)
+      cleanup()
+    }
+  },
+)
 
 test('定时刷新的节拍、自我续期与"真的落盘"：status.json 是外部脚本取配对码的唯一入口', async () => {
   const { file, cleanup } = tempDir()

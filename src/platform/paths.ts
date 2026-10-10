@@ -65,11 +65,7 @@ export function isAbsolutePath(raw: string, platform: Platform = currentPlatform
   if (raw.length === 0) return false
   if (platform === 'win32') {
     return (
-      WIN_DRIVE.test(raw) ||
-      WIN_UNC.test(raw) ||
-      WIN_EXTENDED.test(raw) ||
-      raw.startsWith('/') ||
-      raw.startsWith('\\')
+      WIN_DRIVE.test(raw) || WIN_UNC.test(raw) || WIN_EXTENDED.test(raw) || raw.startsWith('/') || raw.startsWith('\\')
     )
   }
   return raw.startsWith('/')
@@ -113,17 +109,14 @@ export function tailOfPath(raw: string, platform: Platform = currentPlatform()):
  * 数据目录：`~/.dsh/dsh-remote-control`。
  *
  * ⚠️ **这个目录名是稳定的运行时标识**，不是随手起的：宿主插件的
- * `/plugins/dsh-remote-control/*` 四条路由、`status.json` 的排错入口、密钥簿
+ * 这个前缀下的六条路由、`status.json` 的排错入口、密钥簿
  * `conversations-<hostId>.json` 都指向它。改它会让在用的装机找不到自己的状态文件
  * （见 HANDOFF §4「稳定标识」）。
  *
  * `override` 是给判据与测试用的——它**不接受**用户配置（用户能配的是
  * `statusFile` / `pairStoreFile`，见 `shell/config.ts`）。
  */
-export function dataDir(
-  platform: Platform = currentPlatform(),
-  override?: { home?: string },
-): string {
+export function dataDir(platform: Platform = currentPlatform(), override?: { home?: string }): string {
   const home = override?.home ?? os.homedir()
   return path.join(home, '.dsh', 'dsh-remote-control')
 }
@@ -165,11 +158,7 @@ export function workspaceProblem(raw: string, platform: Platform = currentPlatfo
  * `base` 为空（`statusFile` 未配）时原样返回：那是"用户明确要求但我们无法解析"，
  * 不该被静默改道（与 v2 同一条纪律）。
  */
-export function resolveAgainstBase(
-  configured: string,
-  base: string,
-  platform: Platform = currentPlatform(),
-): string {
+export function resolveAgainstBase(configured: string, base: string, platform: Platform = currentPlatform()): string {
   // ⚠️ 外来平台的绝对路径**原样返回**，不许 join。
   // v2 的 `startsWith('/')` 会放它过去，于是 `path.join('/base', 'C:\\x')` = `/base/C:\x`
   // ——一个两边都不认的怪东西，用户以为配好了，实际落在别处。调用方（配置校验）

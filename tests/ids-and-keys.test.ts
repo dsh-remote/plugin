@@ -304,18 +304,68 @@ test('PSK 必须是 16 字节的标准 base64（24 字符）：非法 base64 会
 test('两张码的 PSK 必须互不相同：PSK 每次配对轮换、单次有效（B7）', () => {
   const slots = new PairingSlots(ticking().now)
   const psks = new Set<string>()
-  const tokens = new Set<string>()
-  for (let i = 0; i < 100; i++) {
-    const slot = slots.create(60_000)
-    psks.add(slot.psk)
-    tokens.add(slot.token)
-  }
-  assert.equal(
-    tokens.size,
-    100,
-    `${100 - tokens.size} 次生成的配对码与已有的重复：表按 token 索引，撞码会静默覆盖前一张的 PSK → 偶发的"扫了配不上"`,
-  )
+  for (let i = 0; i < 100; i++) psks.add(slots.create(60_000).psk)
+  // PSK 有 16 字节（2^128），100 次抽样撞上的概率是本项目寿命内不可能发生的量级
+  // ⇒ 这一条是**确定性的**判据，可以放心断言全不同。
   assert.equal(psks.size, 100, 'PSK 出现重复：两张码共享密钥，一次性作废失去意义')
+})
+
+/**
+ * ## 这条判据为什么换掉过（2026-10-08）
+ *
+ * 原来它断言的是"**100 次随机生成的 6 位码两两不同**"：`tokens.size === 100`。
+ * 那是**一条概率性的闸门** —— 6 位码只有 1e6 个值，100 次抽样的生日碰撞率约 **0.5%**，
+ * 实测大约每 24 次全量测试就红一次（本机复现：循环跑到第 24 轮红，报 `99 !== 100`）。
+ * 而在别人眼里，那只是"闸门偶尔红一下"，与代码好坏毫无关系 ——
+ * **一条会随机红的判据比没有判据更坏**：它教人忽略红色。
+ *
+ * 更要紧的是：那半句断言**测错了性质**。真正要守的不是"抽样不重复"，
+ * 而是"**存活的码永远取得到它自己那把 PSK**"——后者由 `freshToken()` 保证，
+ * 而且可以确定性地构造出来测（下面的第二条）。
+ */
+test('存活的配对码必须一直取得到它自己那把 PSK（撞码覆盖是静默的）', () => {
+  const slots = new PairingSlots(ticking().now)
+  /** 此刻相信还活着的码 → 它应当取回的那把 PSK。 */
+  const live = new Map<string, string>()
+  for (let i = 0; i < 200; i++) {
+    const slot = slots.create(60_000)
+    live.set(slot.token, slot.psk)
+    for (const [token, psk] of live) {
+      const got = slots.resolveFor(token)
+      // 被 `maxSlots` 淘汰或已过期 ⇒ 取不到是**正常**的，从期望集里摘掉。
+      if (got === null) {
+        live.delete(token)
+        continue
+      }
+      assert.equal(
+        got.psk,
+        psk,
+        `存活的码 ${token} 取回的不是它自己那把 PSK：新码撞上了它、把 PSK 静默覆盖了。` +
+          '旧码还留在屏幕上与 status.json 里，而 resolveFor 给出的是另一把密钥',
+      )
+    }
+  }
+})
+
+test('码源撞上**存活**的那张码时必须换一个（确定性构造：注入会重复吐值的码源）', () => {
+  // 前两张正常发出去；第三张的码源连续吐两次 `222222`（第二次时它已经存活）。
+  const seq = ['111111', '222222', '222222', '333333']
+  let cursor = 0
+  const slots = new PairingSlots(ticking().now, 32, () => seq[Math.min(cursor++, seq.length - 1)]!)
+
+  const a = slots.create(60_000)
+  const b = slots.create(60_000)
+  assert.equal(a.token, '111111')
+  assert.equal(b.token, '222222', '夹具自检：前两张必须按码源原样发出')
+
+  const c = slots.create(60_000)
+  assert.notEqual(c.token, b.token, '新码直接用了已被占用的码：表按 token 索引，这一下就把 B 那张码的 PSK 静默覆盖了')
+  assert.equal(c.token, '333333', '换的应当是码源给出的下一个可用值')
+
+  // 覆盖是不可见的：B 的 token 一字未变，只有 PSK 换了人 —— 所以必须钉在这里。
+  assert.equal(slots.resolveFor(b.token)!.psk, b.psk, 'B 还活着，就必须还是 B 的密钥')
+  assert.equal(slots.resolveFor(a.token)!.psk, a.psk, 'A 没被碰到')
+  assert.equal(slots.size, 3, '三张码都该在表里')
 })
 
 test('ConversationBook 的初始簿记形状：seqHost 从 0 起、clientIds 空、时刻如实记下', () => {

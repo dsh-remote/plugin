@@ -1,7 +1,7 @@
 /**
  * pill-isolation.test — "界面上那一半不许连累配对链路"这条隔离的对照测试。
  *
- * 2026-10-03 这一半原来是右栏自动弹码 + 一条只读路由；现在它是状态栏那颗 pill 的四条路由
+ * 2026-10-03 这一半原来是右栏自动弹码 + 一条只读路由；现在它是状态栏那颗 pill 与设置页的六条路由
  * （发码 / 图 / 状态 / 退出配对）。隔离的形状没变：**它需要宿主的 `webServer` 服务，
  * 而主插件刻意不写任何 `inject:` 闸门**，所以"这代宿主没这个服务"时只有这一旁路不起，
  * 配对、中继、状态快照一行都不受影响。原来这条隔离是靠"拆成两个 cordis 条目"这个结构
@@ -39,6 +39,8 @@ import {
   PAIR_UNPAIR_ROUTE,
   registerPillRoutes,
   type PillRouteDeps,
+  PAIR_PAGE_ROUTE,
+  PAIR_MINIPROGRAM_ROUTE,
 } from '../src/pill/routes.js'
 import { startPill } from '../src/pill/start.js'
 
@@ -272,7 +274,7 @@ test('缺 webServer：provide 照常、一个命令都没注册，路由一次�
 test('webServer 晚到（注入回调在 apply 返回之后才触发）：挂上之后 warn:pill 必须自己消失', async () => {
   // 真机的形状：`webServer` 是 `ctx.inject` 的回调给的，可能在 apply 返回之后才到。
   // 那条 warn 曾经是在 apply 里一次性 push 进 `problems` 的，于是启动快照会永远带着
-  // "配对入口不可用"，哪怕四条路由后来挂上了——2026-10-03 重装重启后 status.json 里
+  // "配对入口不可用"，哪怕那几条路由后来挂上了——2026-10-03 重装重启后 status.json 里
   // `routes:"registered"` 与 `problems:["warn:pill"]` 并存，就是这么来的。
   const late = boot({ webServer: true, lateWeb: true })
   try {
@@ -283,15 +285,15 @@ test('webServer 晚到（注入回调在 apply 返回之后才触发）：挂上
     late.flushInject()
     const state = await late.waitForCarrier()
     assert.equal((state.pill as Record<string, string>).webServer, 'via inject')
-    assert.equal((state.pill as Record<string, string>).routes, 'registered', '四条路由补挂上了')
-    assert.equal(late.registerCalls.length, 4, '四条一起挂')
+    assert.equal((state.pill as Record<string, string>).routes, 'registered', '六条路由补挂上了')
+    assert.equal(late.registerCalls.length, 6, '六条一起挂')
     assert.equal(
       pillProblem(state),
       undefined,
       `routes 已 registered 却还报 warn:pill = 启动快照的假警报：${JSON.stringify(state.problems)}`,
     )
     late.dispose()
-    assert.equal(late.unregistered(), 4, '晚到挂上的路由，停机时同样要注销干净')
+    assert.equal(late.unregistered(), 6, '晚到挂上的路由，停机时同样要注销干净')
   } finally {
     late.dispose()
   }
@@ -334,11 +336,11 @@ test('对照：主链路字段逐个相等、字段集合逐个相同，差别�
     // 唯一允许的两处差别，都要精确断言而不是"允许不同"。
     assert.equal((a.pill as Record<string, string>).webServer, 'none')
     assert.equal((b.pill as Record<string, string>).webServer, 'via get')
-    assert.equal((b.pill as Record<string, string>).routes, 'registered', '四条路由一起挂上')
+    assert.equal((b.pill as Record<string, string>).routes, 'registered', '六条路由一起挂上')
     assert.deepEqual(
       withWeb.registerCalls.map((call) => call.path),
-      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE],
-      '四条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对',
+      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE, PAIR_PAGE_ROUTE, PAIR_MINIPROGRAM_ROUTE],
+      '六条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码',
     )
     // problems 的差别必须是**恰好那一条** warn:pill，多一条少一条都算红。
     assert.ok(pillProblem(a), '没 webServer 那侧必须有 warn:pill')
@@ -353,7 +355,7 @@ test('对照：主链路字段逐个相等、字段集合逐个相同，差别�
     // 而表现是"重载一次之后那颗 pill 再也不出现"。这里在断言之后 dispose，两个 finally
     // 里的 dispose 是同一次（helper 内部有 once 守卫）。
     withWeb.dispose()
-    assert.equal(withWeb.unregistered(), 4, '四条路由都要注销')
+    assert.equal(withWeb.unregistered(), 6, '六条路由都要注销')
   } finally {
     without.dispose()
     withWeb.dispose()
@@ -391,7 +393,7 @@ test('register() 抛错（路由名被占）：只废掉界面那一半，命令
       String((state.pill as Record<string, string>).routes ?? '').startsWith('register threw'),
       '路由注册抛错必须在 probe 里留痕，不然排查时会以为是"没有码"：' + JSON.stringify(state.pill),
     )
-    assert.equal(hostile.registerCalls.length, 1, '第一条注册就抛了，后三条不该再试')
+    assert.equal(hostile.registerCalls.length, 1, '第一条注册就抛了，后面几条不该再试')
     assert.ok(pillProblem(state), '挂不上 = 没有配对入口，这条 warn 必须在')
   } finally {
     hostile.dispose()
@@ -399,11 +401,11 @@ test('register() 抛错（路由名被占）：只废掉界面那一半，命令
   }
 })
 
-test('四条里只挂上两条：available 仍是 false——pill 点不开就是没有配对入口', async () => {
+test('六条里只挂上两条：available 仍是 false——pill 点不开就是没有配对入口', async () => {
   const partial = boot({ registerThrowsFrom: 2 })
   try {
     const state = await partial.waitForCarrier()
-    assert.equal(partial.registerCalls.length, 3, '第三条就抛了，所以只试到三条')
+    assert.equal(partial.registerCalls.length, 3, '第三条就抛了，所以只试到三条（与后面还有几条无关）')
     assert.equal((state.pill as Record<string, string>).routes, 'register threw: 这条路径宿主不给挂')
     assert.ok(pillProblem(state), '只要有一条没挂上，pill 就点不开，必须报')
     partial.dispose()
@@ -434,16 +436,16 @@ test('pill.enabled=false：显式关掉唯一配对入口，路由一条都不�
   }
 })
 
-test('pill 那四条挂上去的就是带守卫的那四条（接线，不是又拼一遍 deps）', async () => {
+test('那六条挂上去的就是带守卫的那六条（接线，不是又拼一遍 deps）', async () => {
   const withWeb = boot({ webServer: true })
   try {
     const state = await withWeb.waitForCarrier()
     assert.equal(state.relay, 'offline', '这条 fixture 的中继是故意不可达的')
-    // 四条都在、顺序与 registerPillRoutes 一致。
+    // 六条都在、顺序与 registerPillRoutes 一致。
     assert.deepEqual(
       withWeb.registerCalls.map((call) => call.path),
-      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE],
-      '四条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对',
+      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE, PAIR_PAGE_ROUTE, PAIR_MINIPROGRAM_ROUTE],
+      '六条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码',
     )
 
     const handlerFor = (p: string) => {
@@ -541,7 +543,7 @@ test('pill 那四条挂上去的就是带守卫的那四条（接线，不是又
 })
 
 test('凭据红线：真发码（state:"ready"）那一条回答里只有 token，没有 psk / dshr: / 完整 URI', async () => {
-  // 用**与插件同一个注册入口**（`registerPillRoutes`）挂上四条，再打那条发码路由：
+  // 用**与插件同一个注册入口**（`registerPillRoutes`）挂上六条，再打那条发码路由：
   // 只差"中继可达"这一个条件——中继在这套夹具里故意不可达，所以真码由 deps 直接给。
   const fakePsk = 'A'.repeat(64)
   const fakeToken = '482913'
@@ -567,6 +569,7 @@ test('凭据红线：真发码（state:"ready"）那一条回答里只有 token�
       waitingOldestSec: 0,
     }),
     unpair: () => 0,
+    miniprogramCode: () => undefined,
     log: () => {},
   } satisfies PillRouteDeps)
   let status = 0
@@ -625,12 +628,20 @@ test('startPill：stop() 之后 available 必须变 false——路由都摘了�
       waitingOldestSec: 0,
     }),
     unpair: () => 0,
+    miniprogramCode: () => undefined,
     log: () => {},
   } satisfies PillRouteDeps & { enabled: boolean })
-  assert.equal(handle.available, true, '四条挂上了就该说可用')
-  assert.deepEqual(registered, [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE])
+  assert.equal(handle.available, true, '六条挂上了就该说可用')
+  assert.deepEqual(registered, [
+    PAIR_NEW_ROUTE,
+    PAIR_IMAGE_ROUTE,
+    PAIR_STATUS_ROUTE,
+    PAIR_UNPAIR_ROUTE,
+    PAIR_PAGE_ROUTE,
+    PAIR_MINIPROGRAM_ROUTE,
+  ])
   handle.stop()
-  assert.equal(unregistered, 4, '停机要把四条一起注销')
+  assert.equal(unregistered, 6, '停机要把六条一起注销')
   assert.equal(
     handle.available,
     false,

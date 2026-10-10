@@ -16,7 +16,13 @@ import path from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { CmdPayload, EvPayload, SessionSummary } from '@dsh-remote/protocol'
-import { PAYLOAD_TYPES } from '@dsh-remote/protocol'
+import { PAYLOAD_TYPES, evHostInfo } from '@dsh-remote/protocol'
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILE_ATTACHMENTS,
+  MAX_IMAGE_ATTACHMENTS,
+  MAX_TEXT_CHARS,
+} from '@dsh-remote/protocol/limits'
 import { HostRuntime, type RuntimeTransport } from '../src/core/runtime.js'
 import { MAPPED_SESSION_EVENTS, sessionEventKernelEvents } from '../src/platform/carrier-services.js'
 import { KeepAwake } from '../src/core/sleep-policy.js'
@@ -56,8 +62,17 @@ class FakeTransport implements RuntimeTransport {
   readonly voided: string[] = []
   conversations: string[] = []
   peers = new Set<string>()
+  /**
+   * 非空时 `reply()` 抛它。
+   *
+   * 为什么需要一个**会抛**的传输替身：真实 `reply()` 走的是 socket 写入链，
+   * 而 `sendHostInfo` 挂在 `onPeerJoined` 上 —— "传输层的异常会不会穿出去把配对流程带崩"
+   * 只能用一个真会抛的桩才验得了（`throwOnSend` 那个是内核端口上的，不是这里）。
+   */
+  failOnReply: Error | undefined
 
   reply(conversationId: string, payload: EvPayload): boolean {
+    if (this.failOnReply) throw this.failOnReply
     this.replies.push({ conversationId, payload })
     return this.peers.has(conversationId)
   }
@@ -457,13 +472,23 @@ test('有对端时审批推 ev.permission_request：requestId 与 options[].id �
     typeof card.requestId === 'string' && card.requestId.length > 0,
     'requestId 缺失 → 卡片能显示但审批无效（主机认不出请求）',
   )
+  // ⚠️ v3 加了第三个选项 `approve-session`（§9.1「本次会话内始终允许」），所以这条
+  // **不再断言"恰好两个"**——那会把"加一个选项"变成一次破坏性变更。
+  // 它真正要守的是：**两个旧 id 逐字不变，且位置不变**（手机按 id 回传，label 随便改）。
+  const opts = card.options
+  assert.ok(opts, '审批卡没有 options：手机上点哪个都没用')
   assert.deepEqual(
-    card.options,
+    opts.filter((o) => o.id === 'approve' || o.id === 'reject'),
     [
       { id: 'approve', label: '允许一次' },
       { id: 'reject', label: '拒绝' },
     ],
     "options[].id 是手机逐字回传的值；把 'reject' 改名 → 点拒绝后界面仍显示运行中",
+  )
+  // 且新选项必须在场（否则「本次会话内始终允许」这个功能在界面上消失了）
+  assert.ok(
+    opts.some((o) => o.id === 'approve-session'),
+    'approve-session 选项不见了：v3 §9.1 的功能在界面上就消失了',
   )
 
   // 手机逐字回传我们下发的 id。
@@ -1919,9 +1944,7 @@ test('cmd.session_history 补差量：since 被逐字转发给内核端口（接
   kernel.readHistory = (sessionId, options) => {
     asked.push({ sessionId, ...options })
     return Promise.resolve({
-      events: [
-        { kind: 'delta' as const, sessionId, messageId: 'm9', text: '断线期间的第 9 条', done: true },
-      ],
+      events: [{ kind: 'delta' as const, sessionId, messageId: 'm9', text: '断线期间的第 9 条', done: true }],
       latestSeq: 9,
     })
   }
@@ -1931,7 +1954,10 @@ test('cmd.session_history 补差量：since 被逐字转发给内核端口（接
   transport.broadcasts.length = 0
   transport.replies.length = 0
 
-  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 7, limit: 5 }), 'c_000000000001')
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 7, limit: 5 }),
+    'c_000000000001',
+  )
   await settle()
 
   assert.deepEqual(
@@ -1984,7 +2010,10 @@ test('cmd.session_history 补差量：落在保留窗口之外要明说，不许
   transport.pair('c_000000000001')
   transport.replies.length = 0
 
-  await runtime.handleCommand(cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 2 }), 'c_000000000001')
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSessionHistory, { sessionId: 'ses_live', since: 2 }),
+    'c_000000000001',
+  )
   await settle()
 
   const failures = transport.replies
@@ -3086,4 +3115,640 @@ test('反向判据：容量淘汰掉的那条，重发时必须回"回执已不�
     last.ok === true,
     `重发一条已被容量淘汰的命令时必须回一条 ok 的明说（"已执行过但回执不在"），实得 ${JSON.stringify(last)}`,
   )
+})
+
+// ── G1「本次会话内始终允许」（V3-PLAN §9.1）─────────────────────────────
+//
+// 为什么这个功能值得判据：§9.1 说它"能显著减少打断次数"，而"每两分钟被叫一次"
+// 恰恰是 30 秒原则（「瞥一眼 → 决定一件事 → 走开」）的头号敌人。
+//
+// 四条各钉一个会写错的地方：
+//   ① 选项存在，且**按钮文案与手机卡片一致**（2026-10-08 改短为「始终允许」：
+//      长文案把三颗并排的按钮挤爆，"会让用户以为是永久的"这个风险改由
+//      小程序卡片上那行 scope 说明承载，由 mp 侧判据守着）
+//   ② 第二次同类请求**不再走审批流** —— 查表若在挂 waterfall *之后*，用户仍被打断：
+//      那只是"记账"，不是"始终允许"
+//   ③ 不跨类别（批准 bash ≠ 批准 write）
+//   ④ 不跨会话（stop() 后清空：进程重启就是另一次会话）
+
+/** 发一次审批并把手机侧那张卡取出来（走完整链路，不用内部方法）。 */
+async function askApproval(
+  runtime: HostRuntime,
+  kernel: ReturnType<typeof makeKernel>,
+  transport: FakeTransport,
+  info: { sessionId: string; action: string; reason?: string },
+) {
+  const before = transport.replies.length
+  const kernelSide = kernel.sink?.approval(info)
+  await settle()
+  const cards = transport.replies
+    .slice(before)
+    .map((item) => item.payload)
+    .filter((p) => p.t === PAYLOAD_TYPES.evPermissionRequest)
+  return { kernelSide, card: cards[cards.length - 1] as Extract<EvPayload, { t: 'ev.permission_request' }> }
+}
+
+const countCards = (transport: FakeTransport): number =>
+  transport.replies.filter((item) => item.payload.t === PAYLOAD_TYPES.evPermissionRequest).length
+
+test('G1：approve-session 选项存在且按钮文案与卡片一致，approve/reject 的 id 逐字不变（F10）', async () => {
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  const cid = 'c_111111111111'
+  transport.pair(cid)
+
+  const { card } = await askApproval(runtime, kernel, transport, { sessionId: 'ses_live', action: 'bash ls' })
+  assert.ok(card, '没有审批卡：这条链路根本没走')
+  // `options` 在协议里是可选的（老主机可能不发），而这三处都要读它 —— 先断言一次，
+  // 不然后面每一处都要写一遍 `?? []`，而那会把"忘了发选项"这种真故障变成空数组。
+  const options = card.options
+  assert.ok(options, '审批卡没有 options：手机上点哪个都没用')
+  const ids = options.map((o) => o.id)
+  assert.ok(ids.includes('approve-session'), `审批选项里必须有 approve-session（实得 ${JSON.stringify(ids)}）`)
+  const label = options.find((o) => o.id === 'approve-session')!.label
+  // 2026-10-08 用户对真机截图裁决：三颗按钮并排时，「本次会话内始终允许」8 个字
+  // 把每颗挤到 ~200rpx，且两颗实心蓝按钮贴成一条 ⇒ 按钮上只写「始终允许」。
+  //
+  // ⚠️ **scope 没有被删掉**，它挪到了小程序卡片按钮下面那行小字
+  // （chat 页 `.act-hint`：「「始终允许」仅限本次会话内的同类操作，会话结束即失效」）。
+  // 那半句为什么挪走：三颗按钮的横向空间是零和的，而说明行是独立一行。
+  // 它由 mp 侧判据守着（e2e/mp-chat-blocks.test.mjs + check-mp-ui 的文案断言），
+  // 所以这条只钉"文案与卡片逐字一致"，不钉 scope 词。
+  assert.equal(label, '始终允许', `宿主标签应逐字是「始终允许」（实际「${label}」）`)
+  assert.deepEqual(
+    options.filter((o) => o.id === 'approve' || o.id === 'reject').map((o) => o.id),
+    ['approve', 'reject'],
+    'approve / reject 的 id 是冻结契约（F10）：手机拿它们当行为分支',
+  )
+})
+
+test('G1：第二次同类请求不再走审批流（查表在挂 waterfall 之前，不只是记账）', async () => {
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  const cid = 'c_222222222222'
+  transport.pair(cid)
+  const info = { sessionId: 'ses_live', action: 'bash ls' }
+
+  const first = await askApproval(runtime, kernel, transport, info)
+  assert.ok(first.card, '第一次必须真的问用户')
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+      sessionId: 'ses_live',
+      requestId: first.card.requestId,
+      decision: 'approve-session',
+    }),
+    cid,
+  )
+  assert.equal(await first.kernelSide, 'allowed-session', '第一次的结果就是"本次会话内允许"')
+
+  const before = countCards(transport)
+  const second = await askApproval(runtime, kernel, transport, info)
+  assert.equal(countCards(transport), before, '第二次不该再发审批卡：用户仍然被打断就等于没实现')
+  // ⚠️ 这里期望的是 `allowed-session`（不是 allowed-once）：记忆表回填的就是它，
+  // 而平台侧**认识**这个值（`ApprovalOutcomeValue` 里有它，V3-PLAN §9.1）。
+  // 我第一版写成 allowed-once，红了——按纪律先怀疑判据：查了 ports/index.ts 才发现
+  // 平台词汇里本来就有这一档。真正的约束是「不再问用户」，不是「平台侧看到哪个值」。
+  assert.equal(await second.kernelSide, 'allowed-session', '第二次直接放行，且结果仍是"本次会话内允许"')
+})
+
+test('G1：不跨类别 —— 批准过 bash 不等于批准 write', async () => {
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  const cid = 'c_333333333333'
+  transport.pair(cid)
+
+  const first = await askApproval(runtime, kernel, transport, { sessionId: 'ses_live', action: 'bash ls' })
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+      sessionId: 'ses_live',
+      requestId: first.card!.requestId,
+      decision: 'approve-session',
+    }),
+    cid,
+  )
+  await first.kernelSide
+
+  const other = await askApproval(runtime, kernel, transport, { sessionId: 'ses_live', action: 'write file' })
+  assert.ok(other.card, '换类别必须重新问：批准一类不等于批准这一会话里的全部工具')
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+      sessionId: 'ses_live',
+      requestId: other.card!.requestId,
+      decision: 'reject',
+    }),
+    cid,
+  )
+  assert.equal(await other.kernelSide, 'rejected')
+})
+
+test('G1：不跨会话 —— stop() 之后记忆清空（它承诺的边界是"本次会话内"）', async () => {
+  const cid = 'c_444444444444'
+  const first = fixture()
+  first.runtime.start()
+  await settle()
+  first.transport.pair(cid)
+  const asked = await askApproval(first.runtime, first.kernel, first.transport, {
+    sessionId: 'ses_live',
+    action: 'bash ls',
+  })
+  await first.runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+      sessionId: 'ses_live',
+      requestId: asked.card!.requestId,
+      decision: 'approve-session',
+    }),
+    cid,
+  )
+  await asked.kernelSide
+  first.runtime.stop() // 停机 = 这一段会话结束
+
+  const second = fixture() // 模拟下一次启动
+  second.runtime.start()
+  await settle()
+  second.transport.pair(cid)
+  const after = await askApproval(second.runtime, second.kernel, second.transport, {
+    sessionId: 'ses_live',
+    action: 'bash ls',
+  })
+  assert.ok(after.card, '跨进程不许继承授权：那正是这个功能承诺不做的事（§9.1）')
+  second.runtime.stop()
+})
+
+test('G1：未知决策词仍按拒绝处理（F10 的 fail-open 防线不许因多了一个选项而松掉）', async () => {
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  const cid = 'c_555555555555'
+  transport.pair(cid)
+  // 「不是 reject 就放行」是 fail-open：认不出的词被当成允许，一次误判就是替用户放行一条调用。
+  for (const bogus of ['deny', 'decline', 'cancel', 'APPROVE', 'approve-forever']) {
+    const asked = await askApproval(runtime, kernel, transport, {
+      sessionId: 'ses_live',
+      action: `bash ${bogus}`, // 每个用例不同的 action ⇒ 不受上一轮记住的影响
+    })
+    assert.ok(asked.card, `${bogus} 这一轮应当真的问出去`)
+    await runtime.handleCommand(
+      cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+        sessionId: 'ses_live',
+        requestId: asked.card.requestId,
+        decision: bogus,
+      }),
+      cid,
+    )
+    assert.equal(await asked.kernelSide, 'rejected', `${JSON.stringify(bogus)} 必须折成 rejected：认不出的词一律按拒绝`)
+  }
+})
+
+// ── ev.host_info：主机显式上报能力面（规范 §13.2，附录 D·GAP-5）──────────────
+//
+// 这一组判据存在的理由，是 B3/B4 那条链的**入口**：手机要知道"对端有没有
+// `drc.payload.resume`"才能决定断线重连是发 `since` 补差量、还是退回重拉一页
+// （§10.7 S6 是 MUST NOT 级的硬约束）。而"对端支持什么"只能由主机自己说，
+// 推断（看形状、看有没有报错）必然在边界情形下静默错。
+//
+// 四条义务（§13.2 L1–L4）在这个文件里的落点：
+//   L1 取自注册表 → 下面「caps » 那一条 + `evHostInfo.parse` 必须过；
+//   L2 报**此刻真正执行**的值 → 「限额的执行点」两条（这是最容易写成空头承诺的一格）；
+//   L3 不许用字段缺失推断不支持 → 「四个限额必须都在」那一条（0 与 undefined 是两件事）；
+//   L4 （重）连上与能力变化各发一次 → 「sendHostInfo」那一条 + `index.ts` 的接线。
+
+/** 取出 `transport.replies` 里最后一条载荷（回执是点对点的，与广播分开存）。 */
+function lastReply(transport: FakeTransport, type: string): Record<string, unknown> | undefined {
+  for (let i = transport.replies.length - 1; i >= 0; i -= 1) {
+    const payload = transport.replies[i]?.payload as unknown as Record<string, unknown>
+    if (payload?.['t'] === type) return payload
+  }
+  return undefined
+}
+
+test('ev.host_info：caps 是"此刻真成立"的那一份（L1 注册表 + 平台推导向后端）', async () => {
+  const { runtime, kernel } = fixture({ hostMeta: () => ({ platform: 'darwin', arch: 'arm64' }) })
+  // 内核这一代**有** `readHistory` ⇒ `drc.payload.resume` 成立。
+  kernel.readHistory = () => Promise.resolve({ events: [], nextBeforeSeq: undefined, latestSeq: 0 })
+  runtime.start()
+  await settle()
+
+  const payload = runtime.hostInfoPayload()
+  assert.equal(payload.t, PAYLOAD_TYPES.evHostInfo)
+  assert.equal(payload.host.platform, 'darwin', 'hostMeta 给什么就报什么（注入是为了让判据不随 CI 机器变）')
+  assert.equal(payload.host.arch, 'arm64')
+  assert.equal(payload.host.carrier, 'fake', 'carrier 是手机上报"看不到工具行"时第一格要看的东西')
+  assert.equal(
+    payload.state.sleep,
+    'caffeinate',
+    'state.sleep 必须走 detectBackend(platform)（与 SystemSleepBackend.backend() 同源），不是念一个固定的值',
+  )
+  assert.ok(
+    payload.caps.includes('drc.payload.resume'),
+    '内核有 readHistory 时 resume 必须报出去：不报 ⇒ 手机永远走"重拉一页"，差量那条路白写',
+  )
+  assert.ok(payload.caps.includes('drc.host.info'), '自己这条能力也要报：否则手机无法判断该不该等这一帧')
+
+  // L1 的运行期闸：`caps` 里的每一项都必须是注册表认得的 id。
+  // 这条断言看着像在测 schema，其实测的是**生产端**——`HOST_CAPABILITIES` 是手写的清单，
+  // 打错一个字母编译期不报（它是 `CapabilityId[]`，拼错会报，但"加了一个还没进注册表的 id"
+  // 不会），而症状是**整帧被手机丢弃**，与"主机根本没发"长得一模一样。
+  assert.doesNotThrow(
+    () => evHostInfo.parse(payload),
+    '主机自己产的 ev.host_info 必须能过协议层的校验器：过不了 ⇒ 手机侧整帧被丢，且看不出发生过什么',
+  )
+})
+
+test('L2 的执行点：报出去的 maxFileAttachments 必须真的被执行（空 uploadDir ⇒ 0 且真的拒收）', async () => {
+  // ⚠️ 这条是"账本对了 ≠ 界面变了"那一族在**限额**上的同构。
+  // 报 4 而实际拒收 = 给手机一个空头承诺；报 0 而实际收下 = 少报（保守，不坏）。
+  // 所以判据不能只读自己报出来的那个数（那只是实现自己写的一行），
+  // 必须**同时**证明"数"与"执行点"在同一档上。
+  const cid = 'c_600000000001'
+  const { runtime, kernel, transport } = fixture() // fixture 不传 uploadDir ⇒ DEFAULTS 的 ''（= 不收文件附件）
+  kernel.readHistory = () => Promise.resolve({ events: [], nextBeforeSeq: undefined, latestSeq: 0 })
+  runtime.start()
+  await settle()
+  transport.pair(cid)
+
+  assert.equal(
+    runtime.hostInfoPayload().limits.maxFileAttachments,
+    0,
+    '没配落盘目录的主机**真的**不收文件附件（下面那条断言就是证据），所以这里必须是 0 而不是协议上界',
+  )
+
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSendPrompt, {
+      sessionId: 'ses_live',
+      text: '看一下这个',
+      files: [{ name: 'report.pdf', data: 'JVBERi0=' }],
+    }),
+    cid,
+  )
+  await settle()
+  const rejected = transport.resultReplies().at(-1)
+  assert.equal(rejected?.['ok'], false, '报了 0 就必须真的拒收：报 0 而收下等于少报，手机据此置灰是白置的')
+  assert.match(String(rejected?.['message']), /uploadDir/, '拒收要说清是哪一件事挡住的（"不行"要留得下原因）')
+  assert.equal(kernel.calls.sendPrompt.length, 0, '拒收的请求不许已经落到内核上：那是一次"手机以为没发、主机其实发了"')
+
+  // 另一半：配上落盘目录之后，同一个数要跟着变——否则这一格报的会是**配置的名义值**，
+  // 而 L2 要求的恰恰是"此刻真正执行的值"。
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-hostinfo-'))
+  try {
+    const withDir = fixture({ uploadDir: tmp })
+    withDir.runtime.start()
+    await settle()
+    assert.equal(
+      withDir.runtime.hostInfoPayload().limits.maxFileAttachments,
+      MAX_FILE_ATTACHMENTS,
+      '配了落盘目录的主机是收文件附件的，这个数必须跟着变（不然它就是个写死的常量）',
+    )
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('L2 的执行点：报出去的 maxTextChars 必须真的被执行（边界恰好放行，超一个字符拒收）', async () => {
+  const cid = 'c_600000000002'
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair(cid)
+
+  const reported = runtime.hostInfoPayload().limits.maxTextChars
+  assert.equal(reported, MAX_TEXT_CHARS, '这个数必须引用 wire/limits.ts 的常量，而不是各写一个 20000')
+
+  // ① 恰好到上限：必须放行。这一条挡的是"把 `>` 写成 `>=`"，
+  //    那种改动不会有任何编译错误，而表现是"用户打字打到刚好满，发送键没反应"。
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSendPrompt, { sessionId: 'ses_live', text: 'x'.repeat(reported) }),
+    cid,
+  )
+  await settle()
+  assert.equal(
+    kernel.calls.sendPrompt.length,
+    1,
+    '恰好等于上限必须放行：报了这个数却不收，手机侧放进来的正文会在主机这里静默消失',
+  )
+
+  // ② 超一个字符：必须**明确拒收**，且**不落内核**。
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdSendPrompt, { sessionId: 'ses_live', text: 'x'.repeat(reported + 1) }),
+    cid,
+  )
+  await settle()
+  const rejected = transport.resultReplies().at(-1)
+  assert.equal(rejected?.['ok'], false)
+  assert.match(String(rejected?.['message']), /太长/, '超限要说"太长"，不能只说失败——用户手上只有这句话')
+  assert.equal(kernel.calls.sendPrompt.length, 1, '被拒的那条不许已经送到内核上')
+})
+
+test('B3 反向判据：内核没有 readHistory ⇒ caps 里**不许**出现 drc.payload.resume（老主机必须退回重拉）', async () => {
+  // 这是 B3 在宿主侧的那一半。客户端侧那条判据（mp）要证明"没这一位时不发 since"，
+  // 而**那一条的前提是这一条**：主机不许在自己不具备能力时报"支持"。
+  //
+  // ⚠️ 这个夹具的**默认**状态就是"没有 readHistory"（`KernelPort.readHistory` 是可选成员，
+  // `makeKernel()` 不实现它）—— 也就是说下面这条断言测的是老主机那一档，
+  // 而不是"我故意构造了一个畸形"。这正是 §8.2 要防的：老主机仍报 resume ⇒ 手机发 since
+  // ⇒ 永远收不到差量页，而它已经不再走"重拉一页"那条路了，用户看到的是"重连之后少了十几行"。
+  const { runtime, kernel } = fixture()
+  assert.equal(kernel.readHistory, undefined, '夹具前提：这一档内核没有 readHistory')
+  runtime.start()
+  await settle()
+
+  const { caps, limits } = runtime.hostInfoPayload()
+  assert.ok(
+    !caps.includes('drc.payload.resume'),
+    '内核这一代没有 readHistory 时**不许**报 resume：报了就是静默降级（手机发 since、主机明确拒绝、永远补不回来）',
+  )
+  // 反向的另一半：减去一项 ≠ 整份清单空了。只断言"不含 resume"在清单被误清空时也会绿，
+  // 而清单清空的症状是"手机把所有能力都当成不支持"，比多一项严重得多。
+  assert.ok(caps.includes('drc.payload.history'), '减法只该减 resume 那一项')
+  assert.ok(caps.length >= 10, `caps 只剩 ${caps.length} 项：这不是"减一项"，是清单被清掉了`)
+  assert.ok(limits.maxTextChars > 0, '能力面做减法不该把限额也一起减掉')
+})
+
+test('L4：sendHostInfo 在 start() 之前不许发、之后必须真的发到那条会话上', async () => {
+  const cid = 'c_600000000003'
+  const { runtime, transport } = fixture()
+  assert.equal(
+    runtime.sendHostInfo(cid),
+    false,
+    'start() 之前不许发：那一刻内核端口还没探过，报出去的能力面是**猜**的（而 L2 要求报准的）',
+  )
+  assert.equal(transport.replies.length, 0, '返回 false 就必须真的什么都没发出去')
+
+  runtime.start()
+  await settle()
+  transport.pair(cid)
+  transport.replies.length = 0
+  assert.equal(runtime.sendHostInfo(cid), true)
+  const frame = lastReply(transport, PAYLOAD_TYPES.evHostInfo)
+  assert.ok(frame, '返回 true 就必须真的在 replies 里出现一条 ev.host_info')
+  assert.equal(
+    transport.replies.at(-1)?.conversationId,
+    cid,
+    '这一帧必须回给**发起重连的那条会话**，不是广播：广播会把能力面发给所有配对通道（F11 的同类问题）',
+  )
+})
+
+test('F11 反向判据：ev.host_info 不许带 sessionId，且四个限额**一个都不能少**（L3）', async () => {
+  const { runtime } = fixture()
+  runtime.start()
+  await settle()
+  const payload = runtime.hostInfoPayload()
+
+  // ① 不该有的字段：产物里没有，且**塞进去也会被剥掉**（schema 是运行期最后一道闸）。
+  assert.ok(
+    !('sessionId' in payload),
+    '能力面是主机级的，不是会话级的 —— 与 ev.session_changed / ev.keep_awake_state 同一条 F11',
+  )
+  const parsed = evHostInfo.parse({ ...payload, sessionId: 'ses_live' })
+  assert.ok(!('sessionId' in parsed), '即便多塞一个 sessionId 也必须在校验器那一层被剥掉，不许透传到手机')
+
+  // ② L3：四个限额**必须都在**，而且不能靠 undefined 表达"0"。
+  //    「缺字段」与「值为 0」在客户端是两条不同的分支：前者只能靠**推断**，
+  //    而推断正是 §13.1 说"必然在边界情形下静默错"的那件事。
+  assert.deepEqual(
+    Object.keys(payload.limits).sort(),
+    ['maxAttachmentBytes', 'maxFileAttachments', 'maxImageAttachments', 'maxTextChars'],
+    '四个限额缺一个，手机就只能靠"字段不在"去推断"不支持" —— L3 明令不许',
+  )
+  assert.equal(typeof payload.limits.maxFileAttachments, 'number')
+  assert.notEqual(
+    payload.limits.maxFileAttachments,
+    undefined,
+    '"不收文件附件"要报 0，不许靠省略字段：省略与 0 在客户端是两条不同的分支',
+  )
+  assert.equal(payload.limits.maxImageAttachments, MAX_IMAGE_ATTACHMENTS, '图片上限走协议层的常量，不是各写一个数')
+  assert.equal(payload.limits.maxAttachmentBytes, MAX_ATTACHMENT_BYTES)
+})
+
+test('图片上限跟着**此刻的内核能力**走：没有图片通路的内核必须报 0（2026-10-09）', async () => {
+  /**
+   * 起因是一次真机对照：**desktop 能发图，web 那台不能**。
+   * 取证在 `packages/plugin/src/core/capabilities.ts`：web profile 的 dsh 0.1.0-rc.6
+   * 根本没有图片通路（`attachments.admitPromptContent` 不存在、模型适配器对图片
+   * 直接抛 `UNSUPPORTED_CONTENT`），而我们的 `ev.host_info` 一直照报协议上界 4
+   * ⇒ 手机让用户选图、压缩、传完整个附件，才在发送那一刻被拒。
+   *
+   * 这条判据钉的是**那个数字**，不是"有没有报错"。
+   */
+  const faceOf = (face?: string) => {
+    const { runtime, kernel } = fixture()
+    if (face !== undefined) kernel.imageFace = () => face
+    runtime.start()
+    return runtime.hostInfoPayload().limits.maxImageAttachments
+  }
+
+  assert.equal(
+    faceOf('absent (commands=undefined attachments=ctx,name,root,imageLimits)'),
+    0,
+    '内核明确没有图片通路 ⇒ 必须报 0（与 maxFileAttachments 没配落盘目录就报 0 同一条理由）',
+  )
+  assert.equal(faceOf('commands.prompt'), MAX_IMAGE_ATTACHMENTS, '有 `commands.prompt` 这条通路 ⇒ 报协议上界')
+  assert.equal(
+    faceOf('attachments.admitPromptContent'),
+    MAX_IMAGE_ATTACHMENTS,
+    '有 `admitPromptContent` 这条通路 ⇒ 报协议上界',
+  )
+  assert.equal(
+    faceOf(undefined),
+    MAX_IMAGE_ATTACHMENTS,
+    '端口没声明 imageFace ⇒ 仍报上界：把"没声明"当成"没有"会让 mock/夹具载体真的失去图片功能',
+  )
+
+  // 反向：0 也不是"随便报个数"——它必须恰好是 0，不能是负数或小数。
+  assert.equal(typeof faceOf('absent'), 'number', '必须是数字：用 undefined 表达"不收"违反 §13 L3')
+})
+
+test('发帧之前被判掉的两种理由，审批与提问**各自**都会记（2026-10-09 现场的主要嫌疑）', async () => {
+  /**
+   * 现场：`approvalCalls = 10` 而 `outbound.permission_request = 2`；
+   * `questionsCalls = 1` 而 `outbound` 里**连 `question_request` 都没有**。
+   * 参与器那侧的三条分流解释不了：卡是被 `participate` 交到 sink 上的
+   * （`handoff = fused`），在**这一层**、在 `replyTo` **之前**就被判掉了。
+   *
+   * ⚠️ **两条理由必须分开**：`noClient` 可能是缺陷，`aborted` 多半是正确行为
+   * （平台自己撤回了请求，发出去就是一张点不动的死卡）。混在一起数就分不出该修哪个。
+   *
+   * ⚠️ **审批与提问两条都要各走一遍**（2026-10-09 深度 review 的 B2）：
+   * 第一版只覆盖了"审批 noClient + 审批 aborted + 提问 aborted"，
+   * 提问侧的 `noClient += 1` 那行删掉全仓照样绿。
+   *
+   * ⚠️ 顺序也是判据的一部分：两条 `noClient` 必须在**还没有任何通道**时走，
+   * 否则 `hasClient` 为真 ⇒ 走的是 held 那条路（我第一版把提问 noClient 放在
+   * pair 之后，它当场就不动，判据红得莫名其妙）。
+   */
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  assert.deepEqual(runtime.declined, { noClient: 0, aborted: 0 }, '起点必须是全零')
+
+  // ① 两条都还没有任何带对端的通道 ⇒ 一张卡都不发
+  void kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash' })
+  await settle()
+  assert.equal(runtime.declined.noClient, 1, '审批侧无对端要记 noClient')
+
+  void kernel.sink?.question({ sessionId: 'ses_live', questions: [{ id: 'q1', question: '要哪个' }] })
+  await settle()
+  assert.equal(runtime.declined.noClient, 2, '提问侧无对端也要计：那行删掉时这条判据必须红')
+
+  // ② 有通道了，但平台在请求到达前就撤回 ⇒ 同样一帧不发（正确行为，但也要可数）
+  transport.pair('c_abort')
+  const controller = new AbortController()
+  controller.abort('desktop')
+  void kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash', signal: controller.signal })
+  await settle()
+  assert.equal(runtime.declined.aborted, 1, '已被平台撤回的请求必须记 aborted —— 它和 noClient 是两种完全不同的处置')
+
+  const q = new AbortController()
+  q.abort('withdrawn')
+  void kernel.sink?.question({
+    sessionId: 'ses_live',
+    questions: [{ id: 'q2', question: '还有别的吗' }],
+    signal: q.signal,
+  })
+  await settle()
+  assert.equal(runtime.declined.aborted, 2, '提问侧的 aborted 也要计')
+})
+
+test('「本次会话内始终允许」命中会被计数：那一格过去无迹可寻（2026-10-09）', async () => {
+  /**
+   * 用户报「审批窗卡着、手机没有弹窗」时的现场是 `approvalCalls=6` 而
+   * `outbound.permission_request=2` —— 四次没发帧。命中「始终允许」时
+   * **刻意一帧都不发**，而那条判定归 runtime，所以计数也必须在这里。
+   *
+   * ⚠️ `sessionAllowed` 那段注释写着"但它**要有计数**（alwaysAllowedHits）"，
+   * 而那个计数从写下那句话起就没实现过。今天这一格就是它。
+   */
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair('c_allow')
+  assert.equal(runtime.alwaysAllowedHits, 0, '起点必须是 0')
+  assert.equal(typeof runtime.alwaysAllowedHits, 'number', '它必须是个数：读者靠它判断"命中过几次"')
+
+  // 第一次：正常挂起，手机答「**本次会话内始终允许**」⇒ 写进那张表
+  // （⚠️ 只有 `approve-session` 会写表：普通「允许」是放行一次，不留钥匙。
+  //  第一次写错了这个 decision，于是第二次照旧挂卡 —— 判据当场就红了。）
+  const first = kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash' })
+  await settle()
+  const card = transport.replies
+    .map((item) => item.payload)
+    .find((payload) => payload.t === PAYLOAD_TYPES.evPermissionRequest) as
+    Extract<EvPayload, { t: 'ev.permission_request' }> | undefined
+  assert.ok(card !== undefined, '第一次必须真的推出审批卡（否则后面那条命中的不是同一个 scope）')
+  await runtime.handleCommand(
+    cmd(PAYLOAD_TYPES.cmdResolvePermission, {
+      sessionId: 'ses_live',
+      requestId: card.requestId,
+      decision: 'approve-session',
+    }),
+    'c_allow_first',
+  )
+  assert.equal(await first, 'allowed-session', '第一次的答案要真的落回内核')
+  assert.equal(runtime.alwaysAllowedHits, 0, '第一次还没命中：那是第一次真挂起')
+
+  // 第二次：同会话同类别 ⇒ 命中表，**不发帧**
+  void kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash' })
+  await settle()
+  assert.equal(runtime.alwaysAllowedHits, 1, '第二次应当命中「本次会话内始终允许」并被记下来')
+})
+
+test('挂起卡的分诊读数：手机问过几次 / 主机重放过几帧（2026-10-09）', async () => {
+  /**
+   * 起因是用户报「小程序端的 question 弹窗不弹」，而那句话有四种根因：
+   * 手机没问 / 问了但卡已超时 / 主机压根没挂 / 手机收到了没渲染。
+   * **前三种能靠读数分开，第四种不能** —— 所以判据只锁"这三个数存在且会动"，
+   * 不去假装能测第四种（那一格属于手机侧，这一侧拿不到任何证据）。
+   */
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+
+  // 起点：一个数都没被读出来过。`lastGetPendingAgoSec` 必须是 null 而不是 0 ——
+  // "从没问过"与"刚刚问过"在排错时是两条完全不同的方向。
+  assert.deepEqual(
+    { ...runtime.pendingAsks },
+    {
+      now: 0,
+      oldestSec: 0,
+      getPendingCalls: 0,
+      getPendingReplayed: 0,
+      lastGetPendingReplayed: null,
+      lastGetPendingPending: null,
+      lastGetPendingAgoSec: null,
+    },
+    '起点必须全零，且三个 lastGetPending* 都得是 null（null 与 0 是两件事）',
+  )
+
+  transport.pair('c_pending')
+  // ① 手机问了一次，主机手上没挂 ⇒ 重放 0 帧（这一格是"问了但已经超时"那条的分诊依据）
+  await runtime.handleCommand(cmd('cmd.get_pending', {}), 'c_pending')
+  await settle()
+  assert.equal(runtime.pendingAsks.getPendingCalls, 1, '手机问过一次就得记一次')
+  assert.equal(runtime.pendingAsks.getPendingReplayed, 0, '主机没挂卡 ⇒ 重放 0 帧')
+  assert.equal(typeof runtime.pendingAsks.lastGetPendingAgoSec, 'number', '问过之后 lastGetPendingAgoSec 必须是数字')
+  // ⚠️ **这一格是 2026-10-09 review 时补的**：只记"最近那趟给出去几帧"不够，
+  // 还要记"问的那一刻手上有几张" —— 分不清「问早了」与「真丢了」这两种 0。
+  assert.equal(runtime.pendingAsks.lastGetPendingPending, 0, '问的那一刻主机手上是空的')
+  assert.equal(runtime.pendingAsks.lastGetPendingReplayed, 0, '那趟自然一帧都给不出')
+
+  // ② 真挂上一张提问卡，重放数必须跟着动 —— 这是"帧确实发出去了"的唯一证据
+  void kernel.sink?.question({
+    sessionId: 'ses_live',
+    questions: [{ id: 'q1', question: '要哪个', options: [{ id: 'o1', label: '甲' }] }],
+  })
+  await settle()
+  assert.equal(runtime.pendingAsks.now, 1, '有一张卡挂着时 now 必须是 1')
+  assert.ok(runtime.pendingAsks.oldestSec >= 0, 'oldestSec 必须有值（哪怕是 0）')
+
+  await runtime.handleCommand(cmd('cmd.get_pending', { sessionId: 'ses_live' }), 'c_pending')
+  await settle()
+  assert.equal(runtime.pendingAsks.getPendingCalls, 2)
+  assert.equal(runtime.pendingAsks.getPendingReplayed, 1, '挂着的那张必须被重放出去一帧')
+  assert.equal(runtime.pendingAsks.lastGetPendingPending, 1, '问的那一刻手上确实有那张卡')
+  assert.equal(runtime.pendingAsks.lastGetPendingReplayed, 1, '那趟给出去了一帧 ⇒ 不是"丢了"')
+
+  // ③ peer-joined 那条路（主机主动补）走**同一个**计数：排错时不该因为走的哪条路而给出两个数
+  assert.equal(runtime.replayPending('c_pending'), 1, '夹具自检：这张卡还在，重放得出一帧')
+  assert.equal(runtime.pendingAsks.getPendingReplayed, 2, '两条路必须合进同一个计数，否则读数会骗人')
+})
+
+test('sendHostInfo 永不抛：它挂在 peer-joined 那条路上，异常会把整个配对流程带崩', async () => {
+  // ## 为什么这条判据必须是"传输层炸了"而不是"caps 拷没拷"
+  //
+  // 我原本在这里断言的是"改一份 caps 不会污染下一次上报"。写完才发现它**证伪不了**：
+  // `effectiveCapabilities` 用的是 `.filter()`（天然新数组），`hostInfo()` 里还有一层
+  // `[...args.caps]`，而返回类型是可变数组、入参是 `readonly` —— 想写出共享引用的版本
+  // **编译就过不去**。一条永远不会红的判据给的是假信心，比没有更坏，所以换掉。
+  //
+  // 真正会坏且挡不住的是这一条：`sendHostInfo` 被 `index.ts` 的 `onPeerJoined` 直接调用，
+  // 而那个回调处在**配对流程**上。`apply()` 那条红线是"配对流程不许因为我们的异常而中断"
+  // —— 传输层此刻可能正因为 socket 半死而直接抛（`reply()` 走的是真实 socket 写入链）。
+  // 所以这个方法的契约是"永不抛：只回 false + 留痕"。判据得用会抛的替身来验。
+  const cid = 'c_600000000004'
+  const { runtime, transport, events } = fixture()
+  runtime.start()
+  await settle()
+  transport.pair(cid)
+  transport.failOnReply = new Error('socket 写失败了')
+
+  let threw: unknown
+  let result: boolean | undefined
+  try {
+    result = runtime.sendHostInfo(cid)
+  } catch (error) {
+    threw = error
+  }
+  assert.equal(threw, undefined, '异常不许穿出 sendHostInfo：它会把 onPeerJoined 带崩，而那是配对流程')
+  assert.equal(result, false, '发失败必须回 false（index.ts 的 `if (!… )` 就是靠这个值留痕的）')
+  assert.ok(
+    events.some((one) => one.message === 'host info send failed'),
+    '失败必须留痕：静默失败的表现与"主机没这个能力"完全一样，而两者要查的地方完全不同',
+  )
+
+  // 反向的一半：恢复传输之后必须又能真的发出去 —— 否则"永不抛"可以靠**永远返回 false** 骗过。
+  transport.failOnReply = undefined
+  assert.equal(runtime.sendHostInfo(cid), true, '"永不抛"不许退化成"永远失败"')
+  assert.ok(lastReply(transport, PAYLOAD_TYPES.evHostInfo), '恢复之后必须真的发得出去')
 })

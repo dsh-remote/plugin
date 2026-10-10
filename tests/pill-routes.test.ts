@@ -1,7 +1,7 @@
 /**
- * pill-routes.test — 状态栏那颗 pill 那四条路由的判据。
+ * pill-routes.test — 状态栏那颗 pill 与设置页那六条路由的判据。
  *
- * 四条路由分两档安全姿态（动机写在 `src/pill/routes.ts` 文件头）：
+ * 六条路由分两档安全姿态（动机写在 `src/pill/routes.ts` 文件头）：
  * `POST /pairing/new` 与 `POST /unpair` 会改状态（发一张码 / 作废当前通道），跨站判据是
  * 只有同源脚本发得出的自定义头 `x-drc-pair: 1`——**不是** `Origin`：桌面宿主的转发层会把它
  * 删掉，这一条是 2026-10-03 在真屏幕上点出来才发现的。`GET /pairing.png` 与 `GET /status`
@@ -13,7 +13,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -21,17 +22,28 @@ import {
   hostIsLoopback,
   pairingEpoch,
   PAIR_IMAGE_ROUTE,
+  PAIR_MINIPROGRAM_ROUTE,
   PAIR_NEW_ROUTE,
+  PAIR_PAGE_ROUTE,
   PAIR_STATUS_ROUTE,
   PAIR_UNPAIR_ROUTE,
   pairImageHandler,
+  pairPageHandler,
   pairNewHandler,
+  miniprogramImageHandler,
   pillStatusHandler,
   registerPillRoutes,
   unpairHandler,
   type LivePairing,
   type PillRouteDeps,
 } from '../src/pill/routes.js'
+import {
+  MINIPROGRAM_IMAGE_NAME,
+  MINIPROGRAM_IMAGE_TYPE,
+  miniprogramImageExists,
+  miniprogramImagePath,
+  readMiniprogramImage,
+} from '../src/pill/miniprogram.js'
 
 const FAKE_PSK = 'A'.repeat(64)
 const FAKE_TOKEN = '482913'
@@ -40,6 +52,16 @@ const FAKE_QR = `dshr:/p?v=1&s=ws://relay&n=host&psk=${FAKE_PSK}&t=${FAKE_TOKEN}
 const FAKE_VERSION = '0.0.0-test'
 /** PNG 的八个魔数字节——图片路由现在自己渲染，判据只能落在字节上。 */
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+/**
+ * 假的小程序码字节：JPEG 的魔数开头（`FF D8 FF`）加一段可辨认的尾巴。
+ * 判据据此断言"发出去的**就是**这一串、没被转码"——用真图的话，断言会退化成
+ * "两个 Buffer 相等"，而"它是不是被 utf8 转坏过"这件事就测不出来了。
+ */
+const FAKE_MINIPROGRAM_JPEG = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.from('dsh-remote/miniprogram-code-test-bytes', 'utf8'),
+  Buffer.from([0xff, 0xd9]),
+])
 
 interface Reply {
   status: number
@@ -112,6 +134,12 @@ function deps(
       calls.unpair += 1
       return 1
     },
+    /**
+     * 那张静态小程序码：默认给一段**可辨的假字节**（不是真图）。
+     * 判据要看的是"原样发出去、Content-Type 是 JPEG、能缓存"，而不是"这张图是不是那张图"。
+     * 真要验"包内那张图读得出来"另有一条判据（`miniprogram.ts` 那一组）。
+     */
+    miniprogramCode: () => FAKE_MINIPROGRAM_JPEG,
     log: () => {},
     ...over,
   }
@@ -517,7 +545,7 @@ test('unpair() 自己抛错 → 500 且不外抛到宿主', async () => {
 
 // ── 注册与注销 ───────────────────────────────────────────────────────
 
-test('注册挂上四条、注销把四条都摘掉', () => {
+test('注册挂上六条、注销把六条都摘掉', () => {
   const registered: string[] = []
   let off = 0
   const web = {
@@ -529,9 +557,16 @@ test('注册挂上四条、注销把四条都摘掉', () => {
     },
   }
   const unregister = registerPillRoutes(web as never, deps())
-  assert.deepEqual(registered, [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE])
+  assert.deepEqual(registered, [
+    PAIR_NEW_ROUTE,
+    PAIR_IMAGE_ROUTE,
+    PAIR_STATUS_ROUTE,
+    PAIR_UNPAIR_ROUTE,
+    PAIR_PAGE_ROUTE,
+    PAIR_MINIPROGRAM_ROUTE,
+  ])
   unregister()
-  assert.equal(off, 4)
+  assert.equal(off, 6)
 })
 
 test('第二条挂不上时，第一条必须被回滚掉：半途失败不许在宿主上留下摘不走的路由', () => {
@@ -561,7 +596,7 @@ test('一条注销抛错不许让其余留在宿主上', () => {
   }
   const unregister = registerPillRoutes(web as never, deps())
   assert.doesNotThrow(() => unregister())
-  assert.equal(off, 4, '后三条必须仍然被调用')
+  assert.equal(off, 6, '后面几条必须仍然被调用')
 })
 
 test('反证：环回主机名这份表只有一份，写路由与只读那条必须同一个口径', async () => {
@@ -587,4 +622,277 @@ test('反证：不再宣称"pill 拿 ETag 判断要不要重画"（`<img>` 拿�
   assert.doesNotMatch(routes, /pill 拿它判断要不要重画/, '那句注释是误导：`<img>` 拿不到 ETag，响应还是 no-store')
   assert.doesNotMatch(client, /headers\.get\(/, '浏览器面从来没读过响应头，别照那句注释去实现')
   assert.match(routes, /ETag: `"\$\{pairingEpoch\(pairing\.qr\)\}"`/, 'ETag 留着（排错用），只是不再宣称有人读它')
+})
+
+// ── GET /pair（不依赖会话的配对页，2026-08-09 加）───────────────────
+
+/**
+ * 为什么要有这一页：pill 挂在宿主的 `conversation.composer.dock` 上，
+ * 而宿主那条渲染条件是 `sessionId !== void 0` —— **新会话那一屏不渲染这个槽位**。
+ * web profile 从零开始时（打开浏览器、没有任何会话）于是**找不到出码入口**。
+ * 这一页是同一批凭据的另一扇门，安全姿态与 pill 逐条相同。
+ */
+test('配对页：GET 回一张 HTML，且里面的发码请求带着 x-drc-pair 头', async () => {
+  const d = deps()
+  const { res, reply } = response()
+  await Promise.resolve(pairPageHandler(d)(request('GET', LOOPBACK), res))
+  const got = reply()
+  assert.equal(got.status, 200)
+  assert.match(String(got.headers['content-type'] ?? ''), /text\/html/, '必须是 HTML，否则浏览器会当纯文本显示')
+  const html = got.body
+  assert.match(html, /x-drc-pair/, '页面里的发码请求必须带那个自定义头：它才是真正的 CSRF 判据')
+  assert.match(html, /pairing\/new/, '页面要自己去 POST 发码，而不是让用户手抄一条 curl')
+  assert.match(html, /pairing\.png/, '页面要把二维码画出来')
+  assert.match(html, /<meta charset="utf-8">/, '中文页面必须声明编码')
+})
+
+test('配对页：**不含任何凭据**（psk 与 qr URI 一个字都不许出现）', async () => {
+  // 与图片路由同一条纪律：码只在服务端渲染成像素之后才离开宿主。
+  // 这一页连 token 都不写死在 HTML 里（它运行时才知道），所以更该一个字都没有。
+  const d = deps()
+  const { res, reply } = response()
+  await Promise.resolve(pairPageHandler(d)(request('GET', LOOPBACK), res))
+  const html = reply().body
+  assert.ok(!html.includes(FAKE_PSK), '配对页里出现了 PSK')
+  assert.ok(!html.includes(FAKE_TOKEN), '配对页把 token 写死了：它应当由页面运行时向发码路由取')
+  assert.ok(!/dshr:\/p\?/.test(html), '配对页里出现了完整的 qr URI')
+})
+
+test('配对页：同样只认环回 + 那道 Origin 守卫（跨站与非环回 Host 都拒）', async () => {
+  for (const [headers, why] of [
+    [{ host: 'evil.example.com' }, '非环回 Host'],
+    [{ host: '127.0.0.1:8787', origin: 'https://evil.example.com' }, '跨站 Origin'],
+    [{ host: '127.0.0.1:8787', origin: 'null' }, 'null 来源'],
+  ] as Array<[Record<string, string>, string]>) {
+    const { res, reply } = response()
+    await Promise.resolve(pairPageHandler(deps())(request('GET', headers), res))
+    assert.equal(reply().status, 403, `${why} 必须被拒`)
+  }
+  const { res, reply } = response()
+  await Promise.resolve(pairPageHandler(deps())(request('GET', LOOPBACK), res))
+  assert.equal(reply().status, 200, '环回 + 同源要放行，否则这一页没法用')
+})
+
+test('配对页：只接受 GET / HEAD（与只读那两条同一姿态）', async () => {
+  const { res, reply } = response()
+  await Promise.resolve(pairPageHandler(deps())(request('POST', LOOPBACK), res))
+  assert.equal(reply().status, 405)
+})
+
+test('注册表里有六条路由，且删除时六条一起摘（配对页与静态小程序码也在内）', () => {
+  const registered: string[] = []
+  const web = {
+    register: (route: { path: string }) => {
+      registered.push(route.path)
+      return () => {}
+    },
+  }
+  registerPillRoutes(web as never, deps())
+  assert.deepEqual(
+    registered.slice().sort(),
+    [
+      PAIR_IMAGE_ROUTE,
+      PAIR_MINIPROGRAM_ROUTE,
+      PAIR_NEW_ROUTE,
+      PAIR_PAGE_ROUTE,
+      PAIR_STATUS_ROUTE,
+      PAIR_UNPAIR_ROUTE,
+    ].sort(),
+    '六条路由都挂上了（少一条就少一扇门：配对页那条正是"没有会话时唯一出码的路"，' +
+      '小程序码那条是设置页右栏那张卡的图源）',
+  )
+})
+
+// ── GET /miniprogram.jpg（静态小程序码，2026-10-09 加）───────────────
+
+/**
+ * 这一条与 `/pairing.png` 是**两件东西**（对照表见 `src/pill/miniprogram.ts` 的文件头）：
+ * 那张每次配对现渲染、带 PSK、几分钟作废且 `no-store`；这一张是微信后台出的静态图，
+ * 长期有效，所以**可以**缓存。下面这组判据守的正是"两者不许被合并"：
+ * 一旦有人图省事让这条也走 `current()`（只读看当前码），它会随配对码一起变成 204，
+ * 而屏幕上表现是"右栏那张卡一会儿有一会儿没有"。
+ */
+test('小程序码：GET 原样回那张图的字节，Content-Type 是 image/jpeg（不是 image/png）', async () => {
+  const d = deps()
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(d)(request('GET', LOOPBACK), res))
+  const got = reply()
+  assert.equal(got.status, 200)
+  assert.equal(got.headers['Content-Type'], 'image/jpeg', '源图是 JPEG：写死 image/png 会让浏览器按 PNG 解一张 JPEG')
+  assert.equal(got.headers['Content-Length'], FAKE_MINIPROGRAM_JPEG.length, '长度要报实际字节数')
+  assert.ok(got.raw.equals(FAKE_MINIPROGRAM_JPEG), '必须逐字节原样发出去，不许经过任何转码')
+  assert.equal(got.raw[0], 0xff, 'JPEG 魔数第一字节（顺带证一下上面那条比较不是空判定）')
+})
+
+test('小程序码：可以缓存（与配对码那条故意相反），但 ETag 仍是这一版的哈希', async () => {
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(deps())(request('GET', LOOPBACK), res))
+  const got = reply()
+  assert.match(
+    String(got.headers['Cache-Control'] ?? ''),
+    /max-age=\d+/,
+    '静态图必须允许缓存：它不会变，97 KB 不该每次进设置页都重下',
+  )
+  assert.ok(
+    !String(got.headers['Cache-Control'] ?? '').includes('no-store'),
+    '这一条不许 no-store——那是配对码（会就地换掉）的姿态，两者的差别正是这张图存在的理由之一',
+  )
+  assert.match(String(got.headers['ETag'] ?? ''), /^"[0-9a-f]{16}"$/, 'ETag 是内容哈希前 16 位，换图之后自然失效')
+})
+
+test('小程序码：包里没有这张图 → 204（路由在、只是没图），不是 404 也不是 500', async () => {
+  for (const empty of [undefined, Buffer.alloc(0)]) {
+    const { res, reply } = response()
+    await Promise.resolve(
+      miniprogramImageHandler(deps({ miniprogramCode: () => empty }))(request('GET', LOOPBACK), res),
+    )
+    assert.equal(reply().status, 204, '没有图是"这一栏没有内容"，前端的 <img> 会报 error 并把那张卡摘掉')
+  }
+})
+
+test('小程序码：只读姿态与另外两条一致（环回放过、跨站与非环回 Host 拒、POST 405）', async () => {
+  for (const [headers, why] of [
+    [{ host: 'evil.example.com' }, '非环回 Host'],
+    [{ host: '127.0.0.1:8787', origin: 'https://evil.example.com' }, '跨站 Origin'],
+    [{ host: '127.0.0.1:8787', origin: 'null' }, 'null 来源'],
+  ] as Array<[Record<string, string>, string]>) {
+    const { res, reply } = response()
+    await Promise.resolve(miniprogramImageHandler(deps())(request('GET', headers), res))
+    assert.equal(reply().status, 403, `${why} 必须被拒`)
+  }
+  const post = response()
+  await Promise.resolve(miniprogramImageHandler(deps())(request('POST', LOOPBACK), post.res))
+  assert.equal(post.reply().status, 405)
+})
+
+test('小程序码：HEAD 不写 body，但**照报 Content-Length**（字节在内存里，跳过读取没有意义）', async () => {
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(deps())(request('HEAD', LOOPBACK), res))
+  const got = reply()
+  assert.equal(got.status, 200)
+  assert.equal(got.raw.length, 0, 'HEAD 不许带 body')
+  assert.equal(got.headers['Content-Length'], FAKE_MINIPROGRAM_JPEG.length, 'HEAD 要答得出"这张图多大"')
+})
+
+test('小程序码：取字节自己抛错 → 500 且不外抛到宿主', async () => {
+  const d = deps({
+    miniprogramCode: () => {
+      throw new Error('磁盘说不行')
+    },
+  })
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(d)(request('GET', LOOPBACK), res))
+  assert.equal(reply().status, 500)
+  assert.match(reply().body, /磁盘说不行/, '原因要说出来：宿主 stdout 不落盘，响应体是唯一现场')
+})
+
+test('反证：那张图不许走 current()（一旦合并，右栏的卡会随配对码一起 204）', async () => {
+  // 把 current() 改成"现在没有有效码"，图片路由仍必须是 200。
+  const d = deps({ current: () => null })
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(d)(request('GET', LOOPBACK), res))
+  assert.equal(reply().status, 200, '静态小程序码与"现在有没有配对码"毫无关系')
+  assert.equal(d.calls.current, 0, '它一次都不该去读当前配对码')
+})
+
+// ── 包内那张真图 ─────────────────────────────────────────────────────
+
+/**
+ * 一个**真的没有**那张图的目录，用来钉反向判据（"指着一个空目录必须读不到"）。
+ *
+ * ⚠️ 2026-10-09：第一版把它写成包内的 `dist/tests/fixtures-does-not-exist`，
+ * 而那条判据是**红的**——而红的不是实现，是夹具：
+ * `miniprogramImagePath` 最多往上找 4 层，而 `dist/tests/fixtures-does-not-exist`
+ * 往上 4 层正好落在 `packages/plugin`，于是它**真的读到了那张 97311 字节的图**。
+ *
+ * ⇒ 这就是"空目录"这个词的两种意思：**这个目录里没有** vs **往上任何一层也没有**。
+ * 夹具要的是后者，所以它必须待在包外（`os.tmpdir()`），否则这条判据守的是
+ * "距离够近"而不是"找不到"。
+ *
+ * 顺带钉住夹具本身：它必须在包外，否则上面那条判据会**静默退化成恒真**
+ * （读得到 → 断言 `undefined` 红；读到 undefined 的唯一办法是"确实找不到"，
+ *  也就是说这条判据一旦失效是红的、不是绿的——但红的原因会指向实现，很难查）。
+ */
+const NO_IMAGE_ROOT = mkdtempSync(path.join(os.tmpdir(), 'drc-no-image-'))
+
+test('真图：包内那张小程序码用**默认路径**读得出来（不许只验显式传进来的 here）', () => {
+  /**
+   * ⚠️ 这一条是 2026-10-09 补的，起因是一个**单测全绿而 e2e 红**的真缺陷：
+   *
+   * 第一版 `miniprogramImagePath` 写死"往上两级"，而本模块的两种产物布局深度**不同**：
+   *   · `dist/src/pill/miniprogram.js`（tsc 直出，e2e 与单测走这条）→ 差一级 ⇒ 读不到；
+   *   · `dist/bundle/index.js`（esbuild 内联，装机走这条）→ 刚好对。
+   * 而当时那条判据给的是**显式 here**，两条布局都没被真正验过；
+   * 表现是 `e2e/run.mjs` 打那条路由拿到 **204**，屏幕上只是"设置页少一张卡"。
+   * ⇒ 现在**必须**不传参数读一次：那才是运行时真正走的那条路。
+   */
+  const bytes = readMiniprogramImage()
+  assert.ok(
+    bytes && bytes.length > 0,
+    `默认路径读不到那张小程序码（它会去 ${miniprogramImagePath()} 找）：` +
+      '装机与 e2e 里那条路由会回 204，而屏幕上只表现为"设置页右栏少一张卡"',
+  )
+  assert.equal(bytes![0], 0xff, 'JPEG 魔数')
+  assert.equal(bytes![1], 0xd8, 'JPEG 魔数')
+  assert.equal(MINIPROGRAM_IMAGE_TYPE, 'image/jpeg')
+  assert.equal(miniprogramImageExists(), true, '默认路径下也要说得出"图在"')
+  assert.match(
+    miniprogramImagePath(),
+    // ⚠️ `packages/plugin/` 那一段是**可选的**：单仓里路径是
+    // `<仓根>/packages/plugin/docs/images/…`，拆成独立仓之后包根就是仓根，
+    // 变成 `<仓根>/docs/images/…`。第一版把 `packages/plugin/` 写死，
+    // 于是独立仓里这条判据必红 —— 而它想守的只是"落在包内的 docs/images 下"。
+    /(?:packages[\\/]plugin[\\/])?docs[\\/]images[\\/]miniprogram-qr\.jpg$/,
+    `默认路径必须落在包内的 docs/images 下，实际 ${miniprogramImagePath()}`,
+  )
+})
+
+test('真图：两种产物布局（tsc 直出三级 / esbuild 内联两级）都找得到同一张图', () => {
+  // 这一条守的是"往上找"这件事本身：夹具把 here 摆成两种真实布局的深度。
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const pkgRoot = path.join(here, '..', '..')
+  const expected = path.join(pkgRoot, 'docs', 'images', MINIPROGRAM_IMAGE_NAME)
+  assert.equal(
+    miniprogramImagePath(path.join(pkgRoot, 'dist', 'bundle')),
+    expected,
+    'dist/bundle 这条布局（装机走它）找错了',
+  )
+  assert.equal(
+    miniprogramImagePath(path.join(pkgRoot, 'dist', 'src', 'pill')),
+    expected,
+    'dist/src/pill 这条布局（e2e 走它）找错了——第一版就栽在这里',
+  )
+  // 反向：指着一个**真的没有那张图**的目录必须找不到（证明上面不是"怎么都能过"）
+  assert.equal(readMiniprogramImage(NO_IMAGE_ROOT), undefined)
+  assert.equal(miniprogramImageExists(NO_IMAGE_ROOT), false)
+})
+
+test('C5：`PillRouteDeps.miniprogramCode` 那个入参**真的**被用上（不是只声明不用）', async () => {
+  /**
+   * ⚠️ 这个入参原先从没有人读：`start.ts` 自己接了一份 `readMiniprogramImage()`，
+   * 而 `index.ts` 传进来的那份静默不生效 —— 改它看起来会改、实际不会。
+   * 那是一份**假依赖**：读代码的人会以为"这里可以注入"。
+   * ⇒ 钉住"注入的那份优先"，删掉它这条必须红。
+   */
+  let calls = 0
+  const d = deps({
+    current: () => null,
+    miniprogramCode: () => {
+      calls += 1
+      return Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+    },
+  })
+  const { res, reply } = response()
+  await Promise.resolve(miniprogramImageHandler(d)(request('GET', LOOPBACK), res))
+  assert.equal(reply().status, 200, '夹具自检：注入的那份应当被用上（回 200）')
+  assert.equal(calls, 1, '入参一次都没被调用 ⇒ startPill 忽略了它，那是假依赖')
+})
+
+test('真图：package.json 的 files 里带着它（漏了就是"发出去的包里没有这张图"）', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const pkg = JSON.parse(readFileSync(path.join(here, '..', '..', 'package.json'), 'utf8')) as { files?: string[] }
+  assert.ok(
+    (pkg.files ?? []).some((entry) => entry.includes(MINIPROGRAM_IMAGE_NAME)),
+    `files 里必须带上 ${MINIPROGRAM_IMAGE_NAME}——路由读的就是它，但 npm 只发 files 里列出的东西`,
+  )
 })

@@ -1,0 +1,86 @@
+{
+  "_why": "用户可见中文文案的**唯一事实源**（V3-PLAN §7 阶段 F2：文案可以共享字面，设计 token 不行 —— 见 §9.13）。两处消费方：宿主插件（直接 import）与微信小程序（由 packages/client/scripts/gen-mp-copy.mjs 生成 core/copy.js）。",
+  "_rules": [
+    "每条都必须标 `ends`：哪几端真的会把它说出口。判据按这个字段核对——标了 host 的不许出现在小程序源码里，反之亦然（除非两端都说）。",
+    "`both` 的条目**必须逐字相同**：同一语义在两端说两套话，用户会以为它们是两件事。2026-10-08 核出的三处：宿主「远程未连接 / 已断开连接 / 远程未启动」对小程序「未连接 / 已断开 / 离线中」。",
+    "只进这张表的东西：语义在协议里已经冻结的（配对状态、审批选项、pair-fail 原因）＋两端都在说的连接态。**宿主/小程序各自独有的界面文案不进这张表**（如宿主的「已就绪」讲的是中继那条子链，小程序没有这一行）。",
+    "改这里 = 改两端的脸。改完必须跑 `node packages/client/scripts/gen-mp-copy.mjs`（生成物）与 `node e2e/shared-copy.test.mjs`（两端是否真的在用）。",
+    "⚠️ 这张表里没有、也不许有：凭据、主机路径、以及任何设计 token 的值（设计 token 在 packages/client/theme/tokens.mjs，两端**故意不同值**）。"
+  ],
+  "version": 1,
+  "status": {
+    "online": {
+      "zh": "已连接",
+      "ends": "both"
+    },
+    "connecting": {
+      "zh": "连接中",
+      "ends": "both"
+    },
+    "offline": {
+      "zh": "已断开",
+      "ends": "both"
+    },
+    "notLinked": {
+      "zh": "未连接",
+      "ends": "both"
+    },
+    "pairing": {
+      "zh": "正在配对",
+      "ends": "client"
+    },
+    "needsPair": {
+      "zh": "需要重新配对，请扫描主机状态栏那颗胶囊弹出的二维码",
+      "ends": "client"
+    },
+    "relayDown": {
+      "zh": "中继未启动",
+      "ends": "host"
+    },
+    "phoneAway": {
+      "zh": "手机离线",
+      "ends": "host"
+    },
+    "relayReady": {
+      "zh": "已就绪",
+      "ends": "both"
+    },
+    "relayIdle": {
+      "zh": "未启动",
+      "ends": "host"
+    },
+    "waiting": {
+      "zh": "等 {{n}} 件事",
+      "ends": "host"
+    },
+    "brand": {
+      "zh": "远程控制",
+      "ends": "host"
+    }
+  },
+  "approval": {
+    "_why": "F10 冻结：`id` 是行为分支条件不能改，`label` 是给用户看的字。两端曾各写一份（宿主 runtime.ts / 小程序 demo.js），改一处就漂。",
+    "options": [
+      {
+        "id": "approve",
+        "label": "允许一次"
+      },
+      {
+        "id": "approve-session",
+        "label": "始终允许"
+      },
+      {
+        "id": "reject",
+        "label": "拒绝"
+      }
+    ],
+    "scopeHint": "「始终允许」仅限本次会话内的同类操作，会话结束即失效"
+  },
+  "pairFail": {
+    "_why": "F6 冻结的四个 reason 的中文说法。主机侧只把它们写进日志（英文 reason 是判据的锚），说给用户听的是小程序这一份。",
+    "invalid_or_expired": "配对码无效或已过期",
+    "already_used": "配对码已被使用",
+    "host_offline": "主机不在线",
+    "bad_token": "令牌错误"
+  }
+}

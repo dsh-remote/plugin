@@ -36,11 +36,47 @@
  * 纪律与主文件同一条：**任何一步抛出都只留一行日志，绝不把异常抛进 loader**。
  */
 
-/** pill 用到的四条路由（宿主侧定义在 `src/pill/routes.ts`，字符串必须一致）。 */
+import { statusText, waitingText } from '../copy/zh.js'
+
+/**
+ * 状态词条从共享文案表取（`copy/zh-cn.json`，V3-PLAN §7 阶段 F2）。
+ *
+ * ⚠️ 2026-10-08 改版前这三句是这里写死的中文，与小程序**说得不一样**：
+ * 「远程未连接 / 已断开连接 / 远程未启动」对「未连接 / 已断开 / 离线中」。
+ * 同一件事在桌面上一句、在手机上一句，用户会以为那是两件事——
+ * 而桌面那颗 pill 恰恰是"手机能不能用"这件事在宿主侧唯一的可见处（PRODUCT §3 第 2 条）。
+ *
+ * **取值失败必须让构建红**：`statusText(id)!` 的非空断言在这里是**故意的**——
+ * 表里少一个 id 是事实源与代码脱节，那种错宁可编译不过，也不要界面上悄悄回退成另一句话。
+ */
+const ZH = {
+  online: statusText('online')!,
+  connecting: statusText('connecting')!,
+  offline: statusText('offline')!,
+  notLinked: statusText('notLinked')!,
+  relayDown: statusText('relayDown')!,
+  phoneAway: statusText('phoneAway')!,
+  brand: statusText('brand')!,
+  relayReady: statusText('relayReady')!,
+  relayIdle: statusText('relayIdle')!,
+}
+
+/** pill 与设置页用到的路由（宿主侧定义在 `src/pill/routes.ts`，字符串必须一致）。 */
 export const STATUS_ROUTE = '/plugins/dsh-remote-control/status'
 export const NEW_ROUTE = '/plugins/dsh-remote-control/pairing/new'
 export const IMAGE_ROUTE = '/plugins/dsh-remote-control/pairing.png'
 export const UNPAIR_ROUTE = '/plugins/dsh-remote-control/unpair'
+/**
+ * 官方小程序的那张**小程序码**（2026-10-09 加，设置页那两栏里的右栏要它）。
+ *
+ * 与上面那条 `IMAGE_ROUTE` 是两件东西，别混：`pairing.png` 是**每次配对现生成**的、
+ * 带 PSK 的那张限时码；这一条是一张**静态**的客户端入口图（微信后台出的小程序码，
+ * 源图在 `packages/plugin/docs/images/miniprogram-qr.jpg`），长期有效。
+ * ⚠️ 屏幕上两张码同时出现，所以文案与尺寸都得说清"哪张是干嘛的"——否则用户会拿
+ * 小程序码去配这台主机（扫了没反应，而没有任何地方解释为什么）。
+ * 宿主侧那条路由的常量名是 `PAIR_MINIPROGRAM_ROUTE`（同一个字符串，`routes.ts` 是定义处）。
+ */
+export const MINIPROGRAM_ROUTE = '/plugins/dsh-remote-control/miniprogram.jpg'
 
 /** 槽位与条目 id：抄 `conversation.composer.dock` 那个已验证的用法。 */
 export const SLOT_NAME = 'conversation.composer.dock'
@@ -156,11 +192,11 @@ export type PanelView =
  */
 export function pillLabel(status: StatusAnswer | undefined): { text: string; tone: 'off' | 'wait' | 'on' | 'error' } {
   const relay = status?.relay
-  if (relay === 'idle') return { text: '远程未启动', tone: 'off' }
+  if (relay === 'idle') return { text: ZH.relayDown, tone: 'off' }
   // 断链是**故障**不是"还没配"，所以它单独一档、单独一个红：灰色会被读成"还没轮到配"。
-  if (relay === 'offline') return { text: '已断开连接', tone: 'error' }
-  if (relay === 'connecting') return { text: '连接中', tone: 'wait' }
-  if (relay !== 'online') return { text: '远程控制', tone: 'off' }
+  if (relay === 'offline') return { text: ZH.offline, tone: 'error' }
+  if (relay === 'connecting') return { text: ZH.connecting, tone: 'wait' }
+  if (relay !== 'online') return { text: ZH.brand, tone: 'off' }
   const paired = typeof status?.paired === 'number' ? status.paired : 0
   // 2026-10-05 用户定的口径：抬头只说"连没连上"，不说"配没配"——"已配对"对
   // 第一次用的人不解释任何事，"已连接"才直接回答"现在能用了没有"。
@@ -170,18 +206,18 @@ export function pillLabel(status: StatusAnswer | undefined): { text: string; ton
     // 只在**确实配着**的时候抢这一格：手机中途掉线、挂起还没超时时，
     // 用户能做的第一件事是重新配对，那才是该说的那句。
     const waiting = waitingCount(status)
-    if (waiting > 0) return { text: `等 ${waiting} 件事`, tone: 'wait' }
-    return { text: '已连接', tone: 'on' }
+    if (waiting > 0) return { text: waitingText(waiting), tone: 'wait' }
+    return { text: ZH.online, tone: 'on' }
   }
   // 一台都没连着、但密钥簿里还有会话 = **配过对，手机只是不在线**（小程序退后台、手机关屏）。
   // 配对按 D3 长存且 pair-store 落盘，手机回前台自动重连——这不是「没配上」：
   // 那一态说「未配对」是让用户去扫一个不需要扫的码（2026-10-04 用户报的误解）。
   // 灯走黄（wait）：不是故障，也不是「可以用了」，是「等它自己回来」。
-  if (pairingCount(status) > 0) return { text: '手机离线', tone: 'wait' }
+  if (pairingCount(status) > 0) return { text: ZH.phoneAway, tone: 'wait' }
   // 2026-10-05 用户定的口径："远程未连接"而不是"未配对"。"配对"是内部动作，
   // 第一次装好插件的人不知道自己要"配对"；"远程未连接"直接说清了现在
   // "这台机器还没接上手机"——也顺手回答了那颗 pill 点开能看到什么。
-  return { text: '远程未连接', tone: 'off' }
+  return { text: ZH.notLinked, tone: 'off' }
 }
 
 /** 挂在手机上等回答的件数。老版路由没给这个字段时算 0（那一行自己不占地方）。 */
@@ -272,10 +308,10 @@ export function relayStateRow(status: StatusAnswer | undefined): string {
   const relay = status?.relay
   // 2026-10-05 用户定的口径：弹窗这一行说"已就绪"不说"已连接"——"已连接"
   // 留给抬头那句结论（配没配上），这里讲的是中继这条链本身通了，两句话不打架。
-  if (relay === 'online') return '已就绪'
+  if (relay === 'online') return ZH.relayReady
   if (relay === 'connecting') return '连接中'
   if (relay === 'offline') return '已断开'
-  if (relay === 'idle') return '未启动'
+  if (relay === 'idle') return ZH.relayIdle
   return ''
 }
 
@@ -310,6 +346,28 @@ export function secondsText(ms: number): string {
  * **值故意与小程序不同**——两端服务不同的主人。
  */
 const FALLBACK = {
+  // 下面三个是 2026-08-09 重排设置页时补的：值取自宿主自己的设置分区
+  // （`AgentPresetSection.module.css` 的真实 CSS——卡片 `border-l2` + `bg-layer-3`、
+  // 焦点环 `brand-primary`）。照抄宿主的取值口径，不是随手挑的颜色。
+  'border-l2': 'rgba(0, 0, 0, 0.16)',
+  'bg-layer-3': '#ffffff',
+  'brand-primary': '#247bbf',
+  /**
+   * 主按钮的**填充与字色**（2026-10-09 加，用户报"按钮全白"之后）。
+   *
+   * ⚠️ 这一对**不能自己配**，必须各拿各的宿主令牌。主按钮的填充是
+   * `--dsw-alias-button-primary-fill`，它等于 `--dsw-alias-brand-primary`，
+   * 而**在深色主题下那是"近白"**（neutral-bluish-50）。当时我们给这个浅填充写死了
+   * FIXED_WHITE 的白字 ⇒ 白底白字，整个按钮看不见（真屏幕截图，2026-10-09）。
+   * 宿主自己的写法是 `.primary{background:var(--dsw-alias-button-primary-fill);
+   * color:var(--dsw-alias-label-primary-foreground)}` —— 字色是**另一个令牌**，
+   * 深色下是近黑（neutral-bluish-1000）。两个一起拿，明暗两套主题才都成立。
+   *
+   * 这两个兜底值只在"这代宿主没有这两个令牌"时生效（那时通常是浅色主题）：
+   * 蓝底 + 白字，是这套设计里最不会出错的一组。
+   */
+  'button-primary-fill': '#247bbf',
+  'label-primary-foreground': '#ffffff',
   'state-success-primary': '#52c41a',
   'state-warn-primary': '#faad14',
   'state-error-primary': '#ff4d4f',
@@ -321,6 +379,16 @@ const FALLBACK = {
   'border-l1': 'rgba(0, 0, 0, 0.1)',
   'interactive-bg-hover': 'rgba(0, 0, 0, 0.04)',
 } as const
+
+/**
+ * **绝对的白**（2026-08-09）。两处用：二维码那张纸的底色、品牌色按钮上的字色。
+ *
+ * ⚠️ **故意不走主题 token**：二维码能不能被扫出来由**码点与纸的对比度**决定，
+ * 而不是由用户选了明还是暗决定。走 `--dsw-alias-bg-layer-1` 的话，暗色主题下
+ * 纸也跟着变暗，屏幕上就是一张扫不出来的二维码——而用户不会知道该怪谁。
+ * （`e2e/design-tokens` 那条判据禁止 CSS 模板里出现裸色号，所以它必须在这里具名。）
+ */
+const FIXED_WHITE = '#ffffff'
 
 /** `var(--dsw-alias-<key>, <fallback>)` —— 一处拼装，值只来自 FALLBACK。 */
 const hostVar = (key: keyof typeof FALLBACK): string => `var(--dsw-alias-${key}, ${FALLBACK[key]})`
@@ -378,6 +446,182 @@ const CSS = `
      两者特异度相同（都只一个类），后来的赢——写在前面的 margin-top 会被
      .drc-note 的 margin: 4px 0 0 整条覆盖成死规则（2026-10-06 修）。 */
   .drc-note-block { margin-top: 10px; }
+
+/* ── 设置页那一页（settings.section）─────────────────────────────────
+   取值全部照抄宿主自己的设置分区（dsh-client-ui-agent-preset 那份
+   AgentPresetSection.module.css 的真实 CSS，2026-08-09 从正在跑的那份模块里抠出来的）：
+   title 18px 600、卡片走 border-l2 + bg-layer-3 + radius 12px、行间细线走 border-l1。
+   ⇒ 目的不是"好看"，是**看起来像宿主亲生的那一页**：指南里那条
+   "Choose the rendering surface before writing any view; later styling inside the wrong
+   surface cannot recover consistency"，反过来也成立——同一个面里自己发明一套就露馅。
+
+   ⚠️⚠️ **这里每一个取值都必须写成插值形态**（2026-10-09 修）。
+   2026-08-09 那一版整段把它写成了**字面文本**（少了一对美元花括号）：浏览器认不出
+   那个值，**一条声明都不生效**——于是卡片没有边框、没有底色、没有圆角，标题与按钮
+   也全无色。结构、类名、断言都对，屏幕上就是一列裸文本（用户报的"排版比较乱"）。
+   ⇒ 判据补在 e2e/design-tokens.test.mjs：CSS 模板里出现未插值的调用一律红。
+   **这仓被同一形状绊过五次以上：判据读的是"那段文字在不在"，而浏览器读的是
+   "那个值合不合法"。**
+
+   2026-10-09 的另一次重排：原来是一列垂直码放（标题 / 状态 / 二维码卡 / 四行事实 /
+   一排按钮），每一块都占满 720px 而内容只有 200px 宽——大空间放小内容，视线无处落脚。
+   现在改成**两栏卡片**：
+     左栏 = 这台主机（配对卡 + 连接事实），右栏 = 手机端（小程序码 + 怎么用）。
+   窄屏自己折成一列。
+   ⚠️ 两栏用 grid 的 auto-fit + minmax 而不是媒体查询：这一页的宽度由**宿主的容器**给，
+   我们不知道窗口多宽，媒体查询只能猜。268px 是"200px 的码 + 卡片内边距"能容下的下限。
+   ⚠️ **已经配对**那一态左栏会短一截（配对卡只剩状态 + 一句说明 + 两颗按钮），
+   左栏下方于是留出一段空白。这是**已知取舍**，不要在左栏补一张凑高度的卡：
+   配对是这一页的主要场景，两栏的高度是按那一态配平的（实测 678 / 618）；
+   为稳态的空白去动主要场景的版面，是本末倒置。
+   ⚠️ **这一整段都在模板字符串里，一个反引号都不能出现**（出现即截断 CSS，报错长得很莫名其妙：
+   tsc 会指着某个 CSS 选择器说「',' expected」）。2026-10-09 这一天已经因此栽了**两次**，
+   两次都是想在注释里引用一个 CSS 属性名就顺手打了反引号。⇒ 写完扫一遍：
+   awk 'NR>=380 && NR<=560 && // {print NR}' packages/plugin/src/client/pill.ts  */
+.drc-sec { display: flex; flex-direction: column; gap: 14px; max-width: 720px;
+  color: ${hostVar('label-primary')}; }
+/* 抬头：标题 + 一句"这一页是干什么的"。副标题不是装饰——没有它，第一次进来的人
+   看到的是一张没有上下文的二维码。 */
+.drc-sec-header { display: flex; flex-direction: column; gap: 4px; }
+.drc-sec-title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.4; }
+.drc-sec-sub { margin: 0; color: ${hostVar('label-secondary')}; font-size: 13px; line-height: 1.7; }
+/* 四张卡直接进网格 = 一个 2×2 矩阵。
+   ⚠️ 第一版是「两栏各套一个 flex 列」，两栏各排各的 ⇒ 第二行两张卡的顶边差了近 300px，
+   整屏看过去像两张不相干的列表（2026-10-09 真屏幕截图）。
+   ⚠️ 第二版用 align-items:start 让各卡保持自然高度 ⇒ 同一行里那张矮的卡下面空出一大块，
+   右边整列看着"掉了一块"。用户要的是**同行等高**（两栏从顶到一样齐），
+   所以去掉 align-items:start（grid 默认 stretch）；多出来的高度分给内容居中的那张卡。
+   ⚠️ 第三版要的是一个 flex 行容器放标题+动作（第一版把 headrow 当成标题的类名用过，
+   那个 flex 行根本没形成，动作又掉回底部）。见 drc-sec-headrow。 */
+/**
+ * 主区：**主卡优先**。
+ *
+ * 原来是 1fr 1fr 两列，于是两张卡被迫等高（实测 353×468 / 353×468），
+ * 而右那张只有一张小程序码 + 两行字 —— 用户判定的"大空间放小内容"就是这么来的。
+ * ⇒ 改成 1fr auto + align-items: start：主卡拿走剩下的宽度，次卡按内容收缩、
+ * **不再被拉齐**。列宽低于阈值就退成一列（下面那条媒体查询）。
+ */
+.drc-sec-grid { display: grid; gap: 14px; align-items: start;
+  /* ⚠️ **次卡必须给定宽，不能写 auto**（2026-10-09 实测）：
+     auto 那一列按**内容**算宽，而次卡里是一张图 + 一行长文字 ⇒ 它把 510px 全吃了，
+     主卡被挤到 196px —— 正好把"主卡优先"做反了。 */
+  grid-template-columns: minmax(0, 1fr) 224px; }
+/**
+ * 窄栏退成一列。
+ *
+ * ⚠️ **必须是一个独立的 @media 而不是紧跟其后的第二条 「grid-template-columns」**：
+ * 同一条规则里后写的声明会**静默覆盖**前一条（CSS 没有"两条都生效"这回事），
+ * 那样 「1fr auto」 会被 「repeat(auto-fit, …)」 吃掉 —— 也就是"主卡优先"根本没生效，
+ * 而任何静态检查都看不出来（两条声明都合法）。
+ */
+@media (max-width: 620px) { .drc-sec-grid { grid-template-columns: minmax(0, 1fr); } }
+/* 卡片：宿主的卡片是一条 1px 边 + 一层底 + 12px 圆角，我们照抄。 */
+.drc-sec-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px;
+  border: 1px solid ${hostVar('border-l2')}; border-radius: 12px;
+  background: ${hostVar('bg-layer-3')}; }
+/* 卡片标题比分区标题低一档：它是"这张卡的身份"，不是"这一页的身份"。 */
+.drc-sec-heading { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.4; }
+/* 状态那一行：灯 + 结论，比卡片标题低一档、比正文略淡。 */
+/* ── 状态条：整栏最上面一行，第一眼回答「连上没有」 ── */
+.drc-sec-status { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 14px; border: 1px solid ${hostVar('border-l1')};
+  border-radius: 10px; background: ${hostVar('bg-layer-1')}; }
+.drc-sec-statushead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.drc-sec-statustext { font-size: 14px; font-weight: 600; }
+.drc-sec-statushint { color: ${hostVar('label-secondary')}; font-size: 12px; }
+.drc-sec-statushint:empty { display: none; }
+
+/* ── 页脚：三步 + 元信息（第三等内容，不该各占一张卡）── */
+.drc-sec-footer { display: flex; flex-direction: column; gap: 8px; }
+.drc-sec-steps { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0;
+  list-style: none; counter-reset: drc-step; font-size: 13px;
+  color: ${hostVar('label-secondary')}; }
+.drc-sec-step { display: flex; align-items: center; gap: 6px; }
+.drc-sec-step::before { counter-increment: drc-step; content: counter(drc-step);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: ${hostVar('bg-layer-3')}; color: ${hostVar('label-secondary')};
+  font-size: 11px; line-height: 1; }
+.drc-sec-footnote { margin: 0; font-size: 12px; color: ${hostVar('label-tertiary')}; }
+.drc-sec-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px;
+  color: ${hostVar('label-tertiary')}; }
+.drc-sec-meta:empty { display: none; }
+.drc-sec-meta-item { display: inline-flex; gap: 6px; }
+.drc-sec-meta-key { color: ${hostVar('label-secondary')}; }
+/* ⚠️ 值必须比键**深**（2026-10-09 深度 review 的 D2）：这一格原先没有独立规则，
+   继承了 .drc-sec-meta 的 label-tertiary，而键用的是 label-secondary ——
+   于是值比键还淡，读起来像「标签是内容、值是注释」。
+
+   ⚠️ **这段注释里不许出现反引号**：CSS 整体是一个 JS 模板字符串，反引号会**提前闭合它**
+   （症状是 bundle 当场编译失败，报错还指向几百行之外的 textContent = CSS）。
+   今晚在这上面栽了两次。 */
+.drc-sec-meta-value { color: ${hostVar('label-primary')}; }
+
+/* 已配对那一支：一行字就够，不占一整块 */
+.drc-sec-done { display: flex; align-items: center; justify-content: center;
+  min-height: 120px; font-size: 14px; }
+
+/* 配对二维码：**绝对的白纸**（与 pill 面板同一个理由——暗色主题下码必须还是黑压白，
+   跟着主题走就是一张扫不出来的码），四周留 8px 静默区。 */
+.drc-sec .drc-qr { display: block; width: 240px; height: 240px; margin: 0 auto; padding: 8px;
+  background: ${FIXED_WHITE}; border-radius: 10px; image-rendering: pixelated; }
+/* 6 位码：扫不出来时它是唯一退路，所以单占一行、等宽数字、拉字距——
+   它是一串"要念出来敲进去"的数字，不是正文里的一个词。 */
+.drc-sec-code { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.drc-sec-code-label { color: ${hostVar('label-tertiary')}; font-size: 12px; }
+.drc-sec .drc-code { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: 4px;
+  text-align: center; font-variant-numeric: tabular-nums; }
+.drc-sec .drc-count { margin: 0; text-align: center; color: ${hostVar('label-secondary')};
+  font-size: 12px; font-variant-numeric: tabular-nums; }
+.drc-sec .drc-count[data-kind="urgent"] { color: ${hostVar('state-warn-primary')}; font-weight: 600; }
+/* 引导句与状态句分两档：前者答"怎么用"，后者答"现在什么情况"。
+   合成一档的后果是"发不出配对码"和"用微信扫这张码"长得一模一样。 */
+.drc-sec-guide { margin: 0; color: ${hostVar('label-tertiary')}; font-size: 13px; line-height: 1.7; }
+.drc-sec-state { margin: 0; color: ${hostVar('label-secondary')}; font-size: 13px; line-height: 1.7; }
+.drc-sec-state[data-kind="failed"] { color: ${hostVar('state-error-primary')}; }
+/* 手机端那张小程序码：与配对二维码同一张白纸，但小一号——它答的是"去哪儿装客户端"，
+   不是这一屏的主动作。两张码同时出现，尺寸与标题必须让人一眼分得清哪张是哪张。 */
+.drc-mp { display: block; width: 148px; height: 148px; margin: 0 auto; padding: 8px;
+  background: ${FIXED_WHITE}; border-radius: 10px; object-fit: contain; }
+/* 同行等高之后，这张卡（内容只有一张小图 + 两行字）比配对卡矮一截。
+   justify-content: center 把内容居中，多出来的高度上下分一半，
+   而不是全堆在下面变成一块空白。 */
+.drc-sec-card[data-layout="figure"] { justify-content: center; }
+.drc-sec-caption { margin: 0; text-align: center; font-size: 13px; font-weight: 600;
+  color: ${hostVar('label-primary')}; }
+/* 这张卡里三样都居中（图、名字、那句说明）：图居中而说明左对齐会读成"两块东西"。
+   说明只有一两行，居中不影响扫读——长段落才需要左对齐。 */
+.drc-sec-note { margin: 0; text-align: center; color: ${hostVar('label-tertiary')};
+  font-size: 12px; line-height: 1.7; }
+/* 动作排在本区块**右上角**（2026-10-09 用户定的）：与状态栏那颗 pill 的抬头同一形状
+   （那边是「左侧状态 + 右侧动作」），而卡片底部那一排会把下面的事实表推得更远。
+   margin-left: auto 是让它们贴到标题那一行的右边——卡片是 flex 列，所以靠这条推。 */
+.drc-sec-headrow { display: flex; align-items: flex-start; gap: 12px; }
+.drc-sec-headrow .drc-sec-heading { min-width: 0; flex: 1 1 auto; }
+.drc-sec-headrow .drc-sec-actions { flex: 0 0 auto; margin-left: auto; }
+.drc-sec-btn { appearance: none; font: inherit; font-size: 13px; line-height: 20px;
+  padding: 5px 14px; border: 1px solid ${hostVar('border-l1')}; border-radius: 8px;
+  background: transparent; color: ${hostVar('label-primary')}; cursor: pointer; }
+.drc-sec-btn:hover { background: ${hostVar('interactive-bg-hover')}; }
+.drc-sec-btn:focus-visible { outline: 2px solid ${hostVar('brand-primary')}; outline-offset: 1px; }
+/* 主动作填色，字用绝对白：与二维码那张纸同一个理由——白字压品牌色在明暗两套主题里都成立。
+   ⚠️ **必须把 :hover / :focus-visible 一并列出来**（2026-10-09 真屏幕截图抓到的白底白字）：
+   宿主有一份全局 button{background:var(--dsw-alias-interactive-bg-hover-solid)} 的 reset，
+   而我们的 .drc-sec-btn:hover 与它**同为 (0,2,0)**，且那份宿主样式表**后加载**
+   ⇒ 指针停在按钮上时，主动作底色被压成那块浅灰、字仍是绝对白 ⇒ 按钮整个消失。
+   只写 [data-kind="primary"] 一条赢不了 :hover（同优先级、它在前）。
+   !important 不许用：那是把整个宿主面都让出去，而这里只要把三个特异度对齐。 */
+/* 填充与字色各拿各的宿主令牌（理由见 FALLBACK 里那两条注释）：浅底必须配深字，反之亦然。
+   ⚠️ **这里不许再出现 FIXED_WHITE** —— 那张绝对白只留给二维码与小程序码那两张纸
+   （能不能被扫出来由码点与纸的对比度决定，不该跟着主题走）；
+   而给按钮的浅填充配白字，就是"按钮整个消失"的那个形状。 */
+.drc-sec-btn[data-kind="primary"] { border-color: transparent;
+  background: ${hostVar('button-primary-fill')}; color: ${hostVar('label-primary-foreground')}; }
+.drc-sec-btn[data-kind="primary"]:hover { border-color: transparent;
+  background: ${hostVar('button-primary-fill')}; color: ${hostVar('label-primary-foreground')}; }
+.drc-sec-btn[data-kind="primary"]:focus-visible { border-color: transparent;
+  background: ${hostVar('button-primary-fill')}; color: ${hostVar('label-primary-foreground')};
+  outline: 2px solid ${hostVar('brand-primary')}; outline-offset: 1px; }
 `
 
 /** 认得出 slots 服务吗：`inject`（认领槽位）与 `register`（往里放组件）两个函数都得在。 */
@@ -444,7 +688,30 @@ function warn(message: string, error?: unknown): void {
   }
 }
 
-function ensureStyle(doc: Document): void {
+/**
+ * 设置分区那一半的降级留痕出口（2026-08-09）。
+ *
+ * 与 pill 用**同一个 console.warn 形状**但前缀不同：屏幕上少的是哪一块，日志里要能一眼分开
+ * （两边都写 `[dsh-remote-control pill]` 的话，排查时得靠猜）。
+ */
+export function warnSection(message: string, error?: unknown): void {
+  try {
+    const detail = error instanceof Error ? error.message : error === undefined ? '' : String(error)
+    console.warn(`[dsh-remote-control settings] ${message} ${detail}`)
+  } catch {
+    /* 控制台也可能不可用 */
+  }
+}
+
+/**
+ * 注入这张样式表（幂等：已插过就按内容对齐）。
+ *
+ * ⚠️ 导出给 `settings.ts` 用（2026-08-09）。**设置页必须自己调它**，不能指望 pill 先挂上：
+ * 没有会话时 pill 那个槽位根本不渲染 ⇒ `buildPill` 不跑 ⇒ 样式永远不注入 ⇒
+ * 设置里那一页是**完全没样式的裸文本**。而这正是它存在的场景（新会话、还没有会话）。
+ * 判据 `排版：注入的 CSS 真的带着宿主分区的取值` 就是照这条写的，它抓到过这一处。
+ */
+export function ensureStyle(doc: Document): void {
   try {
     const existing = doc.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)
     if (existing) {
@@ -765,7 +1032,7 @@ export function buildPill(root: Element, deps: PillDeps): () => void {
    */
   const offlineNote = (): HTMLElement | null => {
     if (!lastStatus) return null
-    if (pillLabel(lastStatus).text !== '手机离线') return null
+    if (pillLabel(lastStatus).text !== ZH.phoneAway) return null
     return text('p', 'drc-note', '不用重新扫码')
   }
 

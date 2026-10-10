@@ -54,7 +54,11 @@ test('② since 落在保留窗口之外 ⇒ 明确报错，不许静默从窗�
   await assert.rejects(
     () => kernel.readHistory!('ses_r', { since: 2, limit: 10 }),
     (error: Error) => {
-      assert.match(error.message, new RegExp(HISTORY_WINDOW_EXCEEDED), '要带上那个可识别的码：宿主侧据此映射成协议错误码')
+      assert.match(
+        error.message,
+        new RegExp(HISTORY_WINDOW_EXCEEDED),
+        '要带上那个可识别的码：宿主侧据此映射成协议错误码',
+      )
       assert.match(error.message, /窗口/, '错误信息要说清是"窗口外"，而不是笼统的"读不到"')
       return true
     },
@@ -94,11 +98,7 @@ test('⑤ latestSeq 与翻页路径给的值一致（两条路必须回答同一
   const viaBefore = await kernel.readHistory!('ses_r', { beforeSeq: 6, limit: 2 })
   const viaSince = await kernel.readHistory!('ses_r', { since: 3, limit: 2 })
   // 两个都是 seq 4、5 那一段 ⇒ latestSeq 必须相同
-  assert.deepEqual(
-    viaBefore.events.map(idOf),
-    viaSince.events.map(idOf),
-    '同一段内容，两条路必须给出相同结果',
-  )
+  assert.deepEqual(viaBefore.events.map(idOf), viaSince.events.map(idOf), '同一段内容，两条路必须给出相同结果')
   assert.equal(viaBefore.latestSeq, viaSince.latestSeq, 'latestSeq 必须一致：它是手机唯一的游标来源')
 })
 

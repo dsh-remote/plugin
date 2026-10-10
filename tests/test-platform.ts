@@ -33,6 +33,10 @@
  */
 
 /** 平台标识。与 `process.platform` 同形，但可注入。 */
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 export type TestPlatform = 'darwin' | 'linux' | 'win32'
 
 export function currentPlatform(): TestPlatform {
@@ -55,13 +59,56 @@ export function skipUnlessPosix(platform: TestPlatform = currentPlatform()): { s
   }
 }
 
-/** 造只读目录的用例在 win32 上要跳（理由不同：它不是"权限位不对"，而是"造不出来"）。 */
-export function skipIfCannotChmodDir(platform: TestPlatform = currentPlatform()): { skip: false | string } {
-  return {
-    skip: hasPosixModes(platform)
-      ? false
-      : 'win32 的 chmod 不支持只读目录（0o500）：这个用例的前置条件造不出来，跳过而不是假装通过',
+/**
+ * **实测**这台机器能不能造出"写不进去的目录"。
+ *
+ * ⚠️ 为什么必须是实测而不是问平台（2026-10-08 在 Linux 容器里抓到的）：
+ * `hasPosixModes()` 只回答"有没有权限位"，而**权限位不等于拦得住写**——
+ * Linux 上以 **root** 跑时（CI 的容器、很多开发机的 docker），
+ * `chmod 0500` 的目录照样写得进去。于是"目录不可写 ⇒ 退回一次性身份"那条用例
+ * 的**前提不成立**：它本该验"写失败时怎么办"，实际验的是"写得进去时怎么办"，
+ * 而断言仍会红——红的原因还指不到真地方。
+ *
+ * 探针只做一次（模块级缓存）：造临时目录 → chmod 0500 → 试着写一个文件。
+ */
+let canMakeDirUnwritable: boolean | undefined
+export function canBlockDirWrites(): boolean {
+  if (canMakeDirUnwritable !== undefined) return canMakeDirUnwritable
+  const dir = mkdtempSync(join(tmpdir(), 'drc-rocheck-'))
+  const locked = join(dir, 'locked')
+  try {
+    mkdirSync(locked)
+    chmodSync(locked, 0o500)
+    canMakeDirUnwritable = false
+    try {
+      writeFileSync(join(locked, 'probe'), 'x')
+    } catch {
+      canMakeDirUnwritable = true
+    }
+  } finally {
+    try {
+      chmodSync(locked, 0o700)
+    } catch {
+      /* 探针失败不该影响结论 */
+    }
+    rmSync(dir, { recursive: true, force: true })
   }
+  return canMakeDirUnwritable
+}
+
+/** 造只读目录的用例在"这台机器造不出来"时要跳（原因要能指到是哪一种造不出来）。 */
+export function skipIfCannotChmodDir(platform: TestPlatform = currentPlatform()): { skip: false | string } {
+  if (!hasPosixModes(platform)) {
+    return { skip: 'win32 的 chmod 不支持只读目录（0o500）：这个用例的前置条件造不出来，跳过而不是假装通过' }
+  }
+  if (!canBlockDirWrites()) {
+    return {
+      skip:
+        '这台机器上 chmod 0500 拦不住写（Linux 以 root 运行时就是这样）：' +
+        '"目录不可写"这个前提不成立，跳过而不是让断言红在一个指不到真地方的错误上',
+    }
+  }
+  return { skip: false }
 }
 
 /**

@@ -1,18 +1,20 @@
 /**
- * pill-routes — 状态栏那颗 pill 用的四条同域路由，与它自带的守卫。
+ * pill-routes — 状态栏那颗 pill（以及设置页那一栏）用的六条同域路由，与它自带的守卫。
  *
  *   `POST /plugins/dsh-remote-control/pairing/new`  点一下要一张能用的码（幂等）
- *   `GET  /plugins/dsh-remote-control/pairing.png`  弹窗里那张二维码图
+ *   `GET  /plugins/dsh-remote-control/pairing.png`  弹窗里那张二维码图（每次现渲染）
  *   `GET  /plugins/dsh-remote-control/status`       pill 抬头那句状态 + 点开那三行（中继 / 状态 / 版本）
  *   `POST /plugins/dsh-remote-control/unpair`       退出配对（作废当前那条通道）
+ *   `GET  /plugins/dsh-remote-control/pair`         不依赖会话的配对页（没有会话那一屏的正门）
+ *   `GET  /plugins/dsh-remote-control/miniprogram.jpg` 官方小程序那张**静态**小程序码（设置页右栏）
  *
- * 四条都是**按需**的：宿主侧不再有"按节拍渲染并落盘"那一半（右栏自动弹码方案 2026-10-03 删除），
+ * 六条都是**按需**的：宿主侧不再有"按节拍渲染并落盘"那一半（右栏自动弹码方案 2026-10-03 删除），
  * 图在有人要的时候现渲染，状态在 pill 问的时候现读。
  *
  * 安全姿态分两档，写在同一个文件里但**判据分开**：
  *
- * - 只读那两条：`Host` 必须环回（挡 DNS 重绑定的导航/表单请求），`Origin` 缺席放过
- *   （同源 GET 浏览器本来就可能不带，桌面宿主的转发层还会主动删掉它）。
+ * - 只读那**四**条（图片、状态、配对页、小程序码）：`Host` 必须环回（挡 DNS 重绑定的导航/表单请求），
+ *   `Origin` 缺席放过（同源 GET 浏览器本来就可能不带，桌面宿主的转发层还会主动删掉它）。
  * - 会改状态的那**两**条（发码、解配）：跨站判据是**只有同源脚本发得出的自定义头**
  *   `x-drc-pair: 1`。不能拿 `Origin` 当凭据——2026-10-03 在真宿主上点那颗 pill 直接 403，
  *   弹窗上印着 `origin-missing`：桌面宿主转发时会把 `origin` 删掉，"Origin 必须存在"这条前提
@@ -24,6 +26,7 @@
  * 为什么弹窗的图要我们自己出（而不是 `dsh-resource://file/...`）：那是右栏的文档预览页型
  * 认领的自定义 scheme，pill 里一个 `<img>` 能不能吃它**没有证据**，而
  * `<img src="/plugins/…/pairing.png">` 是同域 HTTP，必然可行。
+ * 设置页那张小程序码（`/miniprogram.jpg`）走同一条已经被证过的路。
  *
  * 幂等是刻意的：`ensureFresh()` 只在"当前没有仍然有效的码"时才向中继申请新的。连点三下若
  * 挂出三张有效码，中继的 pending 表就会同时认三个 PSK，而屏幕上显示的是哪一张由时序决定——
@@ -35,11 +38,37 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { qrPng } from '../platform/qr.js'
+import { MINIPROGRAM_IMAGE_TYPE } from './miniprogram.js'
 
 export const PAIR_NEW_ROUTE = '/plugins/dsh-remote-control/pairing/new'
 export const PAIR_IMAGE_ROUTE = '/plugins/dsh-remote-control/pairing.png'
 export const PAIR_STATUS_ROUTE = '/plugins/dsh-remote-control/status'
 export const PAIR_UNPAIR_ROUTE = '/plugins/dsh-remote-control/unpair'
+/**
+ * **不依赖会话的配对页**（2026-08-09 加）。
+ *
+ * 为什么需要它：pill 挂在宿主的 `conversation.composer.dock` 槽位上，而宿主那条
+ * 渲染条件是 `sessionId !== void 0`（宿主产物原句）——**新会话那一屏根本不渲染这个槽位**。
+ * 于是"从零开始配对"的人（尤其是 web profile：打开浏览器、还没有任何会话）
+ * **找不到任何出码入口**（`/drc pair` 与自动弹码在 2026-10-03 已删）。
+ *
+ * ⇒ 这一条是同一批凭据的另一扇门，**安全姿态与 pill 完全一致**：
+ *   页面本身是只读的 GET（环回 + Origin 守卫），发码仍由页面里的脚本
+ *   带 `x-drc-pair` 头去 POST —— 那条跨站判据一个字都没放松。
+ */
+export const PAIR_PAGE_ROUTE = '/plugins/dsh-remote-control/pair'
+/**
+ * **静态**的小程序码（2026-10-09 加，设置页右栏那张卡要它）。
+ *
+ * ⚠️ 与 `PAIR_IMAGE_ROUTE` 是两件东西，别混（完整对照见 `./miniprogram.ts` 的文件头）：
+ *   那一张是**每次配对现渲染**的、带 PSK 的限时码；这一张是微信后台出的、
+ *   指向"哪个小程序"的长期静态图。表现上唯一看得见的差别是缓存姿态：
+ *   配对码 `no-store`（换码必须立刻可见），这一张可以缓存一天（它根本不会变）。
+ *
+ * 为什么它归在这里：设置页那一栏的 `<img>` 需要一个同域地址，而本仓已经证明过
+ * "同域 HTTP 的 `<img>` 必然可行、`dsh-resource://` 没有证据"（见文件头）。
+ */
+export const PAIR_MINIPROGRAM_ROUTE = '/plugins/dsh-remote-control/miniprogram.jpg'
 
 /** 写路由的跨站判据（见文件头）。浏览器面 `src/client/pill.ts` 里是同一个字面量。 */
 export const PAIR_MARKER_HEADER = 'x-drc-pair'
@@ -103,6 +132,13 @@ export interface PillRouteDeps {
   status(): PillStatus
   /** 退出配对：作废当前所有配对通道，返回作废的条数。幂等，没有可配对的通道时返回 0。 */
   unpair(): number
+  /**
+   * 官方小程序那张**静态**小程序码的字节；包内没有这张图时返回 undefined。
+   * **为什么走注入而不是在这里读文件**：这条路要能在不碰文件系统的判据里被测
+   * （给一段固定字节就行），而"从哪个路径读"是 `start.ts` 那一侧的接线细节
+   * （`./miniprogram.ts` 里解释了两种产物布局下相对深度为什么刚好都是两级）。
+   */
+  miniprogramCode(): Buffer | undefined
   log(message: string, fields?: Record<string, string | number | boolean | undefined>): void
 }
 
@@ -295,7 +331,57 @@ export function pairImageHandler(deps: PillRouteDeps) {
   }
 }
 
-/** `GET /status`：pill 抬头那句连接状态（只读，守卫与图片那条同一档）。 */
+/**
+ * `GET /miniprogram.jpg`：官方小程序那张**静态**小程序码。
+ *
+ * 守卫与另外两条只读路由同一档（环回 Host + Origin 缺席或宿主自己）。它泄不出任何东西
+ * ——这张图在 README 里就是公开的，谁拿到都只能打开那个小程序——但姿态仍然对齐：
+ * 这个前缀下的路由只有两档，不给自己留第三档。
+ *
+ * 缓存与配对码那张**相反**，而且这个相反是刻意的：`pairing.png` 必须 `no-store`
+ * （换码要立刻可见），这一张不变，`max-age` 一天既省一次 97 KB 的重复下载，
+ * 也不会有"换图之后用户还看到旧图"的问题——换图的场合是发版，我们会带着 ETag 变。
+ *
+ * 图不在包里 → **204**（不是 404）：路由在、只是没有这张图。前端的 `<img>` 会报 error，
+ * 那一栏的卡片自己摘掉，"配对"这条路一个字都不受影响。
+ */
+export function miniprogramImageHandler(deps: PillRouteDeps) {
+  return (request: IncomingMessage, response: ServerResponse): void => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      json(response, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!hostIsLoopback(request.headers.host) || !originIsLoopbackOrAbsent(request.headers.origin)) {
+      json(response, 403, { error: 'request-not-trusted' })
+      return
+    }
+    try {
+      const bytes = deps.miniprogramCode()
+      if (!bytes || bytes.length === 0) {
+        response.writeHead(204)
+        response.end()
+        return
+      }
+      response.writeHead(200, {
+        'Content-Type': MINIPROGRAM_IMAGE_TYPE,
+        'Content-Length': bytes.length,
+        'Cache-Control': 'public, max-age=86400',
+        // 与配对码那条同一个形状：ETag 只是**这一版的哈希**，排错与换图后失效都用它。
+        // 它不是凭据，也不是"换没换码"的判据——那是 pairing.png 的 epoch 干的事。
+        ETag: `"${createHash('sha256').update(bytes).digest('hex').slice(0, 16)}"`,
+      })
+      // HEAD 与 GET 一样带 Content-Length：与配对码那条不同，这里**不跳过读取**
+      // ——字节本来就在内存里，跳过反而让 HEAD 变成一个答不出"这张图多大"的探针。
+      if (request.method === 'HEAD') response.end()
+      else response.end(bytes)
+    } catch (error) {
+      json(response, 500, { error: String((error as Error)?.message ?? error).slice(0, 200) })
+    }
+  }
+}
+
+/**
+ * `GET /status`：pill 抬头那句连接状态（只读，守卫与图片那条同一档）。 */
 export function pillStatusHandler(deps: PillRouteDeps) {
   return (request: IncomingMessage, response: ServerResponse): void => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -355,6 +441,113 @@ export function unpairHandler(deps: PillRouteDeps): (request: IncomingMessage, r
   }
 }
 
+/**
+ * 配对页：一张自包含的 HTML（**不引任何外部资源**）。
+ *
+ * 页面里的脚本做两件事：
+ *   1. `POST /pairing/new`，带 `x-drc-pair: 1` —— 与 pill 同一个判据，
+ *      跨站页面拿不到这个头（会先触发 CORS 预检，而这条服务不响应 OPTIONS）；
+ *   2. 把 `<img>` 指向 `/pairing.png`，并每 2 秒按 `epoch` 换一次 URL 拿最新的码。
+ *
+ * ⚠️ 页面里**不含 psk、也不含那条 qr URI**：码只在服务端渲染成像素之后才离开宿主
+ *   （与图片路由同一条纪律，判据见 routes 的测试）。这里拿到的只有 token 与寿命。
+ */
+export function pairPageHandler(deps: PillRouteDeps) {
+  return (request: IncomingMessage, response: ServerResponse): void => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      json(response, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!hostIsLoopback(request.headers.host) || !originIsLoopbackOrAbsent(request.headers.origin)) {
+      json(response, 403, { error: 'request-not-trusted' })
+      return
+    }
+    const html = pairPageHtml()
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    })
+    if (request.method === 'HEAD') response.end()
+    else response.end(html)
+  }
+}
+
+/** 页面本体。逻辑全是原生 JS，没有依赖、没有构建步骤。 */
+function pairPageHtml(): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配对手机</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0; padding: 32px 20px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  #box { width: 260px; height: 260px; display: flex; align-items: center; justify-content: center;
+         border: 1px solid rgba(128,128,128,.35); border-radius: 12px; }
+  #box img { width: 100%; height: 100%; image-rendering: pixelated; }
+  #msg { color: rgba(128,128,128,1); font-size: 13px; text-align: center; max-width: 320px; }
+  #token { font-size: 20px; letter-spacing: 3px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <h1>用手机配对这台主机</h1>
+  <div id="box"><span id="msg">正在生成配对码…</span></div>
+  <div id="token"></div>
+  <div id="msg2"></div>
+<script>
+(function () {
+  var MARKER = 'x-drc-pair';
+  var box = document.getElementById('box');
+  var msg = document.getElementById('msg');
+  var msg2 = document.getElementById('msg2');
+  var tokenEl = document.getElementById('token');
+  var epoch = '';
+
+  function show(text) { msg.textContent = text; }
+
+  function fetchCode() {
+    return fetch('/plugins/dsh-remote-control/pairing/new', {
+      method: 'POST',
+      headers: (function () { var h = {}; h[MARKER] = '1'; return h; })(),
+    }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+
+  function render(epochNow) {
+    if (!epochNow) return;
+    box.innerHTML = '';
+    var img = document.createElement('img');
+    img.alt = '配对二维码';
+    img.src = '/plugins/dsh-remote-control/pairing.png?e=' + encodeURIComponent(epochNow);
+    img.onerror = function () { show('二维码没出来，稍后会自动重试'); };
+    box.appendChild(img);
+  }
+
+  function tick() {
+    fetchCode().then(function (answer) {
+      if (!answer || answer.state !== 'ready') {
+        show('现在发不出码，请确认中继已连上');
+        tokenEl.textContent = '';
+        return;
+      }
+      msg2.textContent = '这张码 ' + Math.round((answer.expiresInMs || 0) / 1000) + ' 秒后过期，过期会自动换一张';
+      tokenEl.textContent = answer.token || '';
+      if (answer.epoch !== epoch) { epoch = answer.epoch; render(epoch); }
+    });
+  }
+
+  tick();
+  setInterval(tick, 2000);
+})();
+</script>
+</body>
+</html>
+`
+}
+
 // ── 注册 ────────────────────────────────────────────────────────────
 
 /** 最小可注入的 webServer 面（只用到 register，返回值是注销函数）。 */
@@ -367,9 +560,9 @@ export interface WebServerLike {
 }
 
 /**
- * 挂上这四条路由；返回一个注销函数（四条一起摘，一条抛了也不许把其余留在宿主上）。
+ * 挂上这六条路由；返回一个注销函数（六条一起摘，一条抛了也不许把其余留在宿主上）。
  *
- * ⚠️ 半途失败也必须干净：`webServer.register` 会因为"路由名已被占用"抛错，而四条是**依次**挂的。
+ * ⚠️ 半途失败也必须干净：`webServer.register` 会因为"路由名已被占用"抛错，而六条是**依次**挂的。
  * 不加这层回滚的话，第二条挂不上时第一条就永久留在宿主上、`stop()` 再也拿不到它的注销函数——
  * 表现是"重载一次之后那条路由再也挂不上"（右栏方案当年踩过同一形状，见 install 脚本的退役逻辑）。
  */
@@ -380,6 +573,8 @@ export function registerPillRoutes(webServer: WebServerLike, deps: PillRouteDeps
     { kind: 'exact' as const, path: PAIR_IMAGE_ROUTE, handler: pairImageHandler(deps) },
     { kind: 'exact' as const, path: PAIR_STATUS_ROUTE, handler: pillStatusHandler(deps) },
     { kind: 'exact' as const, path: PAIR_UNPAIR_ROUTE, handler: unpairHandler(deps) },
+    { kind: 'exact' as const, path: PAIR_PAGE_ROUTE, handler: pairPageHandler(deps) },
+    { kind: 'exact' as const, path: PAIR_MINIPROGRAM_ROUTE, handler: miniprogramImageHandler(deps) },
   ]
   try {
     for (const definition of definitions) off.push(webServer.register(definition))

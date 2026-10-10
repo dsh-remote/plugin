@@ -16,18 +16,18 @@ dsh plugin --profile web add @dsh-remote/plugin
 HMR 只热更 `cordis.patch.yml` 的配置，不会重新 import dist；浏览器面还要刷新页面
 才拉得到新的 `client.cjs`。不重启的表现是"改了的代码没生效"。
 
-> 上面这条是从 **npm** 装的（`@dsh-remote/plugin`，当前 3.0.6）。
-> 想从**本仓源码**构建，见下面[第 2 步](#2-装插件)的开发者路径 ——
-> ⚠️ 本仓的源码快照落后于 npm 上的发布版，正式使用请走 npm。
+配一次中继与主机 token 见下面的[教程](#教程)。从源码构建（开发者）见[第 2 步](#2-装插件)。
+
+---
 
 这是四仓里的**主推库**：装上它 + 一台中继 + 官方小程序，就能在手机上看着 DSH 干活并随时插话。
 
-| 角色 | 仓 | 说明 |
-|---|---|---|
-| **宿主插件（本仓）** | [`dsh-remote/plugin`](https://github.com/dsh-remote/plugin) | 跑在 DSH 进程里：配对、中继、会话与命令、审批转发、状态栏 pill |
-| 官方小程序 | [`dsh-remote/client`](https://github.com/dsh-remote/client) | 微信小程序：扫码配对 / 会话列表 / 对话 / 审批 / 提问 |
-| 中继 | [`dsh-remote/relay`](https://github.com/dsh-remote/relay) | 零知识 WebSocket 中继，单文件产物，可自托管 |
-| 协议层 | [`dsh-remote/protocol`](https://github.com/dsh-remote/protocol) | 帧与载荷 schema、E2E crypto、配对 URI。纯函数、零 I/O |
+| 角色                 | 仓                                                              | 说明                                                           |
+| -------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
+| **宿主插件（本仓）** | [`dsh-remote/plugin`](https://github.com/dsh-remote/plugin)     | 跑在 DSH 进程里：配对、中继、会话与命令、审批转发、状态栏 pill |
+| 官方小程序           | [`dsh-remote/client`](https://github.com/dsh-remote/client)     | 微信小程序：扫码配对 / 会话列表 / 对话 / 审批 / 提问           |
+| 中继                 | [`dsh-remote/relay`](https://github.com/dsh-remote/relay)       | 零知识 WebSocket 中继，单文件产物，可自托管                    |
+| 协议层               | [`dsh-remote/protocol`](https://github.com/dsh-remote/protocol) | 帧与载荷 schema、E2E crypto、配对 URI。纯函数、零 I/O          |
 
 ---
 
@@ -58,6 +58,17 @@ HMR 只热更 `cordis.patch.yml` 的配置，不会重新 import dist；浏览�
 
 ### 2. 装插件
 
+**用户路径（从 npm 装，推荐）**：
+
+```sh
+dsh plugin --profile web add @dsh-remote/plugin
+```
+
+`dsh plugin` 转发的就是 pnpm —— 它把 `@dsh-remote/plugin` 写进 profile 的依赖并安装。
+桌面端换成 `--profile desktop`。**装完必须重启 Harness**（理由见顶部「安装」一节）。
+
+**开发者路径（从本仓源码装）**：
+
 ```sh
 pnpm install
 pnpm build          # 产出两半：dist/bundle/index.js（宿主侧）+ client.cjs（浏览器面）
@@ -67,8 +78,9 @@ node scripts/install-to-profile.mjs
 装进 `~/.dsh/profiles/desktop`；其他 profile 用 `DSH_PROFILE=…` 指定。
 脚本只拷产物、**不跑 `pnpm add`**——profile 里不需要 node_modules。
 
-> ⚠️ **装完必须重启 Harness。** HMR 只热更 `cordis.patch.yml` 的配置，**不会**重新 import dist；
-> 浏览器面还要重新加载页面才拉得到新的 `client.cjs`。不重启的表现是"改了的代码没生效"。
+> ⚠️ 两条路**不要混用**：`install-to-profile.mjs` 装出来的是软链时它会拒绝运行，
+> 而 `dsh plugin add` 装的是 npm 包。同一个 profile 里先后用过两条路，表现是
+> "文件都在、插件不加载"——三个名字（包名 / `bundles` 条目 / `insert.name`）必须一致。
 
 ### 3. 配一次
 
@@ -81,10 +93,10 @@ plugins:
     name: dsh-remote-control
     config:
       enabled: true
-      serverUrl: ws://127.0.0.1:8787   # 自建中继填 wss://你的域名
-      hostTokenEnv: DRC_HOST_TOKEN      # 从环境变量读，别把 token 写进这个文件
-      hostLabel: my-mac                 # 会显示在小程序顶部
-      approvalTimeoutSec: 180           # 审批等不到回答的时限
+      serverUrl: ws://127.0.0.1:8787 # 自建中继填 wss://你的域名
+      hostTokenEnv: DRC_HOST_TOKEN # 从环境变量读，别把 token 写进这个文件
+      hostLabel: my-mac # 会显示在小程序顶部
+      approvalTimeoutSec: 180 # 审批等不到回答的时限
       listingRefreshSec: 15
 ```
 
@@ -109,17 +121,23 @@ cat ~/.dsh/dsh-remote-control/status.json
 
 四个关键字段：
 
-| 字段 | 看什么 |
-|---|---|
-| `relay` | `online` / `connecting` / `offline` |
-| `relayProblem` | 连不上时的具体原因（token 不一致、地址错、中继没起…） |
-| `carrier` | `services`=真内核 / `mock`=内存替身 / `none`=配置或载体有问题 |
-| `pill` | 四条路由的软探测：`registered` / `webServer=none` / `disabled` |
+| 字段           | 看什么                                                                               |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `relay`        | `online` / `connecting` / `offline`                                                  |
+| `relayProblem` | 连不上时的具体原因（token 不一致、地址错、中继没起…）                                |
+| `carrier`      | `services`=真内核 / `mock`=内存替身 / `none`=配置或载体有问题                        |
+| `pill`         | 六条路由的软探测：`registered` / `webServer=none` / `disabled` / `miniprogramCode=ok | missing` |
 
 **`pill` 不是 `registered` ⇒ 这台主机配不了对**（配对入口只有它）。此时看 `problems` 里有没有
 `warn:pill`，原因在那条 pill 探针里。
 
-pill 背后的四条同域路由（**改状态的那两条要带自定义头**——那是同源判据，不是装饰）：
+pill 背后的六条同域路由（**改状态的那两条要带自定义头**——那是同源判据，不是装饰；
+第六条是官方小程序那张**静态**码，只读、可缓存，与带 PSK 的 `/pairing.png` 是两件东西）：
+
+```sh
+# 设置页那张静态小程序码（只读；200 + image/jpeg，或图不在包里时 204）
+curl -sI http://127.0.0.1:<pillPort>/plugins/dsh-remote-control/miniprogram.jpg
+```
 
 ```sh
 # 状态（只读；Host 必须环回）

@@ -56,8 +56,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(HERE, '..')
 const PLUGIN = ROOT
 const PROFILE = process.env.DSH_PROFILE ?? path.join(process.env.HOME ?? '~', '.dsh', 'profiles', 'desktop')
-/** 装进 profile 后的 bundle id。**这是稳定运行时标识**：路由前缀与数据目录都跟着它。 */
-const BUNDLE_ID = 'dsh-remote-control'
+/**
+ * 装进 profile 后的 bundle id —— **必须等于包的完整名**（package.json 的 name），
+ * 否则 loader 解析不到模块（"文件都在，插件不加载"）。
+ *
+ * 2026-10-08：默认装机路径改成**标准 pnpm 依赖**（`scripts/pack-to-profile.mjs`），
+ * 本脚本退为"直拷产物"的应急通道。装成 pnpm 依赖后目标目录是**软链**
+ * （`node_modules/@dsh-remote/plugin -> .pnpm/...`），下面那个软链检查会直接拒绝，
+ * 于是两条路不会互相踩（旧实现踩过：两份实例、两个 hostId、手机连到谁全凭运气）。
+ */
+const BUNDLE_ID = '@dsh-remote/plugin'
 
 function fail(message) {
   process.stderr.write(`install-to-profile: ${message}\n`)
@@ -96,8 +104,9 @@ if (!existsSync(client)) fail(`缺浏览器面产物 ${client}`)
 try {
   if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
     fail(
-      `${target} 是软链——profile 里还留着 file: 依赖。` +
-        `先删掉 ${path.join(PROFILE, 'package.json')} 的 dependencies.${BUNDLE_ID}，再重跑本脚本。`,
+      `${target} 是软链——这个插件现在是**标准 pnpm 依赖**（2026-10-08 起）。\n` +
+        `  请改用：node scripts/pack-to-profile.mjs（打 tgz → pnpm install）。\n` +
+        `  确实要退回直拷：先删掉 ${path.join(PROFILE, 'package.json')} 的 dependencies.${BUNDLE_ID}，再重跑本脚本。`,
     )
   }
 } catch (error) {
@@ -187,7 +196,9 @@ process.stdout.write('   下一步：**重启 Harness**（新代码不会被热�
 process.stdout.write('     cat ~/.dsh/dsh-remote-control/status.json\n')
 process.stdout.write('   关键四字段：carrier（services=真内核 / mock=内存替身 / none=配置或载体问题）、\n')
 process.stdout.write('               relay（online/connecting/offline）、relayProblem、\n')
-process.stdout.write('               pill（配对入口那四条路由的软探测结果：routes=registered / webServer=none / disabled）\n')
+process.stdout.write(
+  '               pill（配对入口那四条路由的软探测结果：routes=registered / webServer=none / disabled）\n',
+)
 process.stdout.write('   配对：点状态栏那颗 dsh-remote-control（输入框那一排）。**命令行没有配对入口了**——\n')
 process.stdout.write('     /drc 命令整条删掉（一个命令都不再注册），右栏自动弹码与终端文本码也都已删除。\n')
 process.stdout.write('     那颗 pill 没出现时：先看 status.json 的 problems 里有没有 warn:pill（宿主侧没挂上路由，\n')

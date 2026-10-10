@@ -142,7 +142,11 @@ test('写到一半失败：已经落盘的那几个必须收回来，不许留�
     })
 
     assert.equal(result.ok, false, '前提：这一批应当整体失败（落盘目录不可用）')
-    assert.match(String((result as { message?: string }).message ?? ''), /ENOTDIR|EEXIST|落盘失败/, '失败理由要原样带回去')
+    assert.match(
+      String((result as { message?: string }).message ?? ''),
+      /ENOTDIR|EEXIST|落盘失败/,
+      '失败理由要原样带回去',
+    )
 
     // 那个"目录"位置仍然只有那一个普通文件，没有多出任何附件
     assert.ok(statSync(blocker).isFile(), '不可写的目录位置不该变成别的东西')

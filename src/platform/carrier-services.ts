@@ -36,6 +36,7 @@ import type {
   KernelPort,
   KernelSession,
 } from '../ports/index.js'
+import { HISTORY_WINDOW_EXCEEDED } from '../ports/index.js'
 
 /** 平台服务对象在各代际形状不同，一律按"最小可用面"声明，运行时软探测。 */
 interface LooseObject {
@@ -348,6 +349,51 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     desktopVoided: number
     /** 能不能把可撤销的 signal 交给下游（`request.signal` 不可写时是 failed/ignored）。 */
     handoff: string
+    /**
+     * 每次请求**从哪条路走的**（2026-10-09 用户报「审批窗卡着、手机没有弹窗」时补的）。
+     *
+     * ## 为什么必须有它（那一晚的现场）
+     *
+     * `asked=6` 而 `outbound.permission_request=2`：**四次请求没发帧**。
+     * 而下面这四条路**每一条都不报错、都不抛、手机端长得一模一样**（什么都没有）：
+     *
+     * | 键 | 走到它意味着 |
+     * |---|---|
+     * | `held` | 正常：挂上了卡、发过首帧 ⇒ 手机该看得到 |
+     * | `no-target` | 没有能收消息的手机（`!sink` 或读不到 sessionId）⇒ **一张卡都不发**，整条交还桌面 |
+     * | `remembered` | 「本次会话内始终允许」命中 ⇒ **刻意不发帧**（省掉打扰就是它的全部意义） |
+     * | `no-answerer` | 两边都没答上（超时 / 平台撤回）⇒ 卡已作废 |
+     *
+     * ⚠️ `remembered` 这条最像"卡住了"：它在 `sessionAllowed` 表命中后**当场返回**，
+     * 手机一帧都收不到，而界面上「为什么这次没弹审批」**过去无迹可寻**
+     * ——`sessionAllowed` 的注释里本来就写着"但它要有计数"，而那个计数从未实现。
+     * ⇒ 这里补上。那条注释与这个字段是同一件事的两半。
+     */
+    /**
+     * 分流计数（三个平铺的数，与 `describe()` 的标量契约同款——
+     * 嵌套对象会逼着改端口契约，而那份契约是 `KernelPort.describe()` 的返回类型）。
+     *
+     * ⚠️ 键名与它们各自的**真实含义**逐条对着（2026-10-09 深度 review 的 A1）：
+     *
+     * | 键 | 真实含义 | **不**代表什么 |
+     * |---|---|---|
+     * | `dispatched` | 已把这次请求交给内核的 sink（进了 race，等一个答案） | ❌ 不代表"帧已经发到手机上" |
+     * | `noTarget` | 没找到能收消息的手机 ⇒ 一张卡都不发，整条交还桌面 | |
+     * | `noAnswerer` | 两边都没答上（超时 / 平台撤回）⇒ 卡已作废 | |
+     *
+     * 原来这三个键叫 `held`/`noTarget`/`noAnswerer`，而 **`held` 这个名字是错的**：
+     * 自增点落在 `sink.approval(...)` 之后、`await Promise.race` 之前，是无条件的；
+     * 而 sink 就是 `runtime.onApprovalRequest` —— 它是 async 且 return 前没有 await，
+     * 所以它那三条早退（`noClient` / `aborted` / `remembered`，**一帧都没发**）
+     * 在调用方拿到 Promise 那一刻**已经跑完了**，于是它们全被记成了 `held`。
+     * ⇒ doctor 会同时打印「正常挂起 6」和「发帧之前就被判掉 4」，**前者是假的**。
+     *
+     * 「帧到底发没发」不归这里数：那是 `runtime` 的 `interactionDeclines` 与
+     * `outbound.permission_request` 的活（那两个数按早退理由分，且 wire 层另有一份）。
+     */
+    dispatched: number
+    noTarget: number
+    noAnswerer: number
   }
   const faces: Record<ParticipatedEvent, ParticipantFace> = {
     'approval/request': {
@@ -356,6 +402,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       last: 'not-called',
       desktopVoided: 0,
       handoff: 'unknown',
+      dispatched: 0,
+      noTarget: 0,
+      noAnswerer: 0,
     },
     'user-questions/request': {
       registered: 'not-attached',
@@ -363,6 +412,9 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       last: 'not-called',
       desktopVoided: 0,
       handoff: 'unknown',
+      dispatched: 0,
+      noTarget: 0,
+      noAnswerer: 0,
     },
   }
   /**
@@ -961,11 +1013,23 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     const attachments = services.attachments
     const admit = fn(attachments, 'admitPromptContent')
     if (!admit) {
+      /**
+       * 这句话是**用户唯一能看到的诊断**（它会带着 `图片附件被内核拒绝：` 前缀回到手机上），
+       * 所以必须说清三件事：缺的是哪个面、现场长什么样、用户现在能做什么。
+       *
+       * ⚠️ 2026-10-09 改写：原来只说"请把图片存成文件再发"，而实测那台主机上
+       * **文件附件是能用的、图片才是不能用的**（web profile 的 dsh 0.1.0-rc.6：
+       * `attachments` 服务在，但没有 `admitPromptContent`；模型适配器
+       * `dsh-llm-deepseek` 对任何图片内容直接抛 `UNSUPPORTED_CONTENT`）。
+       * 让人"把图片存成文件"在那一台上等于**指了一条走不通的路**。
+       * ⇒ 现在说"这台主机不支持图片附件"，并把两条真实成因（内核代际 / 服务面缺失）点出来。
+       */
       return {
         kind: 'rejected',
-        message: `这台主机的内核没有图片通路（commands=${shapeOf(commands)} attachments=${shapeOf(
-          attachments,
-        )}），请把图片存成文件再发`,
+        message:
+          `这台主机不支持图片附件（缺少内核的 admission 面：commands=${shapeOf(commands)} ` +
+          `attachments=${shapeOf(attachments)}；内核代际过旧时它的模型适配器也会直接拒绝图片内容）。` +
+          `文件附件不受影响，可以照常发。`,
       }
     }
     try {
@@ -1155,7 +1219,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
    */
   async function readHistory(
     sessionId: string,
-    page: { beforeSeq?: number; limit: number },
+    page: { beforeSeq?: number; since?: number; limit: number },
   ): Promise<KernelHistoryPage> {
     const read = fn(services.sessionQuery, 'readSession')
     if (!read) {
@@ -1182,6 +1246,15 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       sessionId,
       events,
       ...(page.beforeSeq === undefined ? {} : { beforeSeq: page.beforeSeq }),
+      // ⚠️ `since` 必须**真的传下去**。2026-10-08 之前这里只有 `beforeSeq`：
+      // `runtime.ts` 一直在传 `since`，而本函数的参数类型里没有它 ——
+      // 多出来的那个属性被 TypeScript 的结构化类型**静默忽略**，
+      // 于是 `cmd.session_history{since}` 走的还是"最新一页"，也就是 v2 的行为。
+      // 而所有测试跑的都是 `mock-kernel`（它实现了 since），所以**判据全绿**。
+      // 这正是"两条实现，一条跟上了"的典型形状：协议层与 mock 都对了，
+      // 真机上是全量重拉。纯函数 `historyPageFromLog` 现在有直测（见
+      // `tests/carrier-services.test.ts` 的补差量那组），缺口由此堵住。
+      ...(page.since === undefined ? {} : { since: page.since }),
       limit: page.limit,
       // 读历史的同时问一次"此刻在不在跑"：只有正在跑才允许把历史快照说成此刻的清单。
       running: agentStatus(sessionId) === 'running',
@@ -1487,6 +1560,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       // 这里**不 catch**：提问那条没人答时宿主本来就是抛 `NO_PROVIDER`，
       // 把它吞成值会改变宿主的错误形状（未配对的手机上"提问"就变成了一次空答案）。
       face.last = 'handed-back(no phone target)'
+      face.noTarget += 1
       const value = await next?.()
       return isApproval ? String(value ?? 'unavailable') : value
     }
@@ -1561,6 +1635,14 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     // 不算答案的那些取值换成"永远不落地"，于是 `Promise.race` 只会把真答案送出来；
     // 两边都收场了却都没有真答案时，由最后那条分支兜住（否则这里会挂死）。
     const pending = new Promise<{ src: 'phone' | 'desktop'; chain: Chain }>(() => {})
+    /**
+     * 记在 `race` **之前**：这一段里手机与桌面同时在答，
+     * 而 `no-answerer` 要等 race 结束才知道，所以两笔不会互相覆盖。
+     *
+     * ⚠️ 这一笔叫 `dispatched` 而不是 `held`：它只说明"**已交给内核**"，
+     * **不说明帧发到了手机上**（那三条早退一帧未发，见上面那张表的注释）。
+     */
+    face.dispatched += 1
     const winner = await Promise.race([
       phone.then((chain) => (chain.answered ? { src: 'phone' as const, chain } : pending)),
       desktop.then((chain) => (chain.answered ? { src: 'desktop' as const, chain } : pending)),
@@ -1570,6 +1652,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       // 两边都没答上：手机那一侧要作废（pending 删掉、`waiting` 归零、卡片收掉）。
       controller.abort('desktop')
       finish('settled-without-answer')
+      face.noAnswerer += 1
       if (isApproval) {
         face.last = 'handed-back(neither answered)'
         return 'unavailable'
@@ -1663,6 +1746,13 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     readHistory,
     newSession,
     subscribe,
+    /**
+     * 图片通路的现场读数（`ev.host_info.limits.maxImageAttachments` 与 status.json 共用这一份）。
+     *
+     * 做成方法而不是构造时算好的常量：服务是**后到**的（`ctx.inject`），
+     * 端口构造那一刻拿到的 `services` 还可能是空的。
+     */
+    imageFace: attachmentFace,
     attachInteractionSink,
     ensureRunnable,
     archiveSession,
@@ -1750,6 +1840,26 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         eventTypes: [...seenEventTypes].sort().join('|'),
         unmappedEventTypes: [...unmappedEventTypes].join('|'),
         injectedUserMessages: [...injectedUserMessages].map(([kind, count]) => `${count}×${kind}`).join('|') || 'none',
+        /**
+         * 四条分流（见 `ParticipantFace` 里那几个计数的注释）。
+         * `approvalCalls - 下面四个之和` = **在途未定**：不为 0 才是"有东西卡着"。
+         */
+        approvalDispatched: faces['approval/request'].dispatched,
+        /**
+         * 提问侧那三条分流（2026-10-09 深度 review 的 B3）。
+         *
+         * ⚠️ 它们原先**只算没人看**：`describe()` 只导出审批那三条，提问那三条是孤儿计数器
+         * —— 而这一轮用户报的原始症状恰恰是「小程序端的 question 弹窗不弹」。
+         * 审批能分诊、提问不能，等于**要查的那一半没有仪表**。
+         * ⚠️ 特别要说清 `questionsLast` 为什么不够用：`runtime` 的
+         * `noClient` / `aborted` 两条早退发生在 sink **之后**，参与器那侧压根没走到
+         * 任何一条会写 `last` 的分支 ⇒ 它停在 `'not-called'`，读起来像"没发生过"。
+         */
+        questionsDispatched: faces['user-questions/request'].dispatched,
+        questionsNoTarget: faces['user-questions/request'].noTarget,
+        questionsNoAnswerer: faces['user-questions/request'].noAnswerer,
+        approvalNoTarget: faces['approval/request'].noTarget,
+        approvalNoAnswerer: faces['approval/request'].noAnswerer,
         approvalFace: faces['approval/request'].registered,
         approvalCalls: faces['approval/request'].calls,
         approvalLast: faces['approval/request'].last,
@@ -2148,6 +2258,12 @@ export function historyPageFromLog(input: {
   sessionId: string
   events: Array<{ type?: unknown; seq?: unknown; data?: unknown }>
   beforeSeq?: number
+  /**
+   * **向前**补差量：取 `seq > since` 的那些。与 `beforeSeq` 互斥（`runtime.ts` 第二道）。
+   *
+   * 手机存的是"已看到的最大 seq"，所以它是**排他**下界——写成 `>=` 会把已看过的那条重发。
+   */
+  since?: number
   limit: number
   charBudget?: number
   /**
@@ -2161,10 +2277,26 @@ export function historyPageFromLog(input: {
   const { sessionId } = input
   const groups: Array<{ seq: number; events: KernelEvent[] }> = []
 
+  /**
+   * 这份日志里**所有**带 seq 的原始事件的取值区间（含被 `isHistoryWorthy` 过滤掉的类型）。
+   *
+   * 为什么不从 `groups` 上取：`groups` 只装"有内容"的事件，于是
+   * `turn/end`、`run_state` 这类被过滤掉的 seq 会让窗口起点**虚高**，
+   * 而窗口起点每高一个数，就会把一次本来能补上的差量误判成"补不回来"。
+   * 窗口是"这份日志覆盖到哪里"，与"我们往里放什么"是两件事。
+   */
+  let headSeq: number | undefined
+  let windowStart: number | undefined
+
   for (const raw of input.events ?? []) {
     const type = typeof raw?.type === 'string' ? raw.type : ''
+    const rawSeq = typeof raw?.seq === 'number' && Number.isFinite(raw.seq) ? raw.seq : undefined
+    if (rawSeq !== undefined) {
+      if (headSeq === undefined || rawSeq > headSeq) headSeq = rawSeq
+      if (windowStart === undefined || rawSeq < windowStart) windowStart = rawSeq
+    }
     if (!type) continue
-    const seq = typeof raw?.seq === 'number' && Number.isFinite(raw.seq) ? raw.seq : 0
+    const seq = rawSeq ?? 0
     const data = (raw?.data ?? {}) as LooseObject
     const mapped = sessionEventKernelEvents({ sessionId, type, seq, data })
     const kept = mapped
@@ -2180,6 +2312,31 @@ export function historyPageFromLog(input: {
     if (kept.length > 0) groups.push({ seq, events: kept })
   }
 
+  /**
+   * **保留窗口**（规范 §10.7 S4/S5）：`since` 落在窗口之外时 MUST 明确报错，
+   * MUST NOT 静默从窗口头部开始给。
+   *
+   * 为什么静默"少给几条"是最坏的处理：手机会以为补齐了，而中间那段
+   * **永远补不回来**——用户看到的是"消息偶尔少几行"，一条没有报错的丢失。
+   * 明确报错让客户端改走"重拉一页"这条路，那条路至少能拿到窗口内的全部内容。
+   *
+   * 窗口边界取 `windowStart - 1`：`since` 是**排他**下界，所以
+   * `since === windowStart - 1` 意味着"要的就是从日志第一条开始"，完整。
+   * 比它更早就说明 `(since, windowStart)` 之间**可能**有过被裁掉的事件，
+   * 而我们无法证明它没有——**无法证明完整就等于不完整**。
+   *
+   * ⚠️ 这一代载体读的是 `sessionQuery.readSession` 给的**整份**日志，所以窗口
+   * 名义上等于整条会话。真正会越界的场合只有一种：内核自己把日志裁剪过。
+   * 这也是为什么窗口起点必须从**原始日志**算（见上面 `windowStart` 的注释）——
+   * 从 `groups` 算会把过滤掉的 seq 当成"被裁掉的"，从而误报。
+   */
+  if (input.since !== undefined && windowStart !== undefined && input.since < windowStart - 1) {
+    throw new Error(
+      `${HISTORY_WINDOW_EXCEEDED}: since=${input.since} 早于窗口起点 ${windowStart}` +
+        `（这条会话的日志最早只到 seq=${windowStart}，中间那段已经不在）`,
+    )
+  }
+
   // 一次调用里的所有 tool/call：它的结果在不在**整份日志**里。读历史时整份日志都到手了，
   // 所以这里能区分"这一步确实干完了"与"这一步没有下文"。
   const terminal = new Set<string>()
@@ -2191,24 +2348,67 @@ export function historyPageFromLog(input: {
     }
   }
 
+  /**
+   * 两个方向**互斥**，这里按"至多一个生效"取（`runtime.ts` 已经先拒了一道，
+   * 而它是"回错误"，不是"挑一个"—— 所以走到这里时两者不可能同时有值）。
+   */
   const ranged = collapseTodoSnapshots(
-    input.beforeSeq === undefined ? groups : groups.filter((group) => group.seq < input.beforeSeq!),
+    groups.filter((group) => {
+      if (input.since !== undefined) return group.seq > input.since
+      if (input.beforeSeq !== undefined) return group.seq < input.beforeSeq
+      return true
+    }),
   )
   const limit = Math.max(1, input.limit)
   const budget = input.charBudget ?? HISTORY_CHAR_BUDGET
 
-  // 从**后往前**取，保证拿到的是"最近的一页"，而不是会话开头。
+  /**
+   * ## 取页方向：`since`（补差量）**从早到晚**，其余两条**从晚到早**
+   *
+   * 2026-10-08 定案。原来两个方向都用"从后往前取"，而对**补差量**来说那是错的，
+   * 错法还很安静：
+   *
+   * `since=100`、范围 101–500、`limit=40` 时，从后往前取回的是 **461–500**，
+   * 而 `latestSeq` 报的是**这一页的页顶 500**。手机拿它当游标带回来要下一段，
+   * 得到的是空页（范围 501–500），于是它**正常收工** —— 而 101–460 那一整段
+   * 从来没到过手机上，两端都不报错。
+   *
+   * 从早到晚取就没有这个问题：回来的必然紧接 `since`，`latestSeq` 是这一段的页顶，
+   * 手机下一次带它回来就接着往下走，**一格一格推进直到补齐**。
+   *
+   * 另外两条路的方向不能跟着改：
+   * - **最新一页**（两个游标都不给）按定义就要最近的那一段，从早取会给出会话开头；
+   * - **`beforeSeq`（往前翻）**取的也是"比这个游标早的最近一段"，同理。
+   *
+   * 这条方向差异**必须同时成立在 mock 与真实载体上**：`history-resume.test.ts` ⑤
+   * 就是钉它的（`{beforeSeq:6, limit:2}` 与 `{since:3, limit:2}` 必须给出同一段）。
+   * 两边不一致时的症状是"单测全绿、真机少一段"，所以判据放在**对拍**上而不是各测各的。
+   */
+  const forward = input.since !== undefined
   const page: typeof groups = []
   let items = 0
   let chars = 0
-  for (let i = ranged.length - 1; i >= 0; i--) {
-    const group = ranged[i]!
-    // 已经够一页了：**但至少给一组**，否则 limit 很小时会产出一张空页而游标还在动。
-    if (page.length > 0 && (items >= limit || chars >= budget)) break
-    const normalized = group.events.map((event) => normalizeHistoryEvent(event, terminal))
-    page.unshift({ seq: group.seq, events: normalized })
-    items += normalized.length
-    chars += normalized.reduce((sum, event) => sum + charCountOf(event), 0)
+  if (forward) {
+    for (let i = 0; i < ranged.length; i++) {
+      const group = ranged[i]!
+      // 已经够一页了：**但至少给一组**，否则 limit 很小时会产出一张空页而游标还在动。
+      if (page.length > 0 && (items >= limit || chars >= budget)) break
+      const normalized = group.events.map((event) => normalizeHistoryEvent(event, terminal))
+      page.push({ seq: group.seq, events: normalized })
+      items += normalized.length
+      chars += normalized.reduce((sum, event) => sum + charCountOf(event), 0)
+    }
+  } else {
+    // 从**后往前**取，保证拿到的是"最近的一页"，而不是会话开头。
+    for (let i = ranged.length - 1; i >= 0; i--) {
+      const group = ranged[i]!
+      // 已经够一页了：**但至少给一组**，否则 limit 很小时会产出一张空页而游标还在动。
+      if (page.length > 0 && (items >= limit || chars >= budget)) break
+      const normalized = group.events.map((event) => normalizeHistoryEvent(event, terminal))
+      page.unshift({ seq: group.seq, events: normalized })
+      items += normalized.length
+      chars += normalized.reduce((sum, event) => sum + charCountOf(event), 0)
+    }
   }
 
   const flat: KernelEvent[] = []
@@ -2232,6 +2432,16 @@ export function historyPageFromLog(input: {
   // 一份清单顶不满（wire 1.5.0 同一口径）。
   // 不用再判 `running`：**上一段的过滤器已经保证 `flat` 里一条 todo 都没有**
   // （不在跑时整条被丢掉）。再判一遍是同一件事说两遍，而两遍里总有一遍会先被放宽。
+  //
+  // ⚠️ **`since`（补差量）这一路也必须补**（2026-10-08 试图加护栏，被反向判据挡下）。
+  // 当时的推理是"差量页塞一份历史快照 = 把可能过期的清单当成此刻的清单重发"。
+  // 那个推理是**错的**：`ranged` 上面已经按 `seq > since` 过滤过，
+  // 所以回填捞出来的必然是"手机还没看过的那段里的最新一份"，不可能是旧的。
+  //
+  // 而拦掉它的代价是**静默丢一条待办**：待办的 seq 落在差量范围内、却被
+  // `limit`/`charBudget` 挤到页窗口之外时（例如 limit=1），这一页报的 `latestSeq`
+  // 已经越过它 —— 手机下一次带 `since=latestSeq` 回来就要不到它了，而这一页也没给。
+  // 于是那一条待办在手机上**永远不出现**，且没有任何报错。这正是本条回填存在的理由。
   if (input.beforeSeq === undefined && !flat.some((event) => event.kind === 'todo')) {
     for (let i = ranged.length - 1; i >= 0; i--) {
       const snap = ranged[i]!.events.find((event) => event.kind === 'todo')
@@ -2247,9 +2457,34 @@ export function historyPageFromLog(input: {
   const earliest = page.length > 0 ? page[0]!.seq : undefined
   const hasEarlier = earliest !== undefined && ranged.some((group) => group.seq < earliest)
 
+  /**
+   * `latestSeq`：**这一页覆盖到的最大 seq**（规范 §10.7 S3，空页也要给）。
+   *
+   * ## 为什么是"这一页覆盖到的"而不是"会话此刻的 head"
+   *
+   * 手机存它的用途只有一个：重连时把它当 `since` 发回来。而 `since` 的语义是
+   * "我已看到的最大 seq"——所以这个字段必须回答"你手上现在有了什么"，
+   * 而不是"主机那边到哪了"。
+   *
+   * 反例（这个字段如果报 head 会怎样）：手机向后翻一页早期的历史，
+   * 却被告知 `latestSeq = head`，于是它把游标推到 head；等断线重连，
+   * 它带 `since=head` 回来要"还没看的那段"——而**中间那一大段它从没收到过**，
+   * 从此再也补不上。报 head 在"翻页"这条路上是**制造**一个静默空洞。
+   *
+   * 取 head 的只有三种情形，三种都对：
+   * - 要最新一页（连 `beforeSeq` 都不给）⇒ 页顶就是 head；
+   * - 最新一页恰好是空的 ⇒ 用 head，手机下次不必重问；
+   * - 补差量且没有新内容 ⇒ 用 `since`，游标原地不动（下次还是问同一段）。
+   */
+  const latestSeq = page.length > 0 ? page[page.length - 1]!.seq : input.since !== undefined ? input.since : headSeq
+
   return {
     events: flat,
     ...(hasEarlier ? { nextBeforeSeq: earliest } : {}),
+    // 一条带 seq 的原始事件都没有时（夹具、或内核那一代的形状变了）**不给这个字段**：
+    // 它是可选字段，缺省的含义就是"这一代宿主报不出游标"，手机据此走 v2 的重拉一页。
+    // 硬填一个 0 会让手机认为"我看到 seq 0 了"，那是一个假事实。
+    ...(latestSeq === undefined ? {} : { latestSeq }),
   }
 }
 

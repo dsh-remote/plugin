@@ -1,4 +1,5 @@
 import type { KernelEvent } from '../src/ports/index.js'
+import { HISTORY_WINDOW_EXCEEDED } from '../src/ports/index.js'
 /**
  * carrier-services.test — `platform/carrier-services.ts` 的内核调用形状。
  *
@@ -461,6 +462,21 @@ test('拿不到会话或手机没答上时要交还桌面，并把"交还了"记
     '交还原因没进 status.json：下次又要从"为什么没弹"猜起',
   )
   assert.equal((kernel.describe() as Record<string, unknown>).approvalCalls, 2)
+  /**
+   * ⚠️ 这一格原先**没有判据**（2026-09-09 深度 review 的 B1）：
+   * `face.noAnswerer += 1` 那行删掉，全仓照样绿 —— 而它是"两边都没答上"唯一的读数。
+   * ⇒ 钉在这里（这一条本来就走到那条路），删掉自增行必须红。
+   */
+  assert.equal(
+    (kernel.describe() as Record<string, unknown>).approvalNoAnswerer,
+    1,
+    '「两边都没答上」必须计一次：没有它，这一格读数在排错时是空的',
+  )
+  assert.equal(
+    (kernel.describe() as Record<string, unknown>).approvalDispatched,
+    1,
+    '同一次请求**先**记 dispatched 再记 no-answerer（两者不互斥，见上面的口径注释）',
+  )
 })
 
 /**
@@ -1106,6 +1122,184 @@ test('历史：空日志给空页、且不给游标（"这个会话没有内容"
   const page = historyPageFromLog({ sessionId: 'ses_1', events: [], limit: 100 })
   assert.deepEqual(page.events, [])
   assert.equal(page.nextBeforeSeq, undefined)
+  assert.equal(
+    page.latestSeq,
+    undefined,
+    '一条带 seq 的原始事件都没有时不报游标：硬填 0 等于告诉手机"我看到 seq 0 了"，那是假事实',
+  )
+})
+
+// ── 补差量（`since`）：**真实实现**的判据 ─────────────────────────────
+//
+// ⚠️ 这一组的由来（2026-10-08）：`readHistory` 一直**不吃 `since`** ——
+// 它的参数类型里没有这个字段，于是 `runtime.ts` 传进来的那个属性被 TypeScript 的
+// 结构化类型**静默忽略**，`cmd.session_history{since}` 实际走的还是"最新一页"，
+// 也就是 v2 的行为。而 `history-resume.test.ts` 那三条测的全是 `mock-kernel`
+// （它实现了 since），所以**判据全绿而真机上是全量重拉**。
+//
+// 这正是 V3-PLAN §8.2 点名"最难查"的那种状态：协议层改了、mock 跟上了、
+// 真实载体没跟上。堵法是直接测**真实实现**那一段 —— `historyPageFromLog` 是纯函数，
+// 真实载体只是把 `readSession` 的日志喂给它，所以它就等于真实行为。
+
+/** 真机形状夹具里的 seq 取值区间（`realLog`：5,7,9,11,12,13,14,15）。 */
+const seqRange = (log: Array<{ seq: number }>) => ({
+  start: Math.min(...log.map((e) => e.seq)),
+  head: Math.max(...log.map((e) => e.seq)),
+})
+
+test('补差量：`since = 窗口起点-1`（= 要整份）与不给 `since` 的结果逐字相同', () => {
+  const log = realLog('ses_1')
+  const { start } = seqRange(log)
+  const base = { sessionId: 'ses_1', events: log, limit: 100 }
+  const whole = historyPageFromLog(base)
+  const fromHead = historyPageFromLog({ ...base, since: start - 1 })
+
+  // 这是**边界**：`since` 是排他下界，`start - 1` 恰好意味着"从日志第一条开始"。
+  // 差一个数就是"可能被裁掉了一段"（见下一条），所以这条边界值得单独钉。
+  assert.deepEqual(fromHead.events, whole.events, '边界处差量必须与整页逐字相同：多一条或少一条都是错')
+  assert.equal(fromHead.latestSeq, whole.latestSeq, '游标也要一致，否则手机下次问错范围')
+})
+
+test('补差量：`seq > since` 是**排他**的 —— 已看过的那条不许再出现', () => {
+  const log = realLog('ses_1')
+  const whole = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100 })
+  const isUserEcho = (e: KernelEvent) => e.kind === 'delta' && e.role === 'user'
+  assert.ok(whole.events.some(isUserEcho), '前提：整页里有那条 seq=9 的用户回声')
+
+  const diff = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, since: 9 })
+  assert.ok(
+    !diff.events.some(isUserEcho),
+    '`since` 写成 `>=` 会把手机已经看过的那条重发一遍 —— 用户看到自己刚说的话出现了两次',
+  )
+  assert.ok(diff.events.length > 0, 'seq=9 之后还有 11..14，差量页不该是空的')
+  assert.ok(diff.events.length < whole.events.length, '差量必须**真的**比整页小，否则它没在补差量')
+})
+
+test('补差量：`since` 落在窗口之外必须**明确抛错**，不许静默从窗口头开始给', () => {
+  const log = realLog('ses_1')
+  const { start } = seqRange(log)
+  // 边界外一个数：`since = start - 2` ⇒ (since, start) 之间可能有被裁掉的事件。
+  // 我们**无法证明它没有**，而无法证明完整就等于不完整（§10.7 S5）。
+  assert.throws(
+    () => historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, since: start - 2 }),
+    new RegExp(HISTORY_WINDOW_EXCEEDED),
+    '静默少给几条 = 手机以为补齐了，而中间那段永远补不回来；必须让它改走"重拉一页"',
+  )
+  // 反向：边界内一个数必须放行 —— 不能把"正好从日志第一条开始"也误判成越界，
+  // 那会让**每一次**正常重连都退化成重拉整页。
+  assert.doesNotThrow(() => historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, since: start - 1 }))
+})
+
+test('补差量：没有新内容时给空页 + `latestSeq = since`（游标原地不动，绝不倒退）', () => {
+  const log = realLog('ses_1')
+  const { head } = seqRange(log)
+  // head 那一组是 `turn/end`，被 isHistoryWorthy 挡掉 ⇒ 这一页一条可渲染的都没有。
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, since: head })
+  assert.deepEqual(page.events, [])
+  assert.equal(page.latestSeq, head, 'S3：空页也要给 latestSeq。报小 / 报 0 会让手机下次把整段历史重拉一遍')
+  assert.equal(page.nextBeforeSeq, undefined, '差量页不该给"加载更早"的游标：那是另一个方向')
+})
+
+test('`latestSeq` 报的是**这一页覆盖到的**最大 seq，不是会话 head（否则翻页会把游标推到 head）', () => {
+  const log = realLog('ses_1')
+  const { head } = seqRange(log)
+
+  const newest = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100 })
+  assert.ok(newest.latestSeq !== undefined, 'S3：每一页都要给 latestSeq')
+  assert.ok(newest.latestSeq! <= head, 'latestSeq 不可能超过日志的 head')
+
+  // 钉**语义**而不是那个数（`realLog` 的 seq 15 是 `turn/end`，不可渲染，
+  // 所以最新一页的页顶是 14 而不是 15 —— 硬写一个数只会把夹具的形状抄成契约）。
+  //
+  // 关键性质：拿这一页报的 `latestSeq` 当 `since` 再要一次，必须**空页**——
+  // 既没有重复（排他下界对了），也没有遗漏（页顶之后确实再没有可渲染的内容）。
+  // 这就是手机"记游标 → 重连带回来"那条闭环在宿主侧的等价物。
+  const again = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 100, since: newest.latestSeq! })
+  assert.deepEqual(again.events, [], '拿页顶当 since 再要一次必须是空页：重复或遗漏都会在这里露出来')
+  assert.equal(again.latestSeq, newest.latestSeq, '空页时游标原地不动')
+
+  // 向后翻页：报 head 会让手机把游标推到 head，而中间那段它从没收到过。
+  const one = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 2 })
+  const earlier = historyPageFromLog({
+    sessionId: 'ses_1',
+    events: log,
+    limit: 100,
+    beforeSeq: one.nextBeforeSeq ?? 0,
+  })
+  assert.ok(earlier.latestSeq !== undefined, '每一页都要给 latestSeq（S3）')
+  assert.ok(
+    earlier.latestSeq! < head,
+    '向后翻历史页时报 head，手机会把游标推到 head；等断线重连它带 `since=head` 回来要"还没看的那段"——' +
+      '而中间那一大段它从没收到过，从此再也补不上。报 head 在这条路上是**制造**静默空洞',
+  )
+})
+
+test('差量页也必须保待办：范围内有新待办、而它落在页窗口之外时靠回填补上（否则永远送不到）', () => {
+  // 构造：seq=9 是用户那句，seq=10 是一条待办，11 之后是工具与结论。
+  const block = realLog('ses_1')
+  const log = [
+    ...block.filter((e) => e.seq <= 9),
+    { type: 'todo/write', seq: 10, data: { todos: [{ content: '新待办', status: 'in_progress' }] } },
+    ...block.filter((e) => e.seq > 9),
+  ]
+
+  // `limit: 1` 把页窗口压到只剩最后一组 ⇒ 那条待办被挤出页外，只能靠回填补。
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 1, running: true, since: 9 })
+  const todos = todosIn(page) as Array<{ todos: Array<{ content: string }> }>
+
+  // ⚠️ 前提先钉住：这一页报的游标**越过了**那条待办。少了这一句，本判据在
+  // "游标没越过去、手机下次还会再要一次"的世界里也是绿的，而那种世界不存在。
+  assert.ok(page.latestSeq! >= 10, '前提：游标越过 seq=10，所以手机下一轮不会再要它')
+
+  assert.equal(
+    todos.length,
+    1,
+    '差量页把范围内的新待办丢了：它的 seq 在范围内、却被 limit 挤出页外，' +
+      '而游标已经越过它 ⇒ 手机**下一轮也不会再要**，那一条待办永远不出现、且没有任何报错',
+  )
+  assert.equal(todos[0]!.todos[0]!.content, '新待办')
+})
+
+test('差量页里的待办快照取的是**范围内**最后一份（不许把范围外的旧快照捞进来）', () => {
+  const block = realLog('ses_1')
+  const log = [
+    { type: 'todo/write', seq: 6, data: { todos: [{ content: '范围外的旧快照', status: 'pending' }] } },
+    ...block,
+    { type: 'todo/write', seq: 16, data: { todos: [{ content: '范围内的新快照', status: 'in_progress' }] } },
+  ]
+  const page = historyPageFromLog({ sessionId: 'ses_1', events: log, limit: 1, running: true, since: 9 })
+  const todos = todosIn(page) as Array<{ todos: Array<{ content: string }> }>
+  assert.equal(todos.length, 1)
+  assert.equal(
+    todos[0]!.todos[0]!.content,
+    '范围内的新快照',
+    '回填捞到了 `since` 之前的那份：那是手机**已经看过**的清单，重发就是在让它显示一件过时的事',
+  )
+})
+
+test('读历史带 `since`：载体必须把它**真的转给分页**（此前参数被静默忽略）', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  services.sessionQuery = {
+    readSession: (id: string) => Promise.resolve({ session: { id }, events: realLog(id) }),
+  }
+  const kernel = f.kernel(services)
+
+  // 这一条走的是完整的那条路：KernelPort.readHistory → sessionQuery.readSession → historyPageFromLog。
+  // 上面那几条测的是纯函数，这一条测"参数有没有真的传下去" —— 缺口正出在这里。
+  const whole = await kernel.readHistory!('ses_1', { limit: 100 })
+  const diff = await kernel.readHistory!('ses_1', { limit: 100, since: 9 })
+  assert.ok(
+    diff.events.length < whole.events.length,
+    '带 since 的请求返回的东西必须比整页少：一样多就说明 since 被忽略了（真机上表现为每次重连全量重拉）',
+  )
+  assert.ok(!diff.events.some((e) => e.kind === 'delta' && e.role === 'user'), '已看过的那条不许回来')
+  assert.ok(whole.latestSeq !== undefined, '整页也要给 latestSeq —— 手机靠它起步记游标')
+  assert.deepEqual(
+    (await kernel.readHistory!('ses_1', { limit: 100, since: whole.latestSeq })).events,
+    [],
+    '整页报的 latestSeq 必须是一个**能安全重连**的值：拿它当 since 再要一次应当没有新内容',
+  )
 })
 
 test('读历史走 sessionQuery.readSession，把它给的整份事件交给分页', async () => {
@@ -2368,4 +2562,127 @@ test('内核抛别的错时也如实上报，不吞掉（不假装成功）', as
   assert.equal(res?.ok, false)
   assert.match(res?.message ?? '', /归档会话失败/, '失败要说明是"归档"这一步失败的')
   assert.match(res?.message ?? '', /EACCES/, '底层原因要带出来：日志与用户那头都能查')
+})
+// ── 审批分流计数（2026-10-09 用户报「审批窗卡着、手机没有弹窗」时补）──
+/**
+ * 现场读数是 `kernel.approvalCalls = 6` 而 `outbound.permission_request = 2`：
+ * **四次请求没发帧**。而那四条路**每一条都不报错**、手机端长得一模一样（什么都没有）。
+ *
+ * 这个字段就是为了把那四条路分开——否则下一次只能重新猜一遍。
+ * ⚠️ 断言的是"每条路各自会被记到"，而不是某一个数字的绝对值：
+ * 绝对值随夹具变，而"这四条路一个都没被记过"才是缺陷。
+ */
+
+test('提问侧那三条分流也进了 status.json（2026-10-09 深度 review 的 B3）', async () => {
+  /**
+   * ⚠️ 提问侧那三个键原先**只在 describe() 里缺席**：算了、没人看、也没有判据。
+   * 而这一轮用户报的原始症状恰恰是「小程序端的 question 弹窗不弹」——
+   * 审批能分诊、提问不能，等于**要查的那一半没有仪表**。
+   *
+   * 特别要说清为什么 `questionsLast` 不够用：runtime 的 `noClient` / `aborted`
+   * 两条早退发生在 sink **之后**，参与器压根没走到任何会写 `last` 的分支
+   * ⇒ 它停在 `'not-called'`，读起来像"根本没发生过"。
+   */
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const listeners: Record<string, (...args: unknown[]) => unknown> = {}
+  services.on = (name: string, listener: (...args: unknown[]) => unknown) => {
+    listeners[name] = listener
+    return () => {}
+  }
+  const kernel = f.kernel(services)
+  kernel.attachInteractionSink!({
+    approval: async () => 'allowed-once',
+    question: async () => null,
+  })
+  const askQ = (request: unknown): Promise<unknown> =>
+    listeners['user-questions/request']!(request, async () => null) as Promise<unknown>
+
+  const d = () => kernel.describe() as Record<string, number>
+  assert.equal(d().questionsDispatched ?? 0, 0, '夹具自检：还没问过')
+
+  // ① 没有会话 id ⇒ 一张卡都不发，整条交还桌面
+  await askQ({ questions: [{ id: 'q1', question: '要哪个' }] })
+  assert.equal(d().questionsNoTarget, 1, '提问侧无目标要记（这一格原先是孤儿计数器，删掉全仓照样绿）')
+
+  // ② 有会话 ⇒ 交给内核
+  await askQ({ agent: { session: { id: 'ses_live' } }, questions: [{ id: 'q1', question: '要哪个' }] })
+  assert.equal(d().questionsDispatched, 1, '提问侧交给内核也要记')
+
+  // ③ 这三个键必须**真的出现在 describe() 里**（不是内部有、导出时漏掉）
+  for (const key of ['questionsDispatched', 'questionsNoTarget', 'questionsNoAnswerer']) {
+    assert.equal(typeof d()[key], 'number', `${key} 没进 describe()：读者在 status.json 里看不到它`)
+  }
+})
+
+test('审批分流：无目标 / 始终允许命中 / 没人答，各自都被记进 kernel.approvalPaths', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const listeners: Record<string, (...args: unknown[]) => unknown> = {}
+  services.on = (name: string, listener: (...args: unknown[]) => unknown) => {
+    listeners[name] = listener
+    return () => {}
+  }
+  const kernel = f.kernel(services)
+  let sinkCalls = 0
+  kernel.attachInteractionSink!({
+    approval: async () => {
+      sinkCalls += 1
+      return 'allowed-once'
+    },
+    question: async () => null,
+  })
+  const ask = (request: unknown): Promise<unknown> =>
+    listeners['approval/request']!(request, async () => 'unavailable') as Promise<unknown>
+  const paths = (): Record<string, number> => {
+    const d = kernel.describe() as Record<string, number>
+    // `?? 0`：describe() 的类型是 `Record<string, string|number|boolean>`，
+    // 取键给的是 `| undefined`。**不许用 `as number` 压掉它** ——
+    // 那样这条判据在字段真的改名时会读到 `undefined` 并恒绿（NaN 陷阱那一族）。
+    return {
+      dispatched: d.approvalDispatched ?? 0,
+      'no-target': d.approvalNoTarget ?? 0,
+      // `remembered` 归 runtime（`approvalScopeOf` 查表就在那一层），
+      // 所以**这条判据够不到它** —— 它由 runtime 的判据守着。
+      'no-answerer': d.approvalNoAnswerer ?? 0,
+    }
+  }
+
+  // ① 无目标：请求里没有会话 id ⇒ 一张卡都不发，整条交还桌面
+  await ask({ toolName: 'write_file' })
+  assert.equal(sinkCalls, 0, '没有会话 id 就不该问手机')
+  assert.equal(
+    paths()['no-target'],
+    1,
+    '没找到能收消息的手机时必须记 no-target —— 这一格就是「手机上没有卡」的第一嫌疑',
+  )
+
+  // ② 正常那条：已交给内核的 sink（进了 race，等一个答案）
+  await ask({ agent: { session: { id: 'ses_live' } }, toolName: 'write_file' })
+  assert.equal(paths().dispatched, 1, '交给内核的那一次要记 dispatched')
+  assert.equal(paths()['no-answerer'], 0, '手机答了 ⇒ 不该记 no-answerer（这一格是"两边都没答上"，不是"没答成"）')
+
+  // ③ 同会话同类别再来一次 ⇒ 第二次**不会**走到挂卡那条路（`held` 不再增加）。
+  //    ⚠️ 这一格在**参与器**这一层数不到「始终允许」命中——那条判定归 runtime，
+  //    由 `runtime.test.ts` 的 `alwaysAllowedHits` 那条守着。
+  await ask({ agent: { session: { id: 'ses_live' } }, toolName: 'write_file' })
+  assert.equal(paths().dispatched, 2, '第二次仍然交给内核（这一层不知道 runtime 会不会走「始终允许」）')
+
+  // ④ 在途未定的口径
+  // ⚠️ **不变量要按真实口径写**（2026-10-09 深度 review 的 A3）：
+  // `dispatched` 与 `no-answerer` **不是互斥的** —— 一次"两边都没答上"的请求
+  // 在同一趟里两笔都会 +1（先记 dispatched，race 结束再记 no-answerer）。
+  // ⇒ 「在途未定」只能是 `dispatched - no-answerer`，而**不是** `calls - Σ`：
+  // 那条公式可以为负，而 doctor 用 `calls > sum` 把它藏掉了，现场表现为"这一条读数永远不出现"。
+  const calls = (kernel.describe() as Record<string, number>).approvalCalls ?? 0
+  // `paths()` 的返回类型是 `Record<string, number>`，而**运行时**由 `?? 0` 兜着；
+  // 这里显式收窄，避免 `undefined` 混进算术（那正是本仓判据纪律里"恒绿"那一族的温床）。
+  const raw = paths()
+  const p2 = {
+    dispatched: raw.dispatched as number,
+    'no-target': raw['no-target'] as number,
+    'no-answerer': raw['no-answerer'] as number,
+  }
+  assert.equal(calls, p2.dispatched + p2['no-target'], '每一次请求要么交还桌面、要么交给内核，二者相加等于总次数')
+  assert.ok(p2.dispatched - p2['no-answerer'] >= 0, `在途未定不许为负：${JSON.stringify(p2)}`)
 })

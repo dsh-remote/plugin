@@ -43,7 +43,7 @@ export interface PluginConfig {
    *
    * 2026-10-03 这一半原来是"右栏自动弹码"（独立 cordis 条目，键名
    * `sidebarQr`，带 `imageFile`/`refreshMs` 两个落盘参数）。那套删了之后 pill 不需要任何
-   * 宿主侧节拍与落盘——它要图的时候自己发请求。剩下的唯一开关就是"挂不挂那四条路由"。
+   * 宿主侧节拍与落盘——它要图的时候自己发请求。剩下的唯一开关就是"挂不挂那六条路由"。
    *
    * ⚠️ 这里的键**绝不能是 error 级**：error 会让主插件整个不启动，那等于把一个界面功能
    * 变成配对链路的单点。同理 `pill.enabled:false` 的代价要能被查见（见 index.ts 的 problems）。

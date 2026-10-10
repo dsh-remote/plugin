@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Remote control",
+    "description": "Pairs this machine with the relay so WeChat can send prompts, watch streaming output, and answer approvals. End-to-end encrypted payloads."
+  }
+}

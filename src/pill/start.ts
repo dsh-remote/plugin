@@ -1,5 +1,5 @@
 /**
- * pill — 状态栏那颗 pill 的宿主侧接线：软探测 `webServer`、挂四条路由、收干净。
+ * pill — 状态栏那颗 pill 与设置页的宿主侧接线：软探测 `webServer`、挂六条路由、收干净。
  *
  * 2026-10-03 这一半原来还带着"右栏自动弹码"：按节拍看当前码、渲染 PNG、写进会话工作区、
  * 再经一条只读路由把 `dsh-resource://` 地址交给浏览器面。那套整个删了——配对入口现在只有
@@ -20,6 +20,7 @@
  * 否则表现就是"配不了对且没有任何地方说为什么"。
  */
 import { registerPillRoutes, type PillRouteDeps, type WebServerLike } from './routes.js'
+import { miniprogramImageExists, readMiniprogramImage } from './miniprogram.js'
 
 /** 只用到 ctx 的几个成员，所以不硬依赖 `@deepseek-ai/cordis` 的类型。 */
 interface LooseContext {
@@ -31,11 +32,11 @@ export interface PillHandle {
   stop(): void
   /** 排错入口：为什么没起 / 服务是从哪条路拿到的 / 路由挂上没。 */
   readonly probe: Record<string, string>
-  /** 那四条路由**是否真的挂上了**——没挂上就没有配对入口。 */
+  /** 那六条路由**是否真的挂上了**——没挂上就没有配对入口。 */
   readonly available: boolean
 }
 
-/** 起 pill 的那四条路由。`enabled:false` 时什么都不做。返回句柄；`stop()` 幂等。 */
+/** 起那六条路由。`enabled:false` 时什么都不做。返回句柄；`stop()` 幂等。 */
 export function startPill(ctx: LooseContext, deps: PillRouteDeps & { enabled: boolean }): PillHandle {
   const { log } = deps
   const probe: Record<string, string> = {}
@@ -53,9 +54,25 @@ export function startPill(ctx: LooseContext, deps: PillRouteDeps & { enabled: bo
         current: () => deps.current(),
         status: () => deps.status(),
         unpair: () => deps.unpair(),
+        /**
+         * ⚠️ **优先用注入进来的那份**（2026-10-09 深度 review 的 C5）。
+         *
+         * 原来这里直接 `() => readMiniprogramImage()`，于是 `PillRouteDeps.miniprogramCode`
+         * 这个入参**从没有人读** —— `index.ts` 明明传了一份，改它却静默不生效，
+         * 而那份传参看上去又是"这里可以注入"的证据。两处同源、只有一处是真的。
+         *
+         * ⇒ 注入的那份优先，本地读只当兜底（夹具与旧调用点不传这个入参时仍能工作）。
+         */
+        miniprogramCode: () => (deps.miniprogramCode ? deps.miniprogramCode() : readMiniprogramImage()),
         log,
       })
       probe.routes = 'registered'
+      /**
+       * 小程序码那张静态图在不在包里。**单独探一条**：它不在时的表现是"设置页右栏那张卡
+       * 自己消失了"——与"路由没挂上"完全不同的症状，却会被人当成同一件事查。
+       * 它不影响 `available`（配对这条路一个字都不靠它）。
+       */
+      probe.miniprogramCode = miniprogramImageExists() ? 'ok' : 'missing'
     } catch (error) {
       probe.routes = `register threw: ${String((error as Error)?.message ?? error).slice(0, 80)}`
       started = false

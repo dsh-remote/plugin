@@ -15,6 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PairStore, defaultPairStoreFile, type StoredConversation } from '../src/shell/pair-store.js'
@@ -28,9 +29,6 @@ import { skipUnlessPosix as skipUnlessPosixRaw, skipIfCannotChmodDir } from './t
  */
 const POSIX_ONLY = skipUnlessPosixRaw()
 const SKIP_IF_NO_CHMOD_DIR = skipIfCannotChmodDir()
-
-
-
 
 function tempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'drc-pairstore-'))
@@ -189,49 +187,70 @@ test('markDirty 只标脏不写盘：高频变动（每次广播动 seqHost）�
 })
 
 test('默认路径跟着 status.json 走，且文件名带 hostId 片段', () => {
-  const file = defaultPairStoreFile('/tmp/x/status.json', 'drc-abc123')
-  assert.equal(path.dirname(file), '/tmp/x', '没跟 status.json 同目录：换目录后旧那份文件成了孤儿密钥')
+  // ⚠️ 断言一律用**平台原生的**目录（`os.tmpdir()` + `path.join`），不再写死 `/tmp/x`。
+  //   原来写死 POSIX 路径，在 win32 上 `path.dirname` 返回的是 `\tmp\x`，
+  //   与期望的 `/tmp/x` 差一个分隔符 —— **产品行为完全正确，断言却红**。
+  //   那类红会让人以为"Windows 不支持"，然后把测试关掉；而关掉的测试什么也证明不了。
+  const statusFile = path.join(os.tmpdir(), 'dsh-pair', 'status.json')
+  const file = defaultPairStoreFile(statusFile, 'drc-abc123')
+  assert.equal(path.dirname(file), path.dirname(statusFile), '没跟 status.json 同目录：换目录后旧那份文件成了孤儿密钥')
   assert.match(path.basename(file), /^conversations-drc-abc123-[0-9a-f]{8}\.json$/, `实际是 ${path.basename(file)}`)
 })
 
 test('hostId 里的路径分隔符不许把文件写到目录外面去', () => {
   // hostId 由配置给，不经 host-id.ts 那道正则——这里就是那道防线要生效的地方。
-  const escaped = defaultPairStoreFile('/tmp/x/status.json', '../../etc/evil')
-  assert.equal(path.dirname(escaped), '/tmp/x', `落点跑到 ${escaped} 的目录去了：一个含 "/" 的 hostId 就能写到任意路径`)
+  const statusFile = path.join(os.tmpdir(), 'dsh-pair', 'status.json')
+  const escaped = defaultPairStoreFile(statusFile, '../../etc/evil')
+  assert.equal(
+    path.dirname(escaped),
+    path.dirname(statusFile),
+    `落点跑到 ${escaped} 的目录去了：一个含 "/" 的 hostId 就能写到任意路径`,
+  )
 })
 
 test('收窄后的名字仍要为不同 hostId 分开：a/b 与 a_b 不能共用一份文件', () => {
-  const one = defaultPairStoreFile('/tmp/x/status.json', 'a/b')
-  const two = defaultPairStoreFile('/tmp/x/status.json', 'a_b')
+  const statusFile = path.join(os.tmpdir(), 'dsh-pair', 'status.json')
+  const one = defaultPairStoreFile(statusFile, 'a/b')
+  const two = defaultPairStoreFile(statusFile, 'a_b')
   assert.notEqual(one, two, '两个不同的 hostId 撞到同一个文件名：其中一台会把另一台的会话簿覆盖掉')
 })
 
 test('resolvePairStoreFile：默认自动、off 关掉、相对路径按 statusFile 目录解析', () => {
-  const base = { ...DEFAULT_CONFIG, statusFile: '/tmp/x/status.json' }
+  const dir = path.join(os.tmpdir(), 'dsh-pair')
+  const statusFile = path.join(dir, 'status.json')
+  const base = { ...DEFAULT_CONFIG, statusFile }
   assert.equal(
     resolvePairStoreFile(base, 'drc-a'),
-    defaultPairStoreFile('/tmp/x/status.json', 'drc-a'),
+    defaultPairStoreFile(statusFile, 'drc-a'),
     '默认必须是"跟着 status.json 走"：用户只配了 statusFile 就能得到免扫码重连',
   )
   assert.equal(resolvePairStoreFile({ ...base, pairStoreFile: 'off' }, 'drc-a'), '', 'off 没有关掉落盘')
   assert.equal(
     resolvePairStoreFile({ ...base, pairStoreFile: 'sub/x.json' }, 'drc-a'),
-    '/tmp/x/sub/x.json',
+    path.join(dir, 'sub', 'x.json'),
     '相对路径没有按 statusFile 目录解析',
   )
+  // 绝对路径那一档也用平台原生路径：win32 上 `C:\...` 是绝对路径，
+  // 而 `/var/lib/...` 在 win32 上**不算**（win32 认为 `/x` 是"根相对"，不是绝对路径），
+  // 拿 POSIX 绝对路径去测这条断言，在 Windows 上测的根本不是同一件事。
+  const absolute = path.join(dir, 'abs', 'keys.json')
   assert.equal(
-    resolvePairStoreFile({ ...base, pairStoreFile: '/var/lib/drc/keys.json' }, 'drc-a'),
-    '/var/lib/drc/keys.json',
+    resolvePairStoreFile({ ...base, pairStoreFile: absolute }, 'drc-a'),
+    absolute,
     '绝对路径被改道了：那是用户明确指定的位置',
   )
 })
 
 test('落盘文件不进版本库：它带 PSK，而测试用的工作目录可能就在仓库里', () => {
   // 真机上落点在 ~/.dsh 下（不进任何仓库）；这条守的是"测试与脚本别把它提交进去"。
-  // 四级：dist/tests → dist → packages/plugin → packages → **仓库根**。
+  //
+  // ⚠️ 读的是**包根**的 `.gitignore`（两级：dist/tests → dist → 包根），不是仓根。
+  //   第一版数了四级去够**单仓**的仓根，于是拆成独立仓之后（包根就是仓根）
+  //   它读到了仓根**外面**那份 —— 判据必红，而它守的东西其实还在。
+  //   包根在两种布局下都有 `.gitignore`，且规则就写在那里（见 packages/plugin/.gitignore）。
   // 用 `import.meta.url` 而不是 `__dirname`：本包是 ESM，`__dirname` 在这里根本不存在。
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
-  const ignore = readFileSync(path.join(repoRoot, '.gitignore'), 'utf8')
+  const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+  const ignore = readFileSync(path.join(pkgRoot, '.gitignore'), 'utf8')
   assert.match(
     ignore,
     /conversations-\*/,
