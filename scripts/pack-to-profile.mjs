@@ -152,16 +152,48 @@ function pnpmInstall(extraArgs) {
   execFileSync('pnpm', ['install', ...extraArgs], { cwd: PROFILE, stdio: 'inherit' })
 }
 
-process.stdout.write('→ pnpm install（在 profile 目录里，与 `dsh plugin add` 走的是同一条）…\n')
-try {
-  pnpmInstall([])
-  if (installedVersion() !== version) {
-    // 版本号没变而 tarball 内容变了时 pnpm 会认为依赖已满足，这一遍是把它打醒的。
-    process.stdout.write(`   装到的版本是 ${installedVersion()}，期望 ${version} —— 用 --force 重装一遍\n`)
-    pnpmInstall(['--force'])
+/**
+ * 装。**网络不通时自动退回 `--offline`**。
+ *
+ * ## 为什么需要这一段
+ *
+ * `pnpm install` 在 profile 目录里跑，会**顺带重解析 profile 的全部依赖** ——
+ * 其中两个第三方插件的 tarball 托管在 `github.com/.../releases/download/…`，
+ * 而**这台机器访问不了 `github.com`**（`api.github.com` 与 `codeload.github.com` 通，
+ * `github.com` 本身超时）。
+ *
+ * 症状不是"装不上我们这个包"，而是整条 `pnpm install` 因为**别人的包**超时而 abort。
+ * 而这两个包**早就在 pnpm store 里**（`~/Library/pnpm/store/v10/https+++github.com+…`），
+ * 所以 `--offline` 足以走通。
+ *
+ * ⚠️ 只在**第一次**普通安装失败时退回，且必须把原因喊出来 ——
+ * 否则"网络问题"会被 `--offline` 悄悄吃掉，而 store 缺包时报的错更难懂。
+ */
+function installWithOfflineFallback() {
+  try {
+    pnpmInstall([])
+  } catch (error) {
+    process.stdout.write(`   普通安装失败：${String(error?.message ?? error).split('\n')[0]}\n`)
+    process.stdout.write('   ⚠️ 多半是网络：profile 里**别人的**依赖托管在 github.com，而本机到它不通。\n')
+    process.stdout.write('   → 退回 --offline（那些包早就在 pnpm store 里，store 缺包会当场报错而不是静默跳过）\n')
+    try {
+      pnpmInstall(['--offline'])
+    } catch (offlineError) {
+      fail(
+        `--offline 也失败：${String(offlineError?.message ?? offlineError)}\n` +
+          '   这一条通常意味着 **store 里真的缺某个包**：先看上面 pnpm 报的是哪一个。\n' +
+          '   解法是让那一个包能装上（换镜像 / 手动放 store），而不是继续重试。',
+      )
+    }
   }
-} catch (error) {
-  fail(`pnpm install 失败：${String(error?.message ?? error)}`)
+}
+
+process.stdout.write('→ pnpm install（在 profile 目录里，与 `dsh plugin add` 走的是同一条）…\n')
+installWithOfflineFallback()
+if (installedVersion() !== version) {
+  // 版本号没变而 tarball 内容变了时 pnpm 会认为依赖已满足，这一遍是把它打醒的。
+  process.stdout.write(`   装到的版本是 ${installedVersion()}，期望 ${version} —— 用 --force 重装一遍\n`)
+  pnpmInstall(['--force'])
 }
 
 const got = installedVersion()
