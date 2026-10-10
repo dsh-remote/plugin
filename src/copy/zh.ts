@@ -68,8 +68,3 @@ export function waitingText(count: number): string {
 export function pairFailText(reason: string): string | undefined {
   return PAIR_FAIL_ZH[reason]
 }
-
-/** 判据与生成器要遍历的整张表（键 → 值），顺序即 JSON 里的顺序。 */
-export function allEntries(): Record<string, CopyEntry> {
-  return STATUS_ZH
-}

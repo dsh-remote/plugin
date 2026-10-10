@@ -28,7 +28,7 @@
  * 所以这里的出口是：**显式 warn 一次**，让运维知道"这台机器上没有 0600 这回事，
  * 请改用 NTFS ACL 或换 POSIX 平台"——而不是静默地把 `mode: 0o600` 当成已生效。
  */
-import { chmodSync, closeSync, existsSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Platform } from './paths.js'
 import { currentPlatform } from './paths.js'
@@ -196,21 +196,6 @@ function writeSecureInner(
  * v2 里这条逻辑被抄在 `pair-store.ts` 的 catch 里（它得自己拼 tmp 名才能删），
  * 于是它只保护了五处中的一处。收敛到端口之后，**每一处**都自动获得这条保护。
  */
-export function clearSecureTemp(target: string): void {
-  try {
-    unlinkSync(`${target}.tmp-${process.pid}`)
-  } catch {
-    /* 本来就没有 */
-  }
-}
-
-/**
- * 文件是否已存在（判据与 `writeSecure` 共用同一套语义）。
- */
-export function secureFileExists(target: string): boolean {
-  return existsSync(target)
-}
-
 /**
  * Windows 的保留设备名。`con.txt` 与 `CON` **同样**是保留的（扩展名不解除保留），
  * 而 v2 的 `safeSegment` 只留 `[A-Za-z0-9._-]`，完全没拦这一类 ——
