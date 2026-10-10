@@ -2695,3 +2695,88 @@ test('审批分流：无目标 / 始终允许命中 / 没人答，各自都被�
   assert.equal(calls, p2.dispatched + p2['no-target'], '每一次请求要么交还桌面、要么交给内核，二者相加等于总次数')
   assert.ok(p2.dispatched - p2['no-answerer'] >= 0, `在途未定不许为负：${JSON.stringify(p2)}`)
 })
+
+/**
+ * ⚠️ **第 4 档兜底：问 DSH 自己的工作区账**（2026-10-10 补）。
+ *
+ * 用户报「从小程序创建的 session 目前还是未分组」。查下来的根因是**死循环**：
+ *
+ * - ①②③ 三档都要"**已经有一条带 cwd 的会话**"才推得出来；
+ * - 而手机建的第一条会话天然没有 cwd ⇒ 进 未分组 ⇒ 它自己也成不了下一条的参照；
+ * - ⇒ 这台机器上只要没有一条带 cwd 的**活跃**会话，手机建的**每一条**都进 未分组。
+ *
+ * 第 4 档问 `workspaceRegistry.list()`（DSH 侧栏那些项目，`path` 是它 realpath 过的
+ * 规范路径）—— 那不是猜，是问。取 `[0]` = 用户侧栏里排在最前的那个。
+ */
+test('新建会话的 cwd：前三级全落空时问 DSH 的工作区账（否则手机建的第一条永远是未分组）', async () => {
+  const f = fixture()
+  const asked: unknown[] = []
+  const services = f.bundle({ live: true })
+  // 一条带 cwd 的会话都没有 —— 这正是"手机建的第一条"的处境，也是死循环的起点。
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_ungrouped', createdAt: 1_700_000_000_000 } }]),
+  }
+  services.workspaceRegistry = {
+    ...(services.workspaceRegistry as object),
+    list: () => [{ id: 'w-1', path: platformPath('data-warehouse'), title: 'data-warehouse', createdAt: 'x' }],
+  }
+  services.sessionController = {
+    commands: {
+      create: (request: unknown) => {
+        asked.push(request)
+        return Promise.resolve({ sessionId: 'session-registry' })
+      },
+    },
+  }
+  await f.kernel(services).newSession!()
+  assert.deepEqual(
+    asked,
+    [{ cwd: platformPath('data-warehouse') }],
+    '前三档全落空时必须问工作区账：不问的话手机建的会话进 未分组，而它自己又成不了下一条的参照（死循环）',
+  )
+})
+
+test('反向：registry 没有 list（或它是空的）⇒ 退回今天的行为，且不许因此让新建失败', async () => {
+  const f = fixture()
+  const asked: unknown[] = []
+  const services = f.bundle({ live: true })
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_ungrouped', createdAt: 1 } }]),
+  }
+  // 这一代 registry 没有 `list`：**不能抛**，必须退回"不带 cwd"的老行为
+  services.workspaceRegistry = { ...(services.workspaceRegistry as object), list: undefined }
+  services.sessionController = {
+    commands: {
+      create: (request: unknown) => {
+        asked.push(request)
+        return Promise.resolve({ sessionId: 'session-nofallback' })
+      },
+    },
+  }
+  await f.kernel(services).newSession!()
+  assert.deepEqual(asked, [{}], '拿不到工作区账时退回老行为（内核用宿主默认目录），而不是把新建弄失败')
+
+  // 反向之二：`list()` **抛** 也一样 —— 它是别的包提供的服务，坏掉不该挡住建会话
+  const f2 = fixture()
+  const asked2: unknown[] = []
+  const services2 = f2.bundle({ live: true })
+  services2.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_ungrouped', createdAt: 1 } }]),
+  }
+  services2.workspaceRegistry = {
+    ...(services2.workspaceRegistry as object),
+    list: () => {
+      throw new Error('registry exploded')
+    },
+  }
+  services2.sessionController = {
+    commands: {
+      create: (request: unknown) => {
+        asked2.push(request)
+        return Promise.resolve({ sessionId: 'session-threw' })
+      },
+    },
+  }
+  await f2.kernel(services2).newSession!()
+  assert.deepEqual(asked2, [{}], 'registry.list() 抛错时同样退回老行为：第 4 档兜底坏掉绝不能让"新建会话"失败')
+})

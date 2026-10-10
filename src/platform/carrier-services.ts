@@ -725,6 +725,49 @@ export function createServicesKernel(services: ServicesBundle, options: Services
           // 列表读失败不挡新建：退回旧行为（宿主默认目录），日志由 listSessions 自己记。
         }
       }
+      if (!cwd) {
+        /**
+         * ④：**问 DSH 自己有哪些工作区**（2026-10-10 补，用户报「从小程序创建的 session 还是未分组」）。
+         *
+         * ## 为什么前三档会全落空
+         *
+         * ①②③ 都需要"**已经有一条带 cwd 的会话**"才推得出来。而手机建的第一条会话
+         * 天然没有 cwd ⇒ 它进 未分组 ⇒ 它自己也成不了下一条的参照。
+         * 于是**这台机器上只要没有一条带 cwd 的活跃会话，手机建的每一条都进 未分组** ——
+         * 死循环，用户看到的正是"还是未分组"。
+         *
+         * ## 为什么问 registry 是对的
+         *
+         * `workspaceRegistry` 是 DSH 自己的工作区账（侧栏那些项目），
+         * `list()` 给的是 `{ id, path, title, createdAt }[]`，**path 是 `fs.realpath` 过的
+         * 规范路径**（DSH 自己保证）——正好是本函数要的东西。它不是猜，是问。
+         *
+         * 取 `[0]`：那是**用户在侧栏里排在最前**的那个工作区（顺序由 DSH 维护，
+         * `insertBefore` / pin 都作用在它上面），比"最近创建"更贴近"此刻在做的项目"。
+         *
+         * ## 为什么整段包 try 且只记日志
+         *
+         * 这是**第 4 档兜底**，它坏掉绝不能让"新建会话"这件事失败：拿不到就退回
+         * 今天的行为（内核用宿主默认目录 ⇒ 未分组）。registry 是别的包提供的服务，
+         * 各代际的成员名不一定一样（`list` 可能不在）—— 所以先 `fn()` 探成员再调。
+         */
+        try {
+          const listWorkspaces = fn(services.workspaceRegistry, 'list')
+          const all = listWorkspaces ? (listWorkspaces.call(services.workspaceRegistry) as unknown) : undefined
+          if (Array.isArray(all)) {
+            for (const entry of all) {
+              const candidate = String((entry as LooseObject | undefined)?.path ?? '').trim()
+              if (candidate && !badWorkspace(candidate)) {
+                cwd = candidate
+                cwdFrom = 'workspace-registry'
+                break
+              }
+            }
+          }
+        } catch (error) {
+          log('workspace registry lookup failed', { message: messageOf(error) })
+        }
+      }
       const request: Record<string, unknown> = cwd === '' ? {} : { cwd }
       if (cwd === '') log('new session without explicit cwd; host default applies', {})
       else log('new session cwd resolved', { from: cwdFrom, cwd: tailOfPath(cwd) })
