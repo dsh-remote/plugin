@@ -1446,8 +1446,8 @@ test('最后操作过的会话优先于"最新建的"：人在哪条会话里干
   services.sessionQuery = {
     listSessions: () =>
       Promise.resolve([
-        { header: { id: 'ses_newest', createdAt: 1_700_000_900_000, cwd: '/w/just-created' } },
-        { header: { id: 'ses_working', createdAt: 1_700_000_000_000, cwd: '/w/actually-working' } },
+        { header: { id: 'ses_newest', createdAt: 1_700_000_900_000, cwd: platformPath('just-created') } },
+        { header: { id: 'ses_working', createdAt: 1_700_000_000_000, cwd: platformPath('actually-working') } },
       ]),
   }
   services.sessionController = {
@@ -1479,7 +1479,7 @@ test('最后操作过的会话优先于"最新建的"：人在哪条会话里干
   await kernel.newSession!()
   assert.deepEqual(
     asked,
-    [{ cwd: '/w/actually-working' }],
+    [{ cwd: platformPath('actually-working') }],
     '落点必须是用户最后在动的那个分组，而不是 createdAt 最新那个',
   )
 })
@@ -1489,7 +1489,7 @@ test('没观测到任何事件时退回"往前扫"，而不是落空（未分组
   const asked: unknown[] = []
   const services = f.bundle({ live: true })
   services.sessionQuery = {
-    listSessions: () => Promise.resolve([{ header: { id: 'ses_a', createdAt: 2, cwd: '/w/a' } }]),
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_a', createdAt: 2, cwd: platformPath('a') } }]),
   }
   services.sessionController = {
     commands: {
@@ -1500,7 +1500,7 @@ test('没观测到任何事件时退回"往前扫"，而不是落空（未分组
     },
   }
   await f.kernel(services).newSession!()
-  assert.deepEqual(asked, [{ cwd: '/w/a' }], 'lastTouched 为空时必须落到扫描那一档，而不是 {}')
+  assert.deepEqual(asked, [{ cwd: platformPath('a') }], 'lastTouched 为空时必须落到扫描那一档，而不是 {}')
 })
 
 test('新建出来的会话自带落点：列表里立刻能看出它归在哪个分组', async () => {
@@ -1510,14 +1510,18 @@ test('新建出来的会话自带落点：列表里立刻能看出它归在哪�
   const f = fixture()
   const services = f.bundle({ live: true })
   services.sessionQuery = {
-    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1, cwd: '/w/proj' } }]),
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1, cwd: platformPath('proj') } }]),
   }
   services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'ses_fresh' }) } }
   const kernel = f.kernel(services)
 
   await kernel.newSession!()
   const fresh = (await kernel.listSessions(50)).find((item) => item.summary.id === 'ses_fresh')
-  assert.equal(fresh?.summary.workspace, '/w/proj', '新建那条的列表摘要必须带上 cwd：空 workspace 在 DSH 侧就是未分组')
+  assert.equal(
+    fresh?.summary.workspace,
+    platformPath('proj'),
+    '新建那条的列表摘要必须带上 cwd：空 workspace 在 DSH 侧就是未分组',
+  )
 })
 
 test('cwd 形状不对就不采用（落回下一档），而不是把脏路径交给内核', async () => {
@@ -1528,7 +1532,7 @@ test('cwd 形状不对就不采用（落回下一档），而不是把脏路径�
     listSessions: () =>
       Promise.resolve([
         { header: { id: 'ses_bad', createdAt: 3, cwd: 'relative/not/absolute' } }, // 不是绝对路径
-        { header: { id: 'ses_ok', createdAt: 2, cwd: '/w/good' } },
+        { header: { id: 'ses_ok', createdAt: 2, cwd: platformPath('good') } },
       ]),
   }
   services.sessionController = {
@@ -1540,7 +1544,7 @@ test('cwd 形状不对就不采用（落回下一档），而不是把脏路径�
     },
   }
   await f.kernel(services).newSession!()
-  assert.deepEqual(asked, [{ cwd: '/w/good' }], '相对路径不能直接交给内核，要先跳过它')
+  assert.deepEqual(asked, [{ cwd: platformPath('good') }], '相对路径不能直接交给内核，要先跳过它')
 })
 
 test('新建的空会话必须出现在列表里 —— 持久化那面还没它，而它已经不是"不存在"', async () => {
@@ -1549,7 +1553,8 @@ test('新建的空会话必须出现在列表里 —— 持久化那面还没它
   // 持久化那面（sessionQuery.listSessions）扫的是会话**日志**，一条还没有任何消息的
   // 新会话根本没有日志。这里就模拟这个局面：它永远报不出新建的那条。
   services.sessionQuery = {
-    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/w/old' } }]),
+    listSessions: () =>
+      Promise.resolve([{ header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: platformPath('old') } }]),
   }
   services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'ses_fresh' }) } }
   const kernel = f.kernel(services)
@@ -1576,7 +1581,7 @@ test('持久化那面追上之后，本地那条临时记录要退休（不能�
   const f = fixture()
   const services = f.bundle({ live: true })
   const rows: Array<{ header: { id: string; createdAt: number; cwd?: string } }> = [
-    { header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/w/old' } },
+    { header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: platformPath('old') } },
   ]
   services.sessionQuery = { listSessions: () => Promise.resolve(rows) }
   services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'ses_fresh' }) } }
@@ -1585,11 +1590,11 @@ test('持久化那面追上之后，本地那条临时记录要退休（不能�
   assert.equal((await kernel.listSessions(50)).length, 2, '临时记录先顶上')
 
   // 宿主把这条落盘了 → 下一次列表里它由持久化那面给出（带 cwd 等真数据）
-  rows.push({ header: { id: 'ses_fresh', createdAt: 1_700_000_001_000, cwd: '/w/proj' } })
+  rows.push({ header: { id: 'ses_fresh', createdAt: 1_700_000_001_000, cwd: platformPath('proj') } })
   const real = await kernel.listSessions(50)
   assert.equal(real.length, 2, '两边都有它的时候不许出现两条')
   const fresh = real.find((item) => item.summary.id === 'ses_fresh')
-  assert.equal(fresh?.summary.workspace, '/w/proj', '要让位给真数据，而不是继续用本地那条没 workspace 的')
+  assert.equal(fresh?.summary.workspace, platformPath('proj'), '要让位给真数据，而不是继续用本地那条没 workspace 的')
 })
 
 test('宿主没有 sessionController：明确说出缺什么，不许编一个 id 出来', async () => {
@@ -2356,8 +2361,8 @@ test('会话摘要的 updatedAt 是**最后活动时刻**，不是创建时刻�
   services.sessionQuery = {
     listSessions: () =>
       Promise.resolve([
-        { header: { id: 'ses_old', createdAt: CREATED, cwd: '/w/p' } },
-        { header: { id: 'ses_idle', createdAt: CREATED + 10_000, cwd: '/w/p' } },
+        { header: { id: 'ses_old', createdAt: CREATED, cwd: platformPath('p') } },
+        { header: { id: 'ses_idle', createdAt: CREATED + 10_000, cwd: platformPath('p') } },
       ]),
   }
   const listeners: Record<string, (...args: unknown[]) => void> = {}
@@ -2426,7 +2431,7 @@ test('待办双端一致：会话没在跑时，历史里那份旧快照**不许
           },
         ],
       }),
-    listSessions: () => Promise.resolve([{ header: { id: 'ses_x', createdAt: CREATED, cwd: '/w' } }]),
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_x', createdAt: CREATED, cwd: platformPath() } }]),
   }
   const kernel = createServicesKernel(services, { clock: new FakeClock(), log: () => {} })
 
