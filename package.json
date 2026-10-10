@@ -1,6 +1,6 @@
 {
   "name": "@dsh-remote/plugin",
-  "version": "3.0.6",
+  "version": "3.0.7",
   "description": "DSH Remote Control 的宿主侧插件：把本机 DeepSeek Harness 与中继配对，微信小程序可发指令、看流式输出、回答审批。载荷级端到端加密。",
   "type": "module",
   "license": "MIT",
