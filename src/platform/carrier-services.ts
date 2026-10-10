@@ -777,6 +777,45 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       )) as LooseObject | undefined
       const id = typeof made?.sessionId === 'string' ? made.sessionId : ''
       if (!id) return { ok: false, message: `新建会话没有返回 sessionId（拿到 ${shapeOf(made)}）` }
+      /**
+       * ⚠️ **把新会话登记进那个工作区**（2026-10-10 补，用户报「从小程序建的 session 还是未分组」）。
+       *
+       * ## 为什么"给了 cwd"还不够
+       *
+       * 同一天上一版（第 4 档兜底）只做到"把 `cwd` 传给内核"，于是会话**头部**确实带上了
+       * 正确的 cwd（真机取证：`session_projcache` 里 `identity.cwd = /Users/linbin/dsh-remote-v3`）。
+       * 但 DSH 侧栏的分组看的是**工作区的 `sessionIds`**，那个列表**不会**因为
+       * "头部有 cwd"就自动长出来 —— 会话必须被**显式登记**。
+       * 取证（`dsh-workspace`）：`Workspace.sessionIds` 是
+       * `record.sessionIds.filter((id) => host.sessionPath(id) === record.path)`，
+       * 而 `record.sessionIds` 只由 `attachSession()` 写入。
+       * ⇒ 表现正是"cwd 对了、侧栏里却仍在未分组"。
+       *
+       * ## 怎么做
+       *
+       * `workspaceRegistry.create(path)` —— "为已存在的目录创建**或复用**一个工作区"
+       * （重复调用返回既有实体、不改标题）⇒ 拿到 `Workspace`，再 `attachSession(id)`。
+       * `attachSession` 自己会读会话头部校验 cwd 是否等于工作区路径，不匹配就拒绝**且不写**
+       * —— 所以这一步不会把会话塞进错的分组。
+       *
+       * ## 为什么整段包 try、失败只记日志
+       *
+       * 会话**已经建好了**；登记只是"让它出现在侧栏的分组里"。这一步坏掉绝不能让用户看到
+       * "新建失败"（那样他会以为会话没建出来，而其实它在未分组里躺着）。
+       * 与第 4 档兜底同一个纪律。
+       */
+      if (cwd) {
+        try {
+          const registry = services.workspaceRegistry
+          const createWorkspace = fn(registry, 'create')
+          const workspace = createWorkspace ? await createWorkspace.call(registry, cwd) : undefined
+          const attach = fn(workspace, 'attachSession')
+          if (attach) await attach.call(workspace, id)
+          else log('workspace attachSession unavailable; session stays ungrouped', { keys: shapeOf(workspace) })
+        } catch (error) {
+          log('workspace attach failed; session stays ungrouped', { message: messageOf(error) })
+        }
+      }
       // 先记进 freshSessions：下一条列表推送就能带上它（见 listSessions 里的合并）。
       freshSessions.set(id, { id, createdAt: options.clock.now(), ...(cwd ? { cwd } : {}) })
       return { ok: true, sessionId: id }

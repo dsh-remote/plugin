@@ -2780,3 +2780,57 @@ test('反向：registry 没有 list（或它是空的）⇒ 退回今天的行�
   await f2.kernel(services2).newSession!()
   assert.deepEqual(asked2, [{}], 'registry.list() 抛错时同样退回老行为：第 4 档兜底坏掉绝不能让"新建会话"失败')
 })
+
+/**
+ * ⚠️ **建完会话要把它登记进工作区**（2026-10-10 补）。
+ *
+ * 上一版只做到"把 cwd 传给内核"，会话头部确实带上了 cwd，但 DSH 侧栏看的是
+ * 工作区的 `sessionIds` —— 那个列表只由 `attachSession()` 写入。⇒ 真机表现是
+ * "cwd 对了、侧栏里仍在未分组"（用户就是这么报的）。
+ *
+ * 这条钉两件事：**调了** `create(path)` → `attachSession(id)`；而且**顺序**是先拿
+ * 工作区再登记（反过来的话没有可登记的对象）。
+ */
+test('新建会话要登记进工作区（否则侧栏仍在未分组，尽管会话头部已经有 cwd）', async () => {
+  const f = fixture()
+  const calls: string[] = []
+  const services = f.bundle({ live: true })
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1, cwd: platformPath('proj') } }]),
+  }
+  services.workspaceRegistry = {
+    ...(services.workspaceRegistry as object),
+    list: () => [{ id: 'w-1', path: platformPath('proj'), title: 'proj', createdAt: 'x' }],
+    create: (path: string) => {
+      calls.push(`create:${path}`)
+      return Promise.resolve({ attachSession: (id: string) => calls.push(`attach:${id}`) })
+    },
+  }
+  services.sessionController = {
+    commands: { create: () => Promise.resolve({ sessionId: 'session-filed' }) },
+  }
+  const made = await f.kernel(services).newSession!()
+  assert.equal(made.ok, true)
+  assert.deepEqual(
+    calls,
+    [`create:${platformPath('proj')}`, 'attach:session-filed'],
+    '必须 create(cwd) 拿到工作区、再 attachSession(新会话 id)：只给 cwd 不登记，侧栏就还是未分组',
+  )
+})
+
+test('反向：登记失败不许让"新建会话"失败（会话已经建好了，它只是暂时未分组）', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1, cwd: platformPath('proj') } }]),
+  }
+  services.workspaceRegistry = {
+    ...(services.workspaceRegistry as object),
+    list: () => [{ id: 'w-1', path: platformPath('proj'), title: 'proj', createdAt: 'x' }],
+    create: () => Promise.reject(new Error('attach exploded')),
+  }
+  services.sessionController = { commands: { create: () => Promise.resolve({ sessionId: 'session-orphan' }) } }
+  const made = await f.kernel(services).newSession!()
+  assert.equal(made.ok, true, '登记失败不能让用户看到"新建失败"——会话其实建出来了，只是暂时未分组')
+  assert.equal(made.sessionId, 'session-orphan')
+})

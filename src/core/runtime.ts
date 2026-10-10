@@ -297,9 +297,9 @@ export class HostRuntime {
    * 混成一个"被拒 N 次"，就等于把"该修的"和"不该修的"捆在一起 ——
    * 而它们要的处置完全不同（前者要改代码，后者什么都不要改）。
    */
-  private readonly interactionDeclines = { noClient: 0, aborted: 0 }
+  private readonly interactionDeclines = { noClient: 0, offlineHold: 0, aborted: 0 }
 
-  get declined(): { noClient: number; aborted: number } {
+  get declined(): { noClient: number; offlineHold: number; aborted: number } {
     return { ...this.interactionDeclines }
   }
   /**
@@ -1362,16 +1362,48 @@ export class HostRuntime {
     signal?: AbortSignal
   }): Promise<ApprovalDecision> {
     const conversationId = this.pickConversation(info.sessionId)
-    if (!conversationId || !this.transport.hasClient(conversationId)) {
-      // ⚠️ **这一格是 2026-10-09 那次现场的主要嫌疑**：`permission_request` 发不出去、
-      // 而其它事件发得出去。理由必须留在日志里：下一次只看到一个计数没法往下查。
+    if (!conversationId) {
+      // ⚠️ **一台手机都没配过**（`conversationIds()` 为空）⇒ 交还桌面。
+      // 纯桌面用户从来没打算在手机上答，让他们每次审批白等 180 秒是错的。
       this.interactionDeclines.noClient += 1
-      this.log('approval dropped before any frame: no conversation with a live client', {
+      this.log('approval dropped before any frame: no conversation at all', {
         sessionId: info.sessionId,
-        conversationId: conversationId ?? '(none)',
         conversations: this.transport.conversationIds().length,
       })
       return 'decline'
+    }
+    if (!this.transport.hasClient(conversationId)) {
+      /**
+       * ⚠️ **配过手机、但此刻不在线 ⇒ 照样挂账，不再当场拒**（2026-10-10 改）。
+       *
+       * ## 改之前什么样（用户报「手机不在线时审批/提问卡还是会漏」）
+       *
+       * 原来这一支和上面那条**合并**成一个 `noClient`，处置都是 `return 'decline'`。
+       * 于是手机离线的后果不是"卡等在那儿"，而是**卡根本不存在**：
+       * 内核收到拒绝 ⇒ 那一轮被中断（真机截图里那句「这一轮被中断，这个工具没有返回结果」），
+       * `pending` 账里一条都没有 ⇒ 手机回来时 `replayPending` **无物可放**。
+       * 所以只补 `replayPending` 是不够的 —— 得先让卡生出来。
+       *
+       * ## 为什么"挂账"是安全的
+       *
+       * 1. **桌面侧不受影响**：我们只是不再替用户立刻拒绝。桌面那条审批链照常显示，
+       *    用户在电脑上点了 ⇒ `settle(id, …, 'desktop')` 走 `voidStaleCard`，
+       *    手机上那张（若推过）当场收掉，不留幽灵卡。
+       * 2. **有超时兜底**：审批 180s / 提问 300s 之后 `settle(…, 'timeout')` 自动收场，
+       *    与"手机在但没答"完全同一条路 —— 不是新的、没验证过的分支。
+       * 3. **只对"配过手机"的人生效**：没配过的走上面那一支，立刻交还桌面。
+       *
+       * ## 为什么单独计数，不并进 `noClient`
+       *
+       * 两个数要的处置**完全相反**：`noClient`（一台都没配）是正确行为；
+       * 这个是"配了但不在线 ⇒ 卡在等你"。混成一个数就分不出"该不该有卡"
+       * 与"卡为什么没到"，而那正是这一格存在的理由。
+       */
+      this.interactionDeclines.offlineHold += 1
+      this.log('approval held while the paired phone is offline; it will be replayed on reconnect', {
+        sessionId: info.sessionId,
+        conversationId,
+      })
     }
     /**
      * **进来就已经 abort 的信号：当场交还桌面，一张卡都不发**（2026-10-06）。
@@ -1462,14 +1494,24 @@ export class HostRuntime {
     signal?: AbortSignal
   }): Promise<AskUserQuestionAnswerValue | null> {
     const conversationId = this.pickConversation(info.sessionId)
-    if (!conversationId || !this.transport.hasClient(conversationId)) {
+    if (!conversationId) {
+      // 与审批那条**逐字同形**：一台手机都没配过 ⇒ 交还桌面（纯桌面用户不该白等 300 秒）。
       this.interactionDeclines.noClient += 1
-      this.log('question dropped before any frame: no conversation with a live client', {
+      this.log('question dropped before any frame: no conversation at all', {
         sessionId: info.sessionId,
-        conversationId: conversationId ?? '(none)',
         conversations: this.transport.conversationIds().length,
       })
       return null
+    }
+    if (!this.transport.hasClient(conversationId)) {
+      // 与审批那条**逐字同形**：配过手机但不在线 ⇒ 照样挂账，手机回来时由 `replayPending` 推给它。
+      // 两条必须一起改 —— 只改审批的话，提问仍然"离线即消失"，而它们在主机是同一份 `pending`、
+      // 同一个命令、同一段补拉（见 `cmd.get_pending` 的处理）。
+      this.interactionDeclines.offlineHold += 1
+      this.log('question held while the paired phone is offline; it will be replayed on reconnect', {
+        sessionId: info.sessionId,
+        conversationId,
+      })
     }
     // 与审批同一条：**已经 abort 的 signal 永远不会再触发监听器**，所以必须在
     // hold 与首帧之前判掉，否则手机上是 300 秒的死卡、挂锁也一直挂着（见审批那里的取证）。

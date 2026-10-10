@@ -742,7 +742,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          *
          * 这一格是"手机上没有那张卡"最直接的嫌疑：现场 `permission_request` 发不出去，
          * 而其它事件（`tool_event` / `message_delta`）发得出去 —— 差的就是这一格。
-         * `noClient` 可能是缺陷，`aborted` 多半是正确行为（平台自己撤回了请求）。
+         * `noClient`（一台手机都没配过 ⇒ 交还桌面）是正确行为；
+         * `offlineHold`（配过、但此刻不在线 ⇒ **挂账等它回来**）是 2026-10-10 补的那一支；
+         * `aborted`（平台自己撤回了请求）多半也是正确行为。
          * 混在一起数就分不出该修哪一个。
          */
         interactionDeclines: runtime?.declined ?? null,

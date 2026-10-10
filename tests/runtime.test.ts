@@ -100,6 +100,16 @@ class FakeTransport implements RuntimeTransport {
     this.peers.add(conversationId)
   }
 
+  /**
+   * 模拟"**配过手机，但此刻不在线**"：通道在（D3 说会话必须留着），对端不在。
+   *
+   * 这一档与 `pair()` 的区别正是 2026-10-10 那个修复的判据边界：
+   * 没有通道 ⇒ 交还桌面；有通道没对端 ⇒ **挂账等它回来**。
+   */
+  pairOffline(conversationId: string): void {
+    this.conversations.push(conversationId)
+  }
+
   ofType(type: string): EvPayload[] {
     return this.broadcasts.filter((payload) => payload.t === type)
   }
@@ -3581,7 +3591,7 @@ test('发帧之前被判掉的两种理由，审批与提问**各自**都会记�
   const { runtime, kernel, transport } = fixture()
   runtime.start()
   await settle()
-  assert.deepEqual(runtime.declined, { noClient: 0, aborted: 0 }, '起点必须是全零')
+  assert.deepEqual(runtime.declined, { noClient: 0, offlineHold: 0, aborted: 0 }, '起点必须是全零')
 
   // ① 两条都还没有任何带对端的通道 ⇒ 一张卡都不发
   void kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash' })
@@ -3751,4 +3761,42 @@ test('sendHostInfo 永不抛：它挂在 peer-joined 那条路上，异常会把
   transport.failOnReply = undefined
   assert.equal(runtime.sendHostInfo(cid), true, '"永不抛"不许退化成"永远失败"')
   assert.ok(lastReply(transport, PAYLOAD_TYPES.evHostInfo), '恢复之后必须真的发得出去')
+})
+
+/**
+ * ⚠️ **配过手机、但此刻不在线 ⇒ 挂账，不再当场拒**（2026-10-10，用户报
+ * 「手机不在线时审批/提问卡还是会漏」）。
+ *
+ * 这一档原来与"一台都没配"合并成一个 `noClient`，处置都是 `return 'decline'`。
+ * 于是手机离线的后果不是"卡等在那儿"，而是**卡根本不存在**：内核收到拒绝、
+ * 那一轮被中断（真机截图那句「这一轮被中断，这个工具没有返回结果」），
+ * `pending` 账里一条都没有 ⇒ 手机回来时 `replayPending` **无物可放**。
+ *
+ * ⚠️ **必须用干净夹具**：上面那条测试里已经有 `pair('c_abort')`，
+ * 而 `pickConversation` 是 `find(hasClient) ?? ids[0]` —— 复用它的话挑中的是
+ * 那条**有对端**的通道，走的是普通的 held 路，`offlineHold` 恒为 0。
+ * （第一版就是这么写的，判据红得莫名其妙。）
+ */
+test('配过手机但不在线：审批与提问都挂账（不是 decline），手机回来才有东西可推', async () => {
+  const { runtime, kernel, transport } = fixture()
+  runtime.start()
+  await settle()
+  assert.deepEqual(runtime.declined, { noClient: 0, offlineHold: 0, aborted: 0 }, '起点全零')
+
+  // 配过（通道在，D3 要求会话留着），但**对端不在**
+  transport.pairOffline('c_offline')
+
+  void kernel.sink?.approval({ sessionId: 'ses_live', action: 'Bash' })
+  await settle()
+  assert.equal(runtime.declined.offlineHold, 1, '配过但不在线：审批要挂账')
+  assert.equal(runtime.declined.noClient, 0, '它**不是** noClient —— 一台都没配才交还桌面')
+
+  void kernel.sink?.question({ sessionId: 'ses_live', questions: [{ id: 'q3', question: '离线也要挂吗' }] })
+  await settle()
+  assert.equal(runtime.declined.offlineHold, 2, '提问侧必须与审批逐字同形：只改审批的话提问仍然"离线即消失"')
+  assert.equal(runtime.declined.noClient, 0, '提问侧同样不许并回 noClient')
+
+  // 挂账的卡必须真的在 `pending` 里 —— 否则 `replayPending` 还是无物可放，
+  // 而那正是这个修复存在的全部理由。
+  assert.equal(runtime.pendingAsks.now, 2, '挂账的审批与提问都要进 pending 账')
 })

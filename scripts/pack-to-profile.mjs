@@ -37,8 +37,19 @@
  * （`src/platform/paths.ts`、`src/client/pill.ts`），不随包名变。
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -84,8 +95,29 @@ try {
 } catch (error) {
   fail(`npm pack 失败：${String(error?.message ?? error)}`)
 }
-const tgz = path.join(TGZ_DIR, path.basename(String(packed)))
-if (!existsSync(tgz)) fail(`npm pack 没产出预期文件：${tgz}`)
+const tgzRaw = path.join(TGZ_DIR, path.basename(String(packed)))
+if (!existsSync(tgzRaw)) fail(`npm pack 没产出预期文件：${tgzRaw}`)
+/**
+ * ⚠️ **落点必须带上内容的指纹**（2026-10-10 真机上踩到）。
+ *
+ * 原来这里是 `dsh-remote-plugin-<版本>.tgz`，而"版本没变、内容变了"是**开发期的常态**
+ * （同一天连改几轮，版本一直停在 3.0.7）。pnpm 按 **specifier + integrity** 认依赖：
+ * 路径没变、lockfile 里那条 integrity 还是旧的 ⇒ 它认为"已满足"，直接从 store 里
+ * 把**上一个构建**还原出来，`pnpm install` 打印 "Already up to date"。
+ *
+ * 后果非常隐蔽：脚本报告 ✅ 安装成功、`installedVersion()` 回读也是对的（版本确实没变），
+ * 而**跑的是旧代码**。我这一轮就中了：装完 grep 新加的日志串是 0 处，
+ * 而 `--force` 也**不解决**（它照样按旧 integrity 从 store 还原）。
+ *
+ * 所以文件名里带上内容哈希 ⇒ 内容一变 specifier 就变 ⇒ pnpm 必然重新解包。
+ * 比"改版本号"省事（不必动四个包的版本），也比"每次 --force"可靠。
+ */
+const digest = createHash('sha256').update(readFileSync(tgzRaw)).digest('hex').slice(0, 8)
+const tgz = path.join(TGZ_DIR, `dsh-remote-plugin-${version}-${digest}.tgz`)
+if (tgz !== tgzRaw) {
+  rmSync(tgz, { force: true })
+  copyFileSync(tgzRaw, tgz)
+}
 process.stdout.write(`   ${tgz}\n`)
 
 // ── 3. 改写 profile 的 package.json ─────────────────────────────────────
@@ -136,6 +168,46 @@ const got = installedVersion()
 if (got !== version) {
   fail(`装完回读仍是 ${got}，期望 ${version}。先确认 tarball 里确实是 ${version}：\n   tar -tzf ${tgz}\n`)
 }
+/**
+ * ⚠️ **版本号相等不等于跑的是新代码**（2026-10-10 真机踩到的那次）。
+ *
+ * 版本没变而内容变了时，只看 `installedVersion()` 会一路绿灯放行，而实际跑的是旧构建。
+ * 所以这里再比一次 **bundle 的内容指纹**：tarball 里的 `dist/bundle/index.js` 与
+ * 装完后 profile 里那份必须**逐字节相同**。
+ *
+ * 它挡的是"pnpm 从 store 还原了上一个构建"这一类静默失败 —— 那种情况下
+ * 版本号对得上、目录也在，唯一对不上的就是这个指纹。
+ */
+function bundleDigest(root) {
+  const file = path.join(root, 'dist', 'bundle', 'index.js')
+  if (!existsSync(file)) return null
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+let packedDigest = null
+try {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'dsh-remote-verify-'))
+  try {
+    execFileSync('tar', ['-xzf', tgz, '-C', tmp], { stdio: ['ignore', 'ignore', 'inherit'] })
+    packedDigest = bundleDigest(path.join(tmp, 'package'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+} catch (error) {
+  fail(`解包校验失败（tar 不可用？）：${String(error?.message ?? error)}`)
+}
+const installedDigest = bundleDigest(path.join(PROFILE, 'node_modules', BUNDLE_ID))
+if (packedDigest === null || installedDigest === null) {
+  fail(`读不到 bundle 指纹（packed=${packedDigest}，installed=${installedDigest}）`)
+}
+if (packedDigest !== installedDigest) {
+  fail(
+    `装完的 bundle 与 tarball **不是同一份**（版本都是 ${version}，所以只看版本号发现不了）：\n` +
+      `   tarball   ${packedDigest}\n   installed ${installedDigest}\n` +
+      `   这是 pnpm 按旧 integrity 从 store 还原了上一个构建。清掉 profile 的 pnpm-lock.yaml 里\n` +
+      `   那条 @dsh-remote/plugin 记录后重跑，或确认 tarball 文件名带上了内容哈希。\n`,
+  )
+}
+process.stdout.write(`   内容指纹核对通过：${installedDigest.slice(0, 12)}…\n`)
 
 // ── 5. 清掉旧装机方式留下的目录 ────────────────────────────────────────
 const legacy = path.join(PROFILE, 'node_modules', LEGACY_DIR)
