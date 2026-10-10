@@ -7,10 +7,10 @@
   "author": "dsh-remote",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dsh-remote/dsh-remote-plugin.git"
+    "url": "git+https://github.com/dsh-remote/plugin.git"
   },
-  "homepage": "https://github.com/dsh-remote/dsh-remote-plugin#readme",
-  "bugs": "https://github.com/dsh-remote/dsh-remote-plugin/issues",
+  "homepage": "https://github.com/dsh-remote/plugin#readme",
+  "bugs": "https://github.com/dsh-remote/plugin/issues",
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -58,8 +58,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "provenance": false,
-    "_whyNoProvenance": "2026-08-09 决定：同 protocol —— 无受支持 CI ⇒ 不带 provenance 发布（取舍记录见 docs/RELEASE.md）。"
+    "provenance": true
   },
   "scripts": {
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
