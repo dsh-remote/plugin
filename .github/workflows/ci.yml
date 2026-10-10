@@ -37,17 +37,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm format:check
-      # ⚠️ **临时诊断**（2026-10-10 加，拿到 Windows 的失败清单后删掉这一段的 tee/annotate）：
-      # 本机连不上 `github.com`，job 日志那个端点（几十 MB）抓十几次都超时，
-      # 而 **check-run annotations 是小的、能读到的**。
-      # ⇒ 把失败的用例名**变成 annotation**，就能从 API 拿到清单。
-      - name: test
-        shell: bash
-        run: |
-          set -o pipefail
-          pnpm test 2>&1 | tee test-output.log
-      - if: failure()
-        shell: bash
-        run: |
-          grep -aE "^not ok" test-output.log | head -40 | sed 's/^/::error::/' || true
-          echo "::error::—— 失败用例共 $(grep -acE '^not ok' test-output.log) 条 ——"
+      - run: pnpm test
