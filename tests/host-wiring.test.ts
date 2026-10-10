@@ -21,7 +21,7 @@
  * 判据落在**接线**上而不是"apply 没抛"：要求 `on('session/event'|…)` 真的被调到，
  * 并通过真实事件派发看到**出站帧计数**涨上来。
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -472,4 +472,86 @@ test('statusFile 有值：节拍仍然只有状态那一拍，没有多出一只
     wiring.dispose()
     assert.equal(clock.pending, 0, '停机后不留定时器')
   }
+})
+
+/**
+ * ⚠️ **重连时也要把挂着的审批/提问推一遍**（2026-10-10 补，用户报「手机不在线时卡还是会漏」）。
+ *
+ * ## 这条判据守的是什么
+ *
+ * `replayPending()` 本身有 4 条判据（`runtime.test.ts`），**它是对的**。
+ * 漏的是**接线**：它原来只在 `onPeerJoined`（配对那一刻）被调用，而
+ * **重连不走 `onPeerJoined`** —— 中继只在配对那一刻通知主机。
+ * 于是"手机退后台 / 断网，卡在期间产生，手机回来"这条路上主机从来不主动推，
+ * 只能等手机自己发 `cmd.get_pending`；而手机那条拉取只挂在 **chat 页**，
+ * 停在列表页时一个字都不拉 ⇒ 卡就漏了。
+ *
+ * `onClientRejoined` 的触发条件正是"这台手机的 clientId 第一次被加回成员表"
+ * （`relay.ts` 那段注释），也就是"手机回来了"的**唯一**可读点。
+ *
+ * ## 为什么是结构性判据而不是行为判据
+ *
+ * 行为判据要驱动 `onClientRejoined`，而它由 `apply()` **内部**构造的 transport 持有，
+ * 夹具拿不到那个 options 对象。所以这里钉**接线本身**：
+ * 读 `index.ts`，把 `onClientRejoined` 那个处理函数的函数体取出来，要求它调 `replayPending`。
+ *
+ * ⚠️ 结构性判据最怕"恒绿"（正则没匹配上也算过），所以下面带**夹具自检**：
+ * 拿一段**故意没有** `replayPending` 的同形代码喂同一个提取器，必须判红。
+ */
+test('接线：onClientRejoined 必须调 replayPending（重连那条路原来没有它）', () => {
+  // ⚠️ 判据跑的是 **dist/tests/** 里的编译产物 ⇒ 往上**两级**才是包根
+  //    （`dist/tests` → `dist` → 包根）。数错一层会得到 `dist/src/index.ts`，
+  //    报 ENOENT —— 而它看着像“源文件不见了”。单仓与独立仓两种布局下都是两级。
+  const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'index.ts'), 'utf8')
+
+  /** 从 `onClientRejoined:` 起，取到括号配平的那个函数体。 */
+  const handlerBodyOf = (text: string): string | null => {
+    const at = text.indexOf('onClientRejoined:')
+    if (at < 0) return null
+    const open = text.indexOf('{', at)
+    if (open < 0) return null
+    let depth = 0
+    for (let i = open; i < text.length; i += 1) {
+      if (text[i] === '{') depth += 1
+      else if (text[i] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open, i + 1)
+      }
+    }
+    return null
+  }
+
+  const body = handlerBodyOf(src)
+  assert.ok(body, 'index.ts 里找不到 onClientRejoined 的处理函数 —— 接线改名了？那这条判据要跟着改')
+
+  /**
+   * ⚠️ **必须剥注释再匹配**（真变异当场抓到的）：这个处理函数的注释里**成段地**
+   * 讨论 `replayPending`（那是它存在的理由），不剥的话 `/replayPending\(/` 会匹配到
+   * **注释里的那个词** —— 把调用整行删掉，判据照样绿。
+   *
+   * 这正是本仓反复记着的那族坑："判据读到了自己写的字面量"。
+   * 第一次写这条时我没剥，`-- 拿掉那行` 的变异**红了 0 条**，才发现的。
+   */
+  const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  assert.match(
+    code,
+    /replayPending\s*\(/,
+    'onClientRejoined 必须调 runtime.replayPending：**重连**是"手机回来了"的唯一可读点，' +
+      '而 replayPending 原来只挂在配对那条路上（onPeerJoined）⇒ 手机停在列表页时卡会漏。' +
+      '把它挪走或删掉之前，先看这条判据的注释与 runtime.ts 的 replayPending。',
+  )
+  // 顺序：能力面必须先到（手机 _onHelloOk 会把 hostCaps 清成 null，卡片渲染按它决定）
+  assert.match(code, /sendHostInfo\s*\(/, 'onClientRejoined 还要继续发 ev.host_info（规范 §13.2 L4）')
+  assert.ok(
+    code.indexOf('sendHostInfo') < code.indexOf('replayPending'),
+    'sendHostInfo 必须排在 replayPending 之前：手机 _onHelloOk 会把 hostCaps 清成 null，' +
+      '卡片渲染要按能力位决定，能力面后到会让它按"什么都不支持"降级',
+  )
+
+  // 夹具自检：同一段提取器喂一段**故意缺 replayPending** 的同形代码，必须判红
+  const decoy = 'onClientRejoined: (conversationId) => {\n  sendHostInfo(conversationId)\n},'
+  const decoyBody = handlerBodyOf(decoy)
+  assert.ok(decoyBody, '夹具自检：提取器对同形代码也要能取到函数体')
+  assert.doesNotMatch(decoyBody, /replayPending\s*\(/, '夹具自检：诱饵里本来就没有它，上面那条才不是恒绿')
 })

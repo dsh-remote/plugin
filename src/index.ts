@@ -386,6 +386,35 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
         if (runtime && !runtime.sendHostInfo(conversationId)) {
           log('host info not sent (client rejoined)', { conversationId })
         }
+        /**
+         * ⚠️ **重连时也要把挂着的审批/提问推一遍**（2026-10-10 补，用户报「手机不在线时卡还是会漏」）。
+         *
+         * ## 这一行原来只存在于「配对」那条路上
+         *
+         * `replayPending()` 一直只在 `onPeerJoined` 里被调用（配对那一刻），
+         * 而**重连不会走 `onPeerJoined`** —— 中继只在配对那一刻通知主机。
+         * 于是"手机退后台 / 断网，卡在期间产生，手机回来"这条路上，
+         * 主机**从来没主动推过**：它只能等手机自己发 `cmd.get_pending`。
+         *
+         * 而手机那条拉取只挂在 **chat 页**（`chat.js` 的 `status==='online'` 与 `onShow`）——
+         * 停在列表页时**一个字都不拉**。⇒ 卡就漏了。
+         *
+         * ## 为什么挂在这里是对的
+         *
+         * `onClientRejoined` 的触发条件就是"这台手机的 clientId **第一次**被加回成员表"
+         * （`relay.ts` 那段注释：`peer-left` 摘成员、这里加成员，两次之间的第一次加回
+         * 就是它回来了）—— 这正是"手机回来了"这个事实的**唯一**可读点。
+         * 配对那一刻不会重复触发（那条分支已经把它记进去了）。
+         *
+         * ## 顺序
+         *
+         * 排在 `sendHostInfo` **之后**：手机 `_onHelloOk` 里会把 `hostCaps` 清成 null，
+         * 卡片渲染要按能力位决定，所以能力面必须先到（与配对那条路同一个理由）。
+         *
+         * `replayPending` 自带 `hasClient` 守卫、永不抛（见它的第三条纪律），
+         * 所以这里不包第二层 try —— 与 `onPeerJoined` 那处逐字同形。
+         */
+        runtime?.replayPending(conversationId)
       },
       onConversationGone: (conversationId) => log('conversation gone', { conversationId }),
       onCommand: (conversationId, cmd: CmdPayload) => void runtime?.handleCommand(cmd, conversationId).catch(() => {}),
