@@ -1,0 +1,134 @@
+name: Release
+
+# 打一个 `v*` 标签即发布：**完整校验 → 版本号对得上标签 → 发 npm（带 provenance）→ 建 GitHub Release**。
+#
+# ## 前置条件：npm 侧要有指向**本仓、本文件**的 Trusted Publishing
+#
+#     npm trust github @dsh-remote/plugin --repo dsh-remote/plugin --file release.yml --allow-publish
+#
+# ⚠️ **`--file` 必须逐字等于本文件名。** npm 侧**不校验它存不存在** —— 2026-10-10 实测：
+# 拿一个根本不存在的文件名做 `--dry-run`，它照样打印"配好了"，一句警告都没有。
+# ⇒ 名字对不上时，那条信任关系会配得**看起来完全成功**，却永远等不到一次发布，
+# 而失败现场没有任何信号（不报错、不告警、CI 也不会红）。
+#
+# ## 下面每一步都对应一次真事故（不是防御性编程）
+#
+# 1. **`NODE_AUTH_TOKEN` 要显式清空**（见"发布到 npm"那步）：`actions/setup-node` 收到
+#    `registry-url` 之后会往 `.npmrc` 落一句 `_authToken=${NODE_AUTH_TOKEN}`，
+#    而 pnpm 在 OIDC 失败时会**静默回落成 token 发布** —— 版本发出去了、工作流是绿的、
+#    **attestation 一个没有**，日志里只有一行 `Skipped OIDC: … 404`。
+# 2. **发布要幂等**：版本号已在注册表就跳过，而不是让它 403 把后面的 GitHub Release 一起带走。
+# 3. **provenance 要独立验，且窗口给够**：工作流绿 ≠ 带 attestation（见第 1 条）；
+#    而窗口给小了会**假红**，把"版本号不可复用"变成一条死路。
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  # `contents: write` 只为最后建 GitHub Release；`id-token: write` 只为 OIDC。
+  # 这两个是本工作流**全部**的权限，别再加。
+  contents: write
+  id-token: write
+
+concurrency:
+  # 同一个标签不许并发跑两次：npm 版本号不可重用，撞上就是一次不可恢复的失败。
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 校验 · 发布 · 建 Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 生成 release notes 需要完整历史
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          # ⚠️ 这里可以用 `.nvmrc`（Node 22）—— 走的是 **pnpm** 的 OIDC 交换，与 npm CLI
+          # 的版本无关。若哪天改成 `npm publish`：Node 22 带的 npm 10.9.x **不支持**
+          # OIDC 换发布 token（要 >= 11.5.1），那时必须显式换成 Node 24。
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 装依赖（冻结 lockfile）
+        run: pnpm install --frozen-lockfile
+
+      # 标签也可能打在一个坏提交上 ⇒ 校验与 CI 同款，一步不少。
+      - name: typecheck · format:check · test
+        run: |
+          pnpm typecheck
+          pnpm format:check
+          pnpm test
+
+      - name: 标签必须与 package.json 的版本逐字一致
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          tag="${TAG_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          echo "标签 v$tag / package.json $version"
+          [ "$tag" = "$version" ] || {
+            echo "::error::标签 v$tag 与 package.json 的 $version 不一致 —— npm 版本号不可重用，先对齐再发。"
+            exit 1
+          }
+
+      - name: 发布到 npm
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          # **显式清空，不是"不设"**：`actions/setup-node` 收到 `registry-url` 之后会把它的
+          # `token` 输入（默认值 = `github.token`）写进 `NODE_AUTH_TOKEN`，并往
+          # `$NPM_CONFIG_USERCONFIG` 落一句 `_authToken=${NODE_AUTH_TOKEN}` —— 那一句就是
+          # pnpm **静默回落成 token 发布**的入口（本仓 v1.1.0 就是这么发出去的：版本发了、
+          # 工作流绿、attestation 一个没有）。清空之后 OIDC 是唯一路径：Trusted Publishing
+          # 没配好就直接红，红得看得见；以后谁往这里塞真 token 也回落不了。
+          NODE_AUTH_TOKEN: ''
+        # **幂等**：版本已在注册表就跳过 publish，而不是让它 403 把后面的 Release 一起带走。
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          if [ -n "$(npm view "@dsh-remote/plugin@${version}" version 2>/dev/null || true)" ]; then
+            echo "@dsh-remote/plugin@${version} 已经在注册表里：跳过 publish，往下建 Release"
+            exit 0
+          fi
+          pnpm publish --access public --no-git-checks
+
+      # 发完必须**独立验一次 provenance**：工作流绿不等于带 attestation（见上面那条回落）。
+      # ⚠️ 窗口给到 400s（80 × 5s），不是 60s：注册表侧的落地延迟不该由我们判红，而
+      # **假红比不红更坏** —— 它把"已发布的版本号不可复用"变成一条人去重发同一个号的死路。
+      - name: 验 provenance 真的挂上了
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          url="https://registry.npmjs.org/-/npm/v1/attestations/@dsh-remote/plugin@${version}"
+          for i in $(seq 1 80); do
+            if curl -s "$url" | grep -q '"attestations"'; then
+              echo "provenance 已挂上：@dsh-remote/plugin@${version}（第 ${i} 次轮询）"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::发布后 400s 仍查不到 @dsh-remote/plugin@${version} 的 attestation。先别重发 —— 版本号发出去就不可复用。"
+          echo "先手工复核一次：curl -s '$url'"
+          echo "确实没有，才说明 Trusted Publishing 没配好，或配的 workflow 文件名不是 release.yml："
+          echo "  npm trust github @dsh-remote/plugin --repo dsh-remote/plugin --file release.yml --allow-publish"
+          exit 1
+
+      - name: 建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --generate-notes
