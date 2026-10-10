@@ -1,11 +1,13 @@
-# ⚠️ **独立仓里的这个文件不是"工作区定义"，是 pnpm 的设置位**。
+# ⚠️ 独立仓里的这个文件不是"工作区定义"，是 pnpm 的设置位。
 #
 # pnpm 11 起，`allowBuilds` 这类设置读的是 `pnpm-workspace.yaml`（不再读
 # package.json 的 `pnpm` 段）。本仓没有别的包，所以这里的 `packages` 留空。
 #
-# 为什么必须有它：宿主插件的单文件打包走 esbuild，而 esbuild 的安装脚本要落下
+# 为什么必须有它：中继与插件的单文件打包走 esbuild，而 esbuild 的安装脚本要落下
 # **平台二进制**。pnpm 11 默认不执行任何依赖的安装脚本 ⇒ 报
 # `ERR_PNPM_IGNORED_BUILDS`，而且**连 `pnpm typecheck` 都会失败**
 # （pnpm 会先跑一次 deps-status 检查，那一步就是 `pnpm install`）。
+#
+# 由 `scripts/split-repos.mjs` 生成，不要手工改 —— 改了下次同步会被覆盖。
 allowBuilds:
   esbuild: true

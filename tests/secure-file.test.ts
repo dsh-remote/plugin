@@ -28,6 +28,7 @@ import {
   warnOnce,
   writeSecure,
 } from '../src/platform/secure-file.js'
+import { skipUnlessPosix } from './test-platform.js'
 
 const POSIX_ONLY = { skip: process.platform === 'win32' ? 'win32 没有 POSIX 权限位：chmod 只切只读位' : false }
 function tempDir(): string {
@@ -122,7 +123,10 @@ test('win32：写凭据文件必须留下**一条** warn（A2 判据最要紧的
   }
 })
 
-test('win32 之外不 warn（POSIX 上 chmod 是真生效的，不该制造噪音）', () => {
+// ⚠️ 这条判据的前提就写在名字里：「**win32 之外**」。在 win32 上 chmod 只切只读位，
+//    `writeSecure` **应该** warn —— 断言「0 次 warn」在那里必红。
+//    用现成的 `skipUnlessPosix()`：skip 必须带原因，否则 CI 变绿时没人知道它其实没测。
+test('win32 之外不 warn（POSIX 上 chmod 是真生效的，不该制造噪音）', skipUnlessPosix(), () => {
   const dir = tempDir()
   try {
     resetSecureFileWarnings()

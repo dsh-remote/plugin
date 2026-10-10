@@ -106,6 +106,28 @@ export function tailOfPath(raw: string, platform: Platform = currentPlatform()):
 }
 
 /**
+ * ⚠️ **按 `platform` 参数取路径语义，而不是用运行时的 `path`**（2026-10-10 修）。
+ *
+ * ## 这是一个真的跨平台缺陷，不是"测试写法问题"
+ *
+ * 本文件里每个函数都收一个 `platform` 参数，理由写在文件头上：
+ * 「`path.isAbsolute` 依赖**运行时**平台。判据必须能在 macOS 上验出 Windows 的行为」。
+ * 但**判定**用了参数、**拼接**却用了运行时的 `path` —— 于是同一个函数里两套语义：
+ *
+ *   · 在 Windows 上跑 `dataDir('darwin', { home: '/Users/x' })`
+ *     ⇒ 判定按 darwin（对），拼接按 win32（错）⇒ 返回 `\Users\x\.dsh\dsh-remote-control`，
+ *       一个 darwin 上根本不存在的路径。
+ *   · 在 macOS 上跑 `dataDir('win32', …)` 同理，只是方向相反。
+ *
+ * 真机上 `platform` 恒等于运行时平台（默认参数），所以**装机不受影响** ——
+ * 这正是它一直没被发现的原因：只有"显式传另一个平台"的判据会踩到，
+ * 而那恰恰是本文件头声明要支持的能力。
+ * 它是在四个开源仓的 CI **第一次真的在 windows-latest 上跑起来**时暴露的
+ * （2026-10-10）：`dataDir` / `resolveAgainstBase` 两条判据在 Windows 上红。
+ */
+const pathFor = (platform: Platform): typeof path.posix => (platform === 'win32' ? path.win32 : path.posix)
+
+/**
  * 数据目录：`~/.dsh/dsh-remote-control`。
  *
  * ⚠️ **这个目录名是稳定的运行时标识**，不是随手起的：宿主插件的
@@ -118,7 +140,7 @@ export function tailOfPath(raw: string, platform: Platform = currentPlatform()):
  */
 export function dataDir(platform: Platform = currentPlatform(), override?: { home?: string }): string {
   const home = override?.home ?? os.homedir()
-  return path.join(home, '.dsh', 'dsh-remote-control')
+  return pathFor(platform).join(home, '.dsh', 'dsh-remote-control')
 }
 
 /**
@@ -166,5 +188,8 @@ export function resolveAgainstBase(configured: string, base: string, platform: P
   if (isForeignAbsolutePath(configured, platform)) return configured
   if (isAbsolutePath(configured, platform)) return configured
   if (!base) return configured
-  return path.join(path.dirname(base), configured)
+  // ⚠️ 同上：拼接必须用 `platform` 的语义。用运行时 `path` 的话，
+  //    在 Windows 上问 darwin 的答案会拿到反斜杠。
+  const p = pathFor(platform)
+  return p.join(p.dirname(base), configured)
 }

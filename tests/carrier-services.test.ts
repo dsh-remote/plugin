@@ -31,6 +31,7 @@ import {
 import { FakeClock } from '../src/core/clock.js'
 import { parseEvPayload } from '@dsh-remote/protocol'
 import { questionRequest } from '@dsh-remote/protocol'
+import { platformPath } from './test-platform.js'
 
 interface Calls {
   resume: Array<Record<string, unknown>>
@@ -1359,12 +1360,14 @@ test('新建会话带 cwd：不给的话宿主用 process.cwd() 兜底（真机�
   const f = fixture()
   const asked: unknown[] = []
   const services = f.bundle({ live: true })
-  // 最近一条会话在 /Users/x/dsh-remote-control：用户在做的项目就是它。
+  // 最近一条会话在用户的某个项目里。⚠️ 路径形状必须跟**本机**一致：win32 上
+  // `/Users/...` 是一串**外来平台的绝对路径**，会被 workspaceProblem 正当地拒掉
+  // （见 platform/paths.ts 的 isForeignAbsolutePath）—— 第一版写死 POSIX 就是栽在这。
   services.sessionQuery = {
     listSessions: () =>
       Promise.resolve([
         {
-          header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/Users/x/dsh-remote-control' },
+          header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: platformPath('dsh-remote-control') },
         },
       ]),
   }
@@ -1378,15 +1381,16 @@ test('新建会话带 cwd：不给的话宿主用 process.cwd() 兜底（真机�
   }
   const made = await f.kernel(services).newSession!()
   assert.equal(made.ok, true)
-  assert.deepEqual(asked, [{ cwd: '/Users/x/dsh-remote-control' }], '要挂在用户此刻在做的项目上')
+  assert.deepEqual(asked, [{ cwd: platformPath('dsh-remote-control') }], '要挂在用户此刻在做的项目上')
 })
 
 test('新建会话的 cwd：配置点名优先于"跟着最近一条会话走"', async () => {
-  const f = fixture({ newSessionCwd: '/Users/x/other-proj' })
+  const f = fixture({ newSessionCwd: platformPath('other-proj') })
   const asked: unknown[] = []
   const services = f.bundle({ live: true })
   services.sessionQuery = {
-    listSessions: () => Promise.resolve([{ header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: '/w/stale' } }]),
+    listSessions: () =>
+      Promise.resolve([{ header: { id: 'ses_old', createdAt: 1_700_000_000_000, cwd: platformPath('stale') } }]),
   }
   services.sessionController = {
     commands: {
@@ -1397,7 +1401,7 @@ test('新建会话的 cwd：配置点名优先于"跟着最近一条会话走"',
     },
   }
   await f.kernel(services).newSession!()
-  assert.deepEqual(asked, [{ cwd: '/Users/x/other-proj' }], '配置点名的目录优先')
+  assert.deepEqual(asked, [{ cwd: platformPath('other-proj') }], '配置点名的目录优先')
 })
 
 test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cwd（2026-10-06 用户报"落在未分组"）', async () => {
@@ -1412,7 +1416,7 @@ test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cw
     listSessions: () =>
       Promise.resolve([
         { header: { id: 'ses_new_no_cwd', createdAt: 1_700_000_900_000 } }, // 最新、没有目录
-        { header: { id: 'ses_with_cwd', createdAt: 1_700_000_000_000, cwd: '/Users/x/dsh-remote-control' } },
+        { header: { id: 'ses_with_cwd', createdAt: 1_700_000_000_000, cwd: platformPath('dsh-remote-control') } },
       ]),
   }
   services.sessionController = {
@@ -1427,7 +1431,7 @@ test('回归：最新建的会话没有 cwd 时，往前扫一条也要给出 cw
   assert.equal(made.ok, true)
   assert.deepEqual(
     asked,
-    [{ cwd: '/Users/x/dsh-remote-control' }],
+    [{ cwd: platformPath('dsh-remote-control') }],
     '往前扫到一条带 cwd 的就必须用它：request 为 {} 等于把落点交给宿主默认，也就是未分组',
   )
 })

@@ -114,6 +114,27 @@ test('dataDir：稳定运行时标识，改它会让在用装机找不到自己�
     /\.dsh[\\/]dsh-remote-control$/,
     '目录名 dsh-remote-control 是稳定标识',
   )
+  /**
+   * ⚠️ **拼接必须按 `platform` 参数，不能用运行时的 `path`**（2026-10-10 补）。
+   *
+   * 上面那条 `assert.match` 用的是 `[\\/]`，**两个方向都放行** —— 于是它抓不到
+   * "在 macOS 上问 win32，却拼出正斜杠"这件事。而这个缺陷真的发生过：
+   * `dataDir` / `resolveAgainstBase` 判定用参数、拼接用运行时 `path`，
+   * 在 windows-latest 上让两条判据红了（四仓 CI 第一次真跑起来时暴露）。
+   *
+   * ⇒ 两个方向都**逐字钉死**。这样在 macOS 上就能验出 win32 的行为，
+   *   不必等 CI 上真的 Windows —— 与 `platform/paths.ts` 文件头写的是同一条纪律。
+   */
+  assert.equal(
+    dataDir('win32', { home: 'C:\\Users\\x' }),
+    'C:\\Users\\x\\.dsh\\dsh-remote-control',
+    'win32 的拼接必须用反斜杠（用运行时 path 的话在 macOS 上会拼成正斜杠）',
+  )
+  assert.equal(
+    dataDir('darwin', { home: '/Users/x' }),
+    '/Users/x/.dsh/dsh-remote-control',
+    'darwin 的拼接必须用正斜杠（用运行时 path 的话在 Windows 上会拼成反斜杠）',
+  )
 })
 
 test('resolveAgainstBase：绝对原样、相对按 base 解析、外来路径在 POSIX 上不解析', () => {
@@ -122,6 +143,13 @@ test('resolveAgainstBase：绝对原样、相对按 base 解析、外来路径�
   assert.equal(resolveAgainstBase('C:\\x\\y', '/base/state.json', 'win32'), 'C:\\x\\y')
   // 相对：按 base 所在目录（status.json 的目录）
   assert.equal(resolveAgainstBase('rel.json', '/base/state.json', 'darwin'), '/base/rel.json')
+  // ⚠️ 相对路径的拼接同样必须按 `platform`（见上面 dataDir 那条的长注释）。
+  //    win32 这一支原来没人钉：在 macOS 上它拼出的是 `/base\\rel.json` 这种混合分隔符。
+  assert.equal(
+    resolveAgainstBase('rel.json', 'C:\\base\\state.json', 'win32'),
+    'C:\\base\\rel.json',
+    'win32 上相对路径必须按反斜杠解析（用运行时 path 的话在 macOS 上会拼成正斜杠）',
+  )
   // ⚠️ 反向判据：外来绝对路径在 POSIX 上**不许**被 join 改道。
   // v2 的 startsWith('/') 会放它过去，于是 path.join('/base', 'C:\\x') = '/base/C:\\x'
   // ——一个两边都不认的怪东西，用户以为配好了，实际落在别处。
