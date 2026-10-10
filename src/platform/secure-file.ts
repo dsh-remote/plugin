@@ -114,7 +114,11 @@ export function writeSecure(target: string, body: string | Uint8Array, options: 
     writeSecureInner(target, body, tmp, { encoding, flag, fsync, platform })
   } catch (error) {
     // 失败路径清 tmp：写出来、rename 之前失败时，tmp 里躺着**上一次**的内容。
-    // 留着它读起来比读不到更糟（调用方会以为那是新的）。
+    // 留着它有两个害处：① 下一次成功路径上的垃圾；② 更要紧的是——读它比读不到更糟
+    // （那份内容是旧的，而调用方以为它是新的）。**读不到才是安全侧。**
+    //
+    // v2 里这条逻辑被抄在 `pair-store.ts` 的 catch 里（它得自己拼 tmp 名才能删），
+    // 于是只保护了五处写盘里的一处。收敛到端口之后，**每一处**都自动获得这条保护。
     try {
       unlinkSync(tmp)
     } catch {
@@ -186,16 +190,6 @@ function writeSecureInner(
   }
 }
 
-/**
- * `writeSecure` 的失败路径：**清掉 tmp** 再把异常抛出去。
- *
- * 为什么必须清：失败可能发生在"写出来、rename 之前"，于是 tmp 里躺着**上一次**的
- * 内容。留着它有两个害处：① 下一次成功路径上的垃圾；② 更要紧的是——读它比读不到
- * 更糟（那份内容是旧的，而调用方以为它是新的）。读不到才是安全侧。
- *
- * v2 里这条逻辑被抄在 `pair-store.ts` 的 catch 里（它得自己拼 tmp 名才能删），
- * 于是它只保护了五处中的一处。收敛到端口之后，**每一处**都自动获得这条保护。
- */
 /**
  * Windows 的保留设备名。`con.txt` 与 `CON` **同样**是保留的（扩展名不解除保留），
  * 而 v2 的 `safeSegment` 只留 `[A-Za-z0-9._-]`，完全没拦这一类 ——

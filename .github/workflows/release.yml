@@ -128,6 +128,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
+        # ⚠️ **这一步也必须幂等**。发布那步是幂等的（版本已在注册表就跳过），
+        # 而 `gh release create` 在 Release 已存在时会 `422 already_exists` ⇒ 直接红。
+        # 那个失败形状很坏：**包已经发出去、attestation 也挂上了、Release 也在**，
+        # 唯独工作流是红的，看起来像"发布失败"，而版本号已经烧掉了。
+        # 触发路径很现实：工作流里改了对齐的东西，只能把 tag 移到新提交上重跑
+        # （`gh run rerun` 用的是打 tag 那个 commit 的定义，改了也不生效）。
+        run: |
+          set -e
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME 已存在：跳过创建（重跑不该因为它红）"
+            exit 0
+          fi
         run: |
           gh release create "$TAG_NAME" \
             --title "$TAG_NAME" \
