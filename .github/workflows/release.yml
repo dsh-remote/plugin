@@ -140,7 +140,6 @@ jobs:
             echo "Release $TAG_NAME 已存在：跳过创建（重跑不该因为它红）"
             exit 0
           fi
-        run: |
           gh release create "$TAG_NAME" \
             --title "$TAG_NAME" \
             --generate-notes
