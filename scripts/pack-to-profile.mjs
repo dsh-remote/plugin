@@ -54,7 +54,30 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PLUGIN = path.join(HERE, '..')
-const PROFILE = process.env.DSH_PROFILE ?? path.join(process.env.HOME ?? '~', '.dsh', 'profiles', 'desktop')
+/**
+ * profile 目录：**三种来源，越具体越优先**。
+ *
+ *  1. `DSH_PROFILE_DIR` —— 宿主自己给的**解析后路径**（本机 GUI 宿主就设了它）；
+ *  2. `DSH_PROFILE` —— ⚠️ 它可能是**路径**（老用法），也可能是**名字**：
+ *     DSH 宿主把 `DSH_PROFILE=desktop` 放进环境里，于是"无条件当路径"会得到
+ *     `profile not found: desktop` —— 2026-10-11 装机时当场撞上（脚本因此一步都走不了）。
+ *     所以先按路径试、不存在再按 `~/.dsh/profiles/<名字>` 试；
+ *  3. 默认 `~/.dsh/profiles/desktop`。
+ */
+function resolveProfile() {
+  const home = process.env.HOME ?? '~'
+  const dir = process.env.DSH_PROFILE_DIR
+  if (dir && existsSync(dir)) return dir
+  const raw = process.env.DSH_PROFILE
+  if (raw) {
+    if (existsSync(raw)) return raw
+    const named = path.join(home, '.dsh', 'profiles', raw)
+    if (existsSync(named)) return named
+    return raw // 两种解释都不存在：把原值交回给下面那条 fail（报错要能照着改）
+  }
+  return path.join(home, '.dsh', 'profiles', 'desktop')
+}
+const PROFILE = resolveProfile()
 /** 包的完整名 —— loader 解析模块用的就是它，必须与 package.json 的 name 一致。 */
 const BUNDLE_ID = '@dsh-remote/plugin'
 /** 旧装机方式留下的目录名（运行时 id），本机换装后它应当消失。 */

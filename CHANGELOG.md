@@ -33,9 +33,22 @@
 ⚠️ 装机后**要重启 Harness** 才生效（换文件不热加载）；设置页那一栏改完也**重启才生效**
 （中继地址与 token 是建连接时读一次的），回答里带 `restartRequired: true`。
 
-⚠️ **中继必须先部署**：`/api/claim-token` 是 3.1.2 这一轮加的，而它**还没部署到 ECS**。
-在部署之前，新装的插件认领会拿到 404 → 落到"没有 token" → 插件照常起来但连不上中继
+✅ **中继已先部署**：`/api/claim-token` 随 `@dsh-remote/relay@3.1.2` 上了 ECS
+（`https://drc.provid.cc/healthz` version=3.1.2；`GET /api/claim-token` → 405、
+`POST` → 200 + 48 位 token、紧接着再 `POST` → 429）。顺序**必须先中继后插件**，
+否则新装的插件认领会拿到 404 → 落到"没有 token" → 插件照常起来但连不上中继
 （`diagnostics.hostToken.claim = failed` / `claimReason = http`）。
+
+### 两条**仓级**修复（不进 npm 包，但同一版一起发）
+
+- 🔴 **`release.yml` 里那一步写了两个 `run:`** —— GitHub 对重复 YAML 键是**整份拒绝**
+  （`startup_failure`、0 秒、无 job、页面只写一句 `workflow file issue`）。
+  于是 3.1.0 之后**三个包的自动发布全部停摆**，而症状看着像"Trusted Publishing 没配上"。
+  修法：合成一个 `run: |`；判据见伞仓 `e2e/ci-gates.test.mjs` ⑨（+ ⑨b 反向）。
+- **`scripts/pack-to-profile.mjs` 认不出 `DSH_PROFILE=desktop`** —— 那个环境变量
+  **可能是路径、也可能是名字**（DSH 宿主自己就把名字放进环境里），当成路径会直接
+  `profile not found: desktop`、装机一步都走不了。现在按
+  `DSH_PROFILE_DIR` → 路径 → `~/.dsh/profiles/<名字>` 的顺序解析。
 
 ## 3.1.1
 
