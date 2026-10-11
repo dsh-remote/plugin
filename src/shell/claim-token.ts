@@ -13,8 +13,21 @@
  * ## 为什么是"认领"而不是"索取"（服务端那一半的理由见 relay `server.ts`）
  *
  * 中继是公网服务：一个"谁来问都给 token"的接口等于把 token 公开。所以中继那边领到的是
- * **一枚新的、只属于这一台机器的** token，且**旧的那枚当场作废**。本文件只负责
- * "领、验形状、落盘、下次先读盘"，不负责鉴权策略。
+ * **一枚新签的** token。本文件只负责"领、验形状、落盘、下次先读盘"，不负责鉴权策略。
+ *
+ * ## ⚠️ 认领时必须带上 `hostId`（2026-10-11 起，C 方案）
+ *
+ * 旧的中继是「**全局单令牌 + 认领即轮换**」：任何一台机器认领，其他人的令牌**当场作废**，
+ * 而主机侧"盘上有 token 就不再认领"⇒ 被顶掉的那台**永久连不上**。那天本机一天内被
+ * 另外三台机器各顶掉一次（nginx 日志里三个公网 IP，UA 都是 `node`）。
+ *
+ * 现在中继按 `hostId` 一机一枚：**认领只顶掉这台机器自己旧的那一枚**。
+ * ⇒ 请求体带上 `{hostId}`，响应里那枚就与它绑定；不带的话会落到中继的"未绑定槽位"
+ * （老客户端语义，对谁都算数、也互相顶替）—— 那正是我们想摆脱的东西。
+ *
+ * 因此落盘也记下 `hostId`：`host-id` 变了（用户删了 host-id 文件 / 换了数据目录）时，
+ * 盘上那枚属于**上一个身份**，拿它去连只会一直 `bad_token` 而**不会自愈**
+ * （有 token 就不再认领）。所以 hostId 对不上时当它不存在，重新认领。
  *
  * ## 三条纪律（都是本仓栽过的形状）
  *
@@ -62,11 +75,16 @@ export const HOST_TOKEN_FILE = 'host-token.json'
 /** 只用到 fetch 面里很小的一块，抽出来是为了判据能注入一个假 fetch（不联网）。 */
 export type FetchLike = (
   input: string,
-  init?: { method?: string; signal?: AbortSignal },
+  init?: { method?: string; signal?: AbortSignal; headers?: Record<string, string>; body?: string },
 ) => Promise<{ ok?: boolean; status?: number; json?: () => Promise<unknown> } | undefined>
 
 export interface ClaimDeps {
   serverUrl: string
+  /**
+   * 本机的主机身份。带上它，中继就把令牌**绑到这一台**（只顶掉自己旧的那枚）。
+   * 省略 = 走中继的未绑定槽位（老客户端语义），只该在测试里出现。
+   */
+  hostId?: string
   fetchImpl?: FetchLike
   timeoutMs?: number
   log?: (message: string, fields?: Record<string, string | number | boolean | undefined>) => void
@@ -77,6 +95,8 @@ export interface StoredHostToken {
   serverUrl: string
   source: 'claimed' | 'user'
   savedAt: number
+  /** 认领时用的 hostId（老文件没有这个字段 ⇒ 当作"不知道"，照旧用）。 */
+  hostId?: string
 }
 
 /**
@@ -94,6 +114,8 @@ const storedSchema = z.object({
   serverUrl: z.string().min(1),
   source: z.enum(['claimed', 'user']),
   savedAt: z.number().finite().nonnegative(),
+  /** 可选：3.1.2 及更早写下的文件没有它（那时中继还没有按 hostId 发令牌这回事）。 */
+  hostId: z.string().optional(),
 })
 
 /**
@@ -135,7 +157,12 @@ export function resolveHostTokenFile(statusFile: string): string {
  * 读不到 / 坏了 / 形状不对 / 属于另一台中继，一律返回 `undefined` 并记一行日志
  * ——调用方据此走"认领"那条路，绝不抛（`apply()` 的红线）。
  */
-export function readStoredHostToken(file: string, serverUrl: string, log?: ClaimDeps['log']): string | undefined {
+export function readStoredHostToken(
+  file: string,
+  serverUrl: string,
+  log?: ClaimDeps['log'],
+  hostId?: string,
+): string | undefined {
   if (!file) return undefined
   let raw: string
   try {
@@ -169,6 +196,23 @@ export function readStoredHostToken(file: string, serverUrl: string, log?: Claim
     log?.('host-token shape is unexpected, ignoring it', { tokenLength: shape.data.token.length })
     return undefined
   }
+  /**
+   * 按 hostId 一机一枚（2026-10-11）之后，盘上那枚是**绑在某个身份上的**。
+   *
+   * 两边都说得清身份时才比：老文件没有 `hostId`（那时还没这回事）⇒ 不比，照旧用；
+   * 调用方没给 hostId ⇒ 也不比。**只有"文件里写了 A、而本机现在是 B"才作废** ——
+   * 拿 A 的令牌去连 B 的槽位只会一直 `bad_token`，而插件有 token 就不再认领，
+   * 于是那台机器会**永久连不上**，且盘上那个文件看起来一切正常。
+   */
+  const storedHostId = shape.data.hostId
+  if (hostId !== undefined && storedHostId !== undefined && storedHostId !== hostId) {
+    log?.('host-token was issued for another host id, ignoring it', {
+      // 两个 id 都不是秘密（它们本来就出现在中继日志里），但要截断以防被塞进超长串。
+      storedHostId: storedHostId.slice(0, 64),
+      currentHostId: hostId.slice(0, 64),
+    })
+    return undefined
+  }
   return shape.data.token
 }
 
@@ -180,7 +224,7 @@ export function readStoredHostToken(file: string, serverUrl: string, log?: Claim
  */
 export function writeStoredHostToken(
   file: string,
-  entry: { token: string; serverUrl: string; source: 'claimed' | 'user'; now: number },
+  entry: { token: string; serverUrl: string; source: 'claimed' | 'user'; now: number; hostId?: string },
   log?: ClaimDeps['log'],
 ): boolean {
   if (!file) return false
@@ -191,6 +235,8 @@ export function writeStoredHostToken(
     source: entry.source,
     savedAt: entry.now,
   }
+  // 只在知道身份时才写这个字段：老读者（以及我们自己读老文件的那条路径）不该被它干扰。
+  if (entry.hostId !== undefined && entry.hostId !== '') body.hostId = entry.hostId
   try {
     mkdirSync(path.dirname(file), { recursive: true })
     writeSecure(file, JSON.stringify(body, null, 2) + '\n')
@@ -238,8 +284,22 @@ export async function claimHostToken(deps: ClaimDeps): Promise<ClaimOutcome> {
   }
   let status = 0
   let body: unknown
+  /**
+   * 请求体带上 `hostId`（见文件头）：中继据此把令牌**绑到这一台**，
+   * 于是别人认领时顶不掉我们。中继那边**不带体也照收**（老客户端语义），
+   * 所以这一步是纯增强，不会因为中继版本新老而不兼容。
+   */
+  const hostId = deps.hostId?.trim()
+  const init: { method: string; signal?: AbortSignal; headers?: Record<string, string>; body?: string } = {
+    method: 'POST',
+    signal,
+  }
+  if (hostId) {
+    init.headers = { 'content-type': 'application/json' }
+    init.body = JSON.stringify({ hostId })
+  }
   try {
-    const response = await fetchImpl(url, { method: 'POST', signal })
+    const response = await fetchImpl(url, init)
     status = typeof response?.status === 'number' ? response.status : 0
     if (response?.ok === true) {
       try {
@@ -268,6 +328,15 @@ export async function claimHostToken(deps: ClaimDeps): Promise<ClaimOutcome> {
       tokenLength: typeof token === 'string' ? token.length : 0,
     })
     return { ok: false, reason: 'shape' }
+  }
+  // 中继会把 hostId 原样回给我们。对不上说明**我们问的不是这一台**（配置被改、
+  // 中间有代理改写），留一条日志；令牌仍然可用（鉴权由中继按它记的槽位判定）。
+  const echoed = (body as { hostId?: unknown } | undefined)?.hostId
+  if (hostId && typeof echoed === 'string' && echoed !== hostId) {
+    log?.('the relay bound the token to a different host id', {
+      sent: hostId.slice(0, 64),
+      echoed: echoed.slice(0, 64),
+    })
   }
   return { ok: true, token }
 }

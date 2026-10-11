@@ -245,7 +245,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   }
 
   if (!config.hostToken && config.enabled) {
-    const stored = readStoredHostToken(hostTokenFile, config.serverUrl, log)
+    // hostId 也参与判定：盘上那枚可能是**上一个身份**领的（按 hostId 一机一枚之后），
+    // 拿它去连只会一直 bad_token 而不会自愈 —— 见 `claim-token.ts` 文件头。
+    const stored = readStoredHostToken(hostTokenFile, config.serverUrl, log, hostId)
     if (stored) {
       claimedToken = stored
       claimedForUrl = config.serverUrl
@@ -334,7 +336,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     if (!runtime) reportNoCarrier()
   }
   if (claimState === 'pending') {
-    void claimHostToken({ serverUrl: config.serverUrl, log }).then((outcome) => {
+    // ⚠️ 必须带 `hostId`：不带的话中继会把这枚落到"未绑定槽位"，
+    // 而那个槽位**任何一台不带 hostId 的机器都能互相顶掉**（就是这次事故的形态）。
+    void claimHostToken({ serverUrl: config.serverUrl, hostId, log }).then((outcome) => {
       if (outcome.ok) {
         claimedToken = outcome.token
         claimedForUrl = config.serverUrl
@@ -342,7 +346,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
         // 落盘走 `platform/secure-file.ts`（0600 + 原子写），与 status.json / 密钥簿同一条路。
         writeStoredHostToken(
           hostTokenFile,
-          { token: outcome.token, serverUrl: config.serverUrl, source: 'claimed', now: clock.now() },
+          { token: outcome.token, serverUrl: config.serverUrl, source: 'claimed', now: clock.now(), hostId },
           log,
         )
         log('host token claimed', { serverUrl: config.serverUrl, tokenLength: outcome.token.length })
