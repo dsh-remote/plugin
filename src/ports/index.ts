@@ -214,12 +214,36 @@ export interface InteractionSink {
     action: string
     reason?: string
     signal?: AbortSignal
+    /**
+     * **宿主自己给的期限（毫秒）** —— 有就跟随，没有就不设（2026-10-11）。
+     *
+     * 为什么是"跟随"而不是"自己定一个"：桌面上那张对话框的生命周期就是这个问题的全部，
+     * 插件另设一个上限会造成两端不一致。真实故障是这么来的（2026-10-09 取证）：页���退后台
+     * → 事件退订 → 卡帧到了 client 没到任何界面 → 用户回到页面时主机早已判超时，
+     * 手机上于是"什么都没有可点"。
+     *
+     * ⚠️ **这一代内核不给这个字段**（实测其入参只有 sessionId/action/questions/signal），
+     * 所以今天的行为是"不设期限"。哪一代开始给，就自动跟随，不需要改实现。
+     */
+    timeoutMs?: number
   }): Promise<ApprovalDecision>
   /** 一次提问请求。返回 null 表示无人应答（适配器须转成明确失败，不许静默挂住 agent）。 */
   question(info: {
     sessionId: string
     questions: QuestionItem[]
     signal?: AbortSignal
+    /**
+     * **宿主自己给的期限（毫秒）** —— 有就跟随，没有就不设（2026-10-11）。
+     *
+     * 为什么是"跟随"而不是"自己定一个"：桌面上那张对话框的生命周期就是这个问题的全部，
+     * 插件另设一个上限会造成两端不一致。真实故障是这么来的（2026-10-09 取证）：页���退后台
+     * → 事件退订 → 卡帧到了 client 没到任何界面 → 用户回到页面时主机早已判超时，
+     * 手机上于是"什么都没有可点"。
+     *
+     * ⚠️ **这一代内核不给这个字段**（实测其入参只有 sessionId/action/questions/signal），
+     * 所以今天的行为是"不设期限"。哪一代开始给，就自动跟随，不需要改实现。
+     */
+    timeoutMs?: number
   }): Promise<AskUserQuestionAnswerValue | null>
 }
 

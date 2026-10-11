@@ -88,10 +88,12 @@ export interface RuntimeOptions {
   /** 会话列表的全量刷新周期。事件驱动之外还要有一条兜底，因为旧实现断连期间会丢事件。 */
   listingRefreshMs: number
   window?: Partial<WindowOptions>
-  /** 审批等待手机回应的上限；超时返回 decline，把决定权交还桌面 UI。 */
-  approvalTimeoutMs: number
-  /** 提问等待上限；超时返回 null（提问服务没有 next 可交还）。 */
-  questionTimeoutMs: number
+  /**
+   * ⚠️ 这里**曾经**有 `approvalTimeoutMs` / `questionTimeoutMs` 两个上限，
+   * 2026-10-11 连同它们在 `onApprovalRequest` / `onQuestionRequest` 里的定时器一起删了
+   * （期限改成跟随弹窗自身生命周期，理由见那两处的注）。
+   * 留这段注释是为了让下一个人知道"为什么这里空着"——别当成漏删又加回来。
+   */
   /** 发指令前自动恢复归档会话。关掉它就要接受"归档会话被宿主 gate 直接拒掉"。 */
   unarchiveOnPrompt: boolean
   /** 文件附件落盘目录（`shell/uploads.ts`）；空串时主机拒收文件附件。 */
@@ -119,21 +121,25 @@ interface PendingInteraction {
   conversationId: string
   sessionId: string
   resolve: (value: unknown) => void
-  timer: unknown
+  /**
+   * 一次性定时器句柄。
+   *
+   * ⚠️ 2026-10-11 起**审批与提问都不再设它**（期限改成跟随弹窗自身生命周期，见
+   * `onApprovalRequest` 那段注）。字段保留为可选，是因为它仍属于账本形状的一部分，
+   * 而 `settle()` 统一清它 —— 将来若某个宿主真的带了期限，加回来只需要一处。
+   */
+  timer?: unknown
+  /**
+   * 到期时刻**只在宿主给了期限时才有**（2026-10-11）。它是可选的：缺省即"无期限"，
+   * 而这正是这一代内核的样子。`replayPending` 原样重发它、不重算 —— 顺延等于骗手机。
+   */
+  expiresAt?: string
   /** 审批/提问各自的选项表，用于把手机回传的 id 翻回平台要的词汇。 */
   options?: QuestionItem[]
   /** 哪一类等待。桌面那颗 pill 的抬头要说"等 N 件事"，两类都算。 */
   kind: 'approval' | 'question'
   /** 发出去的时刻（`clock.now()`），用来算"最久的那件已经等了多久"。 */
   askedAt: number
-  /**
-   * 重发（`replayPending`）时原样带回去的到期时刻。
-   *
-   * 存的是**最初那一帧的 expiresAt**，不是重发时刻重新算的：主机侧的超时表
-   * 从第一次问出就开始走，重发时把到期时刻往后顺延等于在骗手机的倒计时
-   * （主机 150 秒后就结算，手机却显示还剩 280 秒）。
-   */
-  expiresAt: string
   /** 审批重发要原样带回去的动作与原因（提问那类存在 `options` 里）。 */
   action?: string
   reason?: string
@@ -176,8 +182,6 @@ const defaultHostMeta = (): EvHostInfo['host'] => ({ platform: process.platform,
 
 const DEFAULTS: RuntimeOptions = {
   listingRefreshMs: 15_000,
-  approvalTimeoutMs: 180_000,
-  questionTimeoutMs: 300_000,
   unarchiveOnPrompt: true,
   /**
    * 附件落盘目录。**留空 = 拒收文件附件**（下面那条 `reply(false, …)` 就是这条分支）。
@@ -204,6 +208,20 @@ const HISTORY_LIMIT = 40
 const MODEL_CACHE_MAX = 256
 
 const SESSION_MERGE_MS = 500
+
+/**
+ * 宿主给的期限，**取一下并夹一下**。
+ *
+ * ⚠️ 只认「有限且 > 0」：宿主传 `undefined`（这一代内核就是这样）、`NaN`、`0`
+ * 或负数，一律当**没有期限**。
+ *
+ * 为什么不夹回某个默认值（那正是 2026-10-11 删掉的东西）：默认值得有一个，
+ * 就会让"宿主其实没给期限"这件事**看起来像有期限** —— 手机上会起倒计时，
+ * 到点主机就结算，而桌面上那张对话框还在等。
+ */
+function hostTimeoutMs(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
 
 export class HostRuntime {
   private readonly options: RuntimeOptions
@@ -309,7 +327,6 @@ export class HostRuntime {
    * "要不要清"，不回答"清成什么"（清成空是唯一答案）。
    * 按会话隔离：同一时刻可能有几条会话各自带着清单。
    */
-  private readonly todoShown = new Set<string>()
   private unsubscribe: (() => void) | undefined
   private detachSink: (() => void) | undefined
   private refreshTimer: unknown
@@ -1139,20 +1156,16 @@ export class HostRuntime {
         this.broadcast(runState(event))
         if (event.state === 'running') {
           this.sleep.markActive()
-          /**
-           * 新一轮开始：**把上一轮的待办从手机上收掉**（2026-10-07 用户实测双端不一致）。
-           *
-           * 宿主那一侧的待办是按轮清的：上一轮写过、这一轮没写，它就是空的。
-           * 而内核**不会**为"这一轮没有待办"专门发一帧 `todo/write`，于是手机上
-           * 留着上一轮的清单、宿主此刻却是空的——用户看到一件**没在发生的事**
-           * （与历史快照那条同一个病的两条通路，见 carrier-services 的 historyPageFromLog）。
-           *
-           * 只在**上一轮确实有过清单**时才补这一帧空快照：没用过待办的轮次
-           * 每轮白发一帧空清单只是白花一次渲染。
-           */
-          if (this.todoShown.delete(event.sessionId)) {
-            this.broadcast(todoList({ todos: [], sessionId: event.sessionId }))
-          }
+          // ⚠️ 这里**刻意不做任何"推断清空"**（2026-10-11 用户裁决：生命周期跟随 host）。
+          //
+          // 原来这里有一段：新一轮开始时，若上一轮显示过清单，就合成一帧空快照发出去。
+          // 它的理由是"内核不会为'这一轮没有待办'专门发一帧 `todo/write`"
+          // —— **那个前提是错的**：内核**确实会**发空清单，
+          // 判据 `tests/runtime.test.ts` 里就有一处直接喂 `todos: []` 验证这一点。
+          //
+          // ⇒ 自己合成空帧造成的是**双重清空**：内核发了空清单、我们又发一次，
+          // 而第二条依据的是"上一轮有过"这个**已经过期的事实**。
+          // 现在只转发内核实际发来的清单：它说什么，手机上就是什么。
         }
         void this.pushSessions('run-state').catch(() => {})
         return
@@ -1172,10 +1185,6 @@ export class HostRuntime {
         // "最后那份清单"晚到，而顶部那颗条子要的就是此刻。
         this.window.flushSession(event.sessionId)
         this.broadcast(todoList({ todos: event.todos, sessionId: event.sessionId }))
-        // 记一笔"这个会话的手机上此刻有清单"：下一轮开始时要据此补一帧空快照
-        //（见 case 'run-state'）。空清单不记账——那本来就没有要清的。
-        if (event.todos.length > 0) this.todoShown.add(event.sessionId)
-        else this.todoShown.delete(event.sessionId)
         this.sleep.markActive()
         return
       case 'retry':
@@ -1360,6 +1369,12 @@ export class HostRuntime {
     action: string
     reason?: string
     signal?: AbortSignal
+    /**
+     * **宿主自己给的期限（毫秒）**。有就跟随，没有就不设 —— 见 `onApprovalRequest`
+     * 里那段长注。⚠️ 它是**可选的**：这一代内核**不给**这个字段，所以今天的行为是
+     * "不设期限"；哪一代内核开始给，就自动跟随，不需要改这里。
+     */
+    timeoutMs?: number
   }): Promise<ApprovalDecision> {
     const conversationId = this.pickConversation(info.sessionId)
     if (!conversationId) {
@@ -1426,9 +1441,24 @@ export class HostRuntime {
     }
     const id = `ap_${randomUUID().slice(0, 8)}`
     this.sleep.hold(id)
-    // 到期时刻只算一次：首帧与将来可能的重发（`replayPending`）用同一个，
-    // 主机侧的超时表从第一次问出就开始走，重发时顺延等于骗手机的倒计时。
-    const expiresAt = new Date(Date.now() + this.options.approvalTimeoutMs).toISOString()
+    // ⚠️ **这里刻意不设任何到期时刻**（2026-10-11 用户裁决）。
+    //
+    // 原来有 `approvalTimeoutSec`（180s）与 `questionTimeoutSec`（300s）两个定时器：
+    // 到点就 `settle(…, 'timeout')`，并给帧带一个 `expiresAt` 让手机显示倒计时。
+    // 那个期限**是我们自己加的** —— 宿主内核给的入参
+    // `onApprovalRequest({ sessionId, action, reason?, signal? })` 与
+    // `onQuestionRequest({ sessionId, questions, signal? })` **都不含任何期限字段**，
+    // 桌面上那张对话框的生命周期就是这件事的全部。
+    //
+    // ⇒ 加上限的后果正是 2026-10-09 那次真机故障：**页面退后台 → 事件退订 → 卡帧到了
+    // client 却没到任何界面 → 用户回到页面时主机早已判超时**，手机上什么都没有可点。
+    // 症状看起来像"小程序点不动"，真因是"那张卡在主机上已经过期了"。
+    //
+    // ⇒ 现在只由**三种**方式结算：手机答了、桌面先答了（`ev.permission_resolved`）、
+    // 宿主撤了这次请求（`signal` abort）。**桌面会一直等的事，手机上也一直等** ——
+    // 两端行为一致，而不是手机先到期。
+    // 代价要说清：**没人答时这次交互不会自己结束**（挂锁与 `pending` 条目一直留着），
+    // 但桌面那一位同样不会结束 —— 这是"与 host 端一致"的字面含义。
     // ⚠️ 查表放在**挂 waterfall 之前**：「本次会话内始终允许」要真的省掉打扰，
     // 而不只是在事后记一笔。若放在之后，每次请求照样走一遍审批流（照样占住 host 的一次交互、
     // 照样给桌面 UI 一次机会），用户仍然被打断——那就只实现了"记账"，没实现"始终允许"。
@@ -1443,18 +1473,23 @@ export class HostRuntime {
     // `return await` + finally：executor 里抛出（或 resolve 路径的任何异常）都不会让
     // releaseHold 被跳过 —— 旧写法里一次抛出就是一条永久泄漏的挂锁（机器再也不睡）。
     try {
+      // **有期限才设**：宿主没给就不设（见上面那段长注）。与提问那条逐字同形。
+      const hostTimeout = hostTimeoutMs(info.timeoutMs)
+      const expiresAt = hostTimeout ? new Date(Date.now() + hostTimeout).toISOString() : undefined
       return await new Promise<ApprovalDecision>((resolve) => {
-        const timer = this.clock.setTimeout(() => {
-          this.settle(id, 'decline', 'timeout')
-        }, this.options.approvalTimeoutMs)
+        const timer = hostTimeout
+          ? this.clock.setTimeout(() => {
+              this.settle(id, 'decline', 'timeout')
+            }, hostTimeout)
+          : undefined
         this.pending.set(id, {
           conversationId,
           sessionId: info.sessionId,
           resolve: (value) => resolve(value === undefined ? 'decline' : (value as ApprovalDecision)),
-          timer,
+          ...(timer === undefined ? {} : { timer }),
+          ...(expiresAt === undefined ? {} : { expiresAt }),
           kind: 'approval',
           askedAt: this.clock.now(),
-          expiresAt,
           action: info.action,
           reason: info.reason,
         })
@@ -1474,7 +1509,9 @@ export class HostRuntime {
             action: info.action,
             ...(info.reason === undefined ? {} : { reason: info.reason }),
             options: APPROVAL_OPTIONS,
-            expiresAt,
+            // 宿主没给期限时**不带这个键**（协议里它是可选的）—— 带了手机就会起倒计时，
+            // 而主机并不会在那个时间点结算。
+            ...(expiresAt === undefined ? {} : { expiresAt }),
           }),
         )
       })
@@ -1492,6 +1529,8 @@ export class HostRuntime {
     sessionId: string
     questions: QuestionItem[]
     signal?: AbortSignal
+    /** 与审批那个 `timeoutMs` 逐字同形：有就跟随，没有就不自己加。 */
+    timeoutMs?: number
   }): Promise<AskUserQuestionAnswerValue | null> {
     const conversationId = this.pickConversation(info.sessionId)
     if (!conversationId) {
@@ -1525,23 +1564,26 @@ export class HostRuntime {
     }
     const id = `q_${randomUUID().slice(0, 8)}`
     this.sleep.hold(id)
-    // 到期时刻只算一次（理由见审批那条）：首帧与重发共用。
-    const expiresAt = new Date(Date.now() + this.options.questionTimeoutMs).toISOString()
+    // 与审批**逐字同形**：也不设期限，两处必须一起改（理由见审批那条的整段注）。
     // `return await` + finally：releaseHold 与 hold 必须一一对应（同审批那条的理由）。
     try {
+      const hostTimeout = hostTimeoutMs(info.timeoutMs)
+      const expiresAt = hostTimeout ? new Date(Date.now() + hostTimeout).toISOString() : undefined
       return await new Promise<AskUserQuestionAnswerValue | null>((resolve) => {
-        const timer = this.clock.setTimeout(() => {
-          this.settle(id, null, 'timeout')
-        }, this.options.questionTimeoutMs)
+        const timer = hostTimeout
+          ? this.clock.setTimeout(() => {
+              this.settle(id, null, 'timeout')
+            }, hostTimeout)
+          : undefined
         this.pending.set(id, {
           conversationId,
           sessionId: info.sessionId,
           resolve: (value) => resolve((value as AskUserQuestionAnswerValue | undefined) ?? null),
-          timer,
+          ...(timer === undefined ? {} : { timer }),
+          ...(expiresAt === undefined ? {} : { expiresAt }),
           options: info.questions,
           kind: 'question',
           askedAt: this.clock.now(),
-          expiresAt,
         })
         // 与审批那条同样：'desktop' 是桌面先答，其余是宿主自己撤了这次请求。
         info.signal?.addEventListener(
@@ -1555,9 +1597,7 @@ export class HostRuntime {
             requestId: id,
             sessionId: info.sessionId,
             questions: info.questions,
-            // 提问这张卡以前**没有**到期时刻：主机 300 秒就判"没答上"，而手机上看不见任何倒计时，
-            // 用户不知道自己按的按钮什么时候作废（伞仓 docs/PRODUCT.md §3 第 3 条）。
-            expiresAt,
+            ...(expiresAt === undefined ? {} : { expiresAt }),
           }),
         )
       })
@@ -1621,7 +1661,7 @@ export class HostRuntime {
     const item = this.pending.get(id)
     if (!item) return
     this.pending.delete(id)
-    this.clock.clearTimeout(item.timer)
+    if (item.timer !== undefined) this.clock.clearTimeout(item.timer)
     // 只有"不是手机自己点的"才需要作废：那种情况下手机上那张卡还亮着，而它已经没用了。
     if (voidAs) this.voidStaleCard(id, item, voidAs)
     item.resolve(value)
@@ -1681,8 +1721,9 @@ export class HostRuntime {
    *
    * 三条纪律：
    * 1. 只重发 `pending` 里还挂着的：已结算的早被 `settle()` 删掉了，不会复活；
-   * 2. 到期时刻用最初那一帧的（`item.expiresAt`），不顺延——主机侧超时表从第一次问出
-   *    就开始走，重发时往后顺延等于骗手机的倒计时；
+   * 2. **不再有"到期时刻"要顺延**（2026-10-11 起）：帧里不带 `expiresAt`，手机也不显示
+   *    倒计时（协议里那个字段本来就可选，见 `payloads.ts`）。在有期限的那些版本里，
+   *    这里必须用**最初那一帧**的值而不是重发时刻重算的——那个坑已连同期限一起删掉；
    * 3. 永不抛：这一路走在配对流程里，任何一行炸了都只记一条日志，不能断掉配对。
    */
   replayPending(conversationId: string): number {
@@ -1710,7 +1751,7 @@ export class HostRuntime {
   /**
    * 把一条挂起的等待拼回它最初的那一帧（`cmd.get_pending` 与 `replayPending` 共用）。
    *
-   * 同一 requestId、同一内容、同一 expiresAt——手机按 requestId 覆盖，
+   * 同一 requestId、同一内容——手机按 requestId 覆盖，
    * 重发落在已有卡的手机上只是原地重写。提问的 questions 为空时不拼：
    * 空数组的提问卡在手机上是一张只有输入框的卡，与"有选项但都不可选"长得一样，
    * 发出去是假事实（首帧不可能为空——内核问的时候一定带了题）。
@@ -1718,20 +1759,21 @@ export class HostRuntime {
   private buildPendingFrame(id: string, item: PendingInteraction): EvPayload | null {
     if (item.kind === 'approval') {
       return permissionRequest({
+        // 原样重发账本里那份到期时刻，**不重算** —— 顺延等于骗手机的倒计时。
+        ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
         requestId: id,
         sessionId: item.sessionId,
         action: item.action ?? '操作',
         ...(item.reason === undefined ? {} : { reason: item.reason }),
         options: APPROVAL_OPTIONS,
-        expiresAt: item.expiresAt,
       })
     }
     if (!item.options || item.options.length === 0) return null
     return questionRequest({
+      ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
       requestId: id,
       sessionId: item.sessionId,
       questions: item.options,
-      expiresAt: item.expiresAt,
     })
   }
 

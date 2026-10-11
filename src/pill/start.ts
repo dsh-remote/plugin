@@ -1,5 +1,5 @@
 /**
- * pill — 状态栏那颗 pill 与设置页的宿主侧接线：软探测 `webServer`、挂六条路由、收干净。
+ * pill — 状态栏那颗 pill 与设置页的宿主侧接线：软探测 `webServer`、挂七条路由、收干净。
  *
  * 2026-10-03 这一半原来还带着"右栏自动弹码"：按节拍看当前码、渲染 PNG、写进会话工作区、
  * 再经一条只读路由把 `dsh-resource://` 地址交给浏览器面。那套整个删了——配对入口现在只有
@@ -20,6 +20,7 @@
  * 否则表现就是"配不了对且没有任何地方说为什么"。
  */
 import { registerPillRoutes, type PillRouteDeps, type WebServerLike } from './routes.js'
+import type { ConfigRouteDeps } from './config-routes.js'
 import { miniprogramImageExists, readMiniprogramImage } from './miniprogram.js'
 
 /** 只用到 ctx 的几个成员，所以不硬依赖 `@deepseek-ai/cordis` 的类型。 */
@@ -32,12 +33,12 @@ export interface PillHandle {
   stop(): void
   /** 排错入口：为什么没起 / 服务是从哪条路拿到的 / 路由挂上没。 */
   readonly probe: Record<string, string>
-  /** 那六条路由**是否真的挂上了**——没挂上就没有配对入口。 */
+  /** 那六条**配对**路由是否真的挂上了——没挂上就没有配对入口（配置那一条不参与这个判断）。 */
   readonly available: boolean
 }
 
-/** 起那六条路由。`enabled:false` 时什么都不做。返回句柄；`stop()` 幂等。 */
-export function startPill(ctx: LooseContext, deps: PillRouteDeps & { enabled: boolean }): PillHandle {
+/** 起那七条路由。`enabled:false` 时什么都不做。返回句柄；`stop()` 幂等。 */
+export function startPill(ctx: LooseContext, deps: PillRouteDeps & ConfigRouteDeps & { enabled: boolean }): PillHandle {
   const { log } = deps
   const probe: Record<string, string> = {}
   let web: WebServerLike | undefined
@@ -64,6 +65,10 @@ export function startPill(ctx: LooseContext, deps: PillRouteDeps & { enabled: bo
          * ⇒ 注入的那份优先，本地读只当兜底（夹具与旧调用点不传这个入参时仍能工作）。
          */
         miniprogramCode: () => (deps.miniprogramCode ? deps.miniprogramCode() : readMiniprogramImage()),
+        // 设置页「进阶」那一栏（自部署地址 / token）：**接线，不是又实现一遍**
+        // —— 读写都在 `index.ts` 那一侧（它知道落盘文件在哪、也知道此刻生效的是哪一层）。
+        config: () => deps.config(),
+        saveConfig: (overrides) => deps.saveConfig(overrides),
         log,
       })
       probe.routes = 'registered'

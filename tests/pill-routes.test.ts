@@ -1,7 +1,8 @@
 /**
- * pill-routes.test — 状态栏那颗 pill 与设置页那六条路由的判据。
+ * pill-routes.test — 状态栏那颗 pill 与设置页那七条路由的判据（配置那条只在注册表那两条里出现，
+ * 它自己的行为判据在 `config-routes.test.ts`）。
  *
- * 六条路由分两档安全姿态（动机写在 `src/pill/routes.ts` 文件头）：
+ * 七条路由分两档安全姿态（动机写在 `src/pill/routes.ts` 文件头）：
  * `POST /pairing/new` 与 `POST /unpair` 会改状态（发一张码 / 作废当前通道），跨站判据是
  * 只有同源脚本发得出的自定义头 `x-drc-pair: 1`——**不是** `Origin`：桌面宿主的转发层会把它
  * 删掉，这一条是 2026-10-03 在真屏幕上点出来才发现的。`GET /pairing.png` 与 `GET /status`
@@ -37,6 +38,7 @@ import {
   type LivePairing,
   type PillRouteDeps,
 } from '../src/pill/routes.js'
+import { PLUGIN_CONFIG_ROUTE, type ConfigRouteDeps } from '../src/pill/config-routes.js'
 import {
   MINIPROGRAM_IMAGE_NAME,
   MINIPROGRAM_IMAGE_TYPE,
@@ -107,8 +109,8 @@ function request(method: string, headers: Record<string, string> = {}): Incoming
 const LOOPBACK = { host: '127.0.0.1:19387', 'x-drc-pair': '1' }
 
 function deps(
-  over: Partial<PillRouteDeps> = {},
-): PillRouteDeps & { calls: { ensure: number; current: number; unpair: number } } {
+  over: Partial<PillRouteDeps & ConfigRouteDeps> = {},
+): PillRouteDeps & ConfigRouteDeps & { calls: { ensure: number; current: number; unpair: number } } {
   const calls = { ensure: 0, current: 0, unpair: 0 }
   const live: LivePairing = { qr: FAKE_QR, token: FAKE_TOKEN, expiresAt: Date.now() + 60_000 }
   return {
@@ -140,6 +142,21 @@ function deps(
      * 真要验"包内那张图读得出来"另有一条判据（`miniprogram.ts` 那一组）。
      */
     miniprogramCode: () => FAKE_MINIPROGRAM_JPEG,
+    /**
+     * 设置页「进阶」那一栏那两条的读/写口（2026-10-11 加）。
+     * 默认值就是"一台没配过自定义的机器"：官方默认地址、没有 token、写盘成功。
+     * 那一条路由自己的判据在 `config-routes.test.ts`（这里只负责让它挂得上）。
+     */
+    config: () => ({
+      serverUrl: 'wss://relay.example.com:443/relay',
+      defaultServerUrl: 'wss://drc.provid.cc',
+      serverUrlSource: 'default' as const,
+      hostTokenSet: false,
+      hostTokenShape: '',
+      hostTokenSource: 'none' as const,
+      userConfigFile: '/tmp/drc-user-config.json',
+    }),
+    saveConfig: () => ({ ok: true }) as const,
     log: () => {},
     ...over,
   }
@@ -545,7 +562,7 @@ test('unpair() 自己抛错 → 500 且不外抛到宿主', async () => {
 
 // ── 注册与注销 ───────────────────────────────────────────────────────
 
-test('注册挂上六条、注销把六条都摘掉', () => {
+test('注册挂上七条、注销把七条都摘掉', () => {
   const registered: string[] = []
   let off = 0
   const web = {
@@ -564,9 +581,12 @@ test('注册挂上六条、注销把六条都摘掉', () => {
     PAIR_UNPAIR_ROUTE,
     PAIR_PAGE_ROUTE,
     PAIR_MINIPROGRAM_ROUTE,
+    // 2026-10-11 加（设置页「进阶」那一栏）。⚠️ 它**排在最后**：前面六条的编号
+    // 语义因此没变（"第二条挂不上就回滚第一条"那条判据靠的就是顺序）。
+    PLUGIN_CONFIG_ROUTE,
   ])
   unregister()
-  assert.equal(off, 6)
+  assert.equal(off, 7)
 })
 
 test('第二条挂不上时，第一条必须被回滚掉：半途失败不许在宿主上留下摘不走的路由', () => {
@@ -596,7 +616,7 @@ test('一条注销抛错不许让其余留在宿主上', () => {
   }
   const unregister = registerPillRoutes(web as never, deps())
   assert.doesNotThrow(() => unregister())
-  assert.equal(off, 6, '后面几条必须仍然被调用')
+  assert.equal(off, 7, '后面几条必须仍然被调用')
 })
 
 test('反证：环回主机名这份表只有一份，写路由与只读那条必须同一个口径', async () => {
@@ -679,7 +699,7 @@ test('配对页：只接受 GET / HEAD（与只读那两条同一姿态）', asy
   assert.equal(reply().status, 405)
 })
 
-test('注册表里有六条路由，且删除时六条一起摘（配对页与静态小程序码也在内）', () => {
+test('注册表里有七条路由，且它们一起挂一起摘（配对页、静态小程序码与配置读写都在内）', () => {
   const registered: string[] = []
   const web = {
     register: (route: { path: string }) => {
@@ -697,9 +717,10 @@ test('注册表里有六条路由，且删除时六条一起摘（配对页与�
       PAIR_PAGE_ROUTE,
       PAIR_STATUS_ROUTE,
       PAIR_UNPAIR_ROUTE,
+      PLUGIN_CONFIG_ROUTE,
     ].sort(),
-    '六条路由都挂上了（少一条就少一扇门：配对页那条正是"没有会话时唯一出码的路"，' +
-      '小程序码那条是设置页右栏那张卡的图源）',
+    '七条路由都挂上了（少一条就少一扇门：配对页那条正是"没有会话时唯一出码的路"，' +
+      '小程序码那条是设置页右栏那张卡的图源，配置那条是设置页「进阶」那一栏的读写口）',
   )
 })
 

@@ -1,5 +1,5 @@
 /**
- * pill-routes — 状态栏那颗 pill（以及设置页那一栏）用的六条同域路由，与它自带的守卫。
+ * pill-routes — 状态栏那颗 pill（以及设置页那一栏）用的**七条**同域路由，与它自带的守卫。
  *
  *   `POST /plugins/dsh-remote-control/pairing/new`  点一下要一张能用的码（幂等）
  *   `GET  /plugins/dsh-remote-control/pairing.png`  弹窗里那张二维码图（每次现渲染）
@@ -7,15 +7,18 @@
  *   `POST /plugins/dsh-remote-control/unpair`       退出配对（作废当前那条通道）
  *   `GET  /plugins/dsh-remote-control/pair`         不依赖会话的配对页（没有会话那一屏的正门）
  *   `GET  /plugins/dsh-remote-control/miniprogram.jpg` 官方小程序那张**静态**小程序码（设置页右栏）
+ *   `GET|POST /plugins/dsh-remote-control/config`   设置页「进阶」那一栏：自部署地址 / token
+ *                                                   （2026-10-11 加，handler 在 `./config-routes.ts`）
  *
- * 六条都是**按需**的：宿主侧不再有"按节拍渲染并落盘"那一半（右栏自动弹码方案 2026-10-03 删除），
+ * 七条都是**按需**的：宿主侧不再有"按节拍渲染并落盘"那一半（右栏自动弹码方案 2026-10-03 删除），
  * 图在有人要的时候现渲染，状态在 pill 问的时候现读。
  *
  * 安全姿态分两档，写在同一个文件里但**判据分开**：
  *
- * - 只读那**四**条（图片、状态、配对页、小程序码）：`Host` 必须环回（挡 DNS 重绑定的导航/表单请求），
- *   `Origin` 缺席放过（同源 GET 浏览器本来就可能不带，桌面宿主的转发层还会主动删掉它）。
- * - 会改状态的那**两**条（发码、解配）：跨站判据是**只有同源脚本发得出的自定义头**
+ * - 只读那**四条 + 配置那一条的 GET**（图片、状态、配对页、小程序码、配置回显）：`Host` 必须环回
+ *   （挡 DNS 重绑定的导航/表单请求），`Origin` 缺席放过（同源 GET 浏览器本来就可能不带，
+ *   桌面宿主的转发层还会主动删掉它）。
+ * - 会改状态的那**三条**（发码、解配、写配置）：跨站判据是**只有同源脚本发得出的自定义头**
  *   `x-drc-pair: 1`。不能拿 `Origin` 当凭据——2026-10-03 在真宿主上点那颗 pill 直接 403，
  *   弹窗上印着 `origin-missing`：桌面宿主转发时会把 `origin` 删掉，"Origin 必须存在"这条前提
  *   在这台宿主上永远不成立。带自定义头则跨站必然先触发 CORS 预检，而这条服务既不响应 OPTIONS
@@ -39,6 +42,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { qrPng } from '../platform/qr.js'
 import { MINIPROGRAM_IMAGE_TYPE } from './miniprogram.js'
+import { configRouteHandler, PLUGIN_CONFIG_ROUTE, type ConfigRouteDeps } from './config-routes.js'
 
 export const PAIR_NEW_ROUTE = '/plugins/dsh-remote-control/pairing/new'
 export const PAIR_IMAGE_ROUTE = '/plugins/dsh-remote-control/pairing.png'
@@ -560,13 +564,16 @@ export interface WebServerLike {
 }
 
 /**
- * 挂上这六条路由；返回一个注销函数（六条一起摘，一条抛了也不许把其余留在宿主上）。
+ * 挂上这七条路由；返回一个注销函数（七条一起摘，一条抛了也不许把其余留在宿主上）。
  *
- * ⚠️ 半途失败也必须干净：`webServer.register` 会因为"路由名已被占用"抛错，而六条是**依次**挂的。
+ * ⚠️ 半途失败也必须干净：`webServer.register` 会因为"路由名已被占用"抛错，而七条是**依次**挂的。
  * 不加这层回滚的话，第二条挂不上时第一条就永久留在宿主上、`stop()` 再也拿不到它的注销函数——
  * 表现是"重载一次之后那条路由再也挂不上"（右栏方案当年踩过同一形状，见 install 脚本的退役逻辑）。
+ *
+ * ⚠️ **配置那一条排在最后**（2026-10-11）：它不是配对入口，排在前面会让"第 N 条就抛了"
+ * 那几条判据的编号含义整体错位（那些判据是照"发码先挂"写的）。
  */
-export function registerPillRoutes(webServer: WebServerLike, deps: PillRouteDeps): () => void {
+export function registerPillRoutes(webServer: WebServerLike, deps: PillRouteDeps & ConfigRouteDeps): () => void {
   const off: Array<() => void> = []
   const definitions = [
     { kind: 'exact' as const, path: PAIR_NEW_ROUTE, handler: pairNewHandler(deps) },
@@ -575,6 +582,7 @@ export function registerPillRoutes(webServer: WebServerLike, deps: PillRouteDeps
     { kind: 'exact' as const, path: PAIR_UNPAIR_ROUTE, handler: unpairHandler(deps) },
     { kind: 'exact' as const, path: PAIR_PAGE_ROUTE, handler: pairPageHandler(deps) },
     { kind: 'exact' as const, path: PAIR_MINIPROGRAM_ROUTE, handler: miniprogramImageHandler(deps) },
+    { kind: 'exact' as const, path: PLUGIN_CONFIG_ROUTE, handler: configRouteHandler(deps) },
   ]
   try {
     for (const definition of definitions) off.push(webServer.register(definition))

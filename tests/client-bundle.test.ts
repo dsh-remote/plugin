@@ -29,6 +29,15 @@ import { createContext, runInContext } from 'node:vm'
 /** 真 Date：夹具的假墙钟要从它身上取静态成员（`parse`/`UTC` 等）与构造语义。 */
 const RealDate = Date
 import { statusText, waitingText } from '../src/copy/zh.js'
+/**
+ * 设置页「进阶」那一栏那条路由。
+ *
+ * ⚠️ 刻意**不 import** `src/client/settings.ts`：那个文件是浏览器侧的（它的类型是
+ * `Document`/`HTMLElement`），拉进这个 host 侧 tsconfig 会让整份文件编译不过
+ * （tsconfig.json 没有 DOM lib）。所以这里写一份字面量，并由下面那条判据把它
+ * **与宿主侧常量逐字对齐**。
+ */
+const CONFIG_ROUTE = '/plugins/dsh-remote-control/config'
 import {
   PAIR_IMAGE_ROUTE,
   PAIR_MARKER_HEADER,
@@ -38,6 +47,9 @@ import {
   PAIR_STATUS_ROUTE,
   PAIR_UNPAIR_ROUTE,
 } from '../src/pill/routes.js'
+// 设置页「进阶」那一栏那条路由（2026-10-11 加）：常量在 `config-routes.ts`，注册点仍是
+// `registerPillRoutes`。产物里那个字面量必须与它逐字一致（见下面那条反证判据）。
+import { PLUGIN_CONFIG_ROUTE } from '../src/pill/config-routes.js'
 
 /**
  * 清单那一格：`dsh.client.inject` 是**包名**列表（排装载顺序），不是 cordis 服务名。
@@ -174,12 +186,35 @@ interface LoadOptions {
   unpairThrows?: boolean
   /** 预置一份**上一版**的样式表：模拟"宿主热更了这一半、文档没重载"。 */
   staleStyle?: boolean
+  /** `GET /config` 的回答（设置页「进阶」那一栏的读数，2026-10-11 加）。 */
+  configAnswer?: Record<string, unknown>
+  /** `GET /config` 回非 200（老版宿主没有这条路由时真机就是 404）。 */
+  configHttp?: number
+  /** `POST /config` 的回答（默认"已保存、要重启"）。 */
+  configWriteAnswer?: Record<string, unknown>
+  /** `POST /config` 回非 200（校验失败时是 400 + field/detail）。 */
+  configWriteHttp?: number
+  /** `POST /config` 直接抛。 */
+  configWriteThrows?: boolean
+}
+
+/** `GET /config` 的默认回答：一台"官方中继 + 认领来的口令"的机器。 */
+const DEFAULT_CONFIG_ANSWER = {
+  serverUrl: 'wss://drc.provid.cc',
+  defaultServerUrl: 'wss://drc.provid.cc',
+  serverUrlSource: 'default',
+  hostTokenSet: true,
+  hostTokenShape: 'a1b2…f1(48)',
+  hostTokenSource: 'claimed',
+  userConfigFile: '/home/u/.dsh/dsh-remote-control/user-config.json',
 }
 
 interface Harness {
   module: ClientModule
   /** fetch 收到的 URL。 */
   requests: string[]
+  /** `POST /config` 的 body（解析过的）——"只提交改动过的那一项"那条判据读它。 */
+  configWrites: Array<Record<string, unknown>>
   /** 每条 fetch 收到的 `init.signal`——3 秒硬超时的判据（见 `signals()`）。 */
   signals: unknown[]
   /** 被记下来的 console.error。 */
@@ -223,6 +258,8 @@ class FakeElement {
   className = ''
   src = ''
   type = ''
+  /** `<input>` 的值：设置页「进阶」那一栏那两条输入框靠它（保存判据要读它）。 */
+  value = ''
   tabIndex = 0
   style: Record<string, string> = {}
   focused = 0
@@ -388,6 +425,13 @@ const DEFAULT_STATUS = {
 
 function load(options: LoadOptions = {}): Harness {
   const requests: string[] = []
+  const configWrites: Array<Record<string, unknown>> = []
+  /**
+   * `GET /config` 的回答**可变**：写路由落地之后它要跟着变（真宿主就是这样回我们
+   * "现在生效的是什么"）。固定一份的话，"只提交改动项"那条路会自相矛盾
+   * （刚保存的地址下一次读回来还是旧的）。
+   */
+  const configAnswer: Record<string, unknown> = { ...DEFAULT_CONFIG_ANSWER, ...(options.configAnswer ?? {}) }
   const signals: unknown[] = []
   const errors: string[] = []
   const warnings: string[] = []
@@ -439,7 +483,10 @@ function load(options: LoadOptions = {}): Harness {
       const timer = timers.find((candidate) => candidate.id === id)
       if (timer) timer.cleared = true
     },
-    fetch: async (url: string, init?: { method?: string; headers?: Record<string, string>; signal?: unknown }) => {
+    fetch: async (
+      url: string,
+      init?: { method?: string; headers?: Record<string, string>; signal?: unknown; body?: unknown },
+    ) => {
       requests.push(url)
       signals.push(init?.signal)
       const method = init?.method ?? 'GET'
@@ -482,6 +529,43 @@ function load(options: LoadOptions = {}): Harness {
           status: options.unpairHttp ?? 200,
           json: async () => options.unpairAnswer ?? { state: 'ok', unpaired: 1 },
         }
+      }
+      if (url.startsWith(CONFIG_ROUTE)) {
+        if (method === 'POST') {
+          // 写配置走写路由那一档守卫：这条会改"这台主机连哪台中继"。
+          assert.equal(
+            init?.headers?.[PAIR_MARKER_HEADER],
+            PAIR_MARKER_VALUE,
+            `写配置必须带 ${PAIR_MARKER_HEADER}: ${PAIR_MARKER_VALUE}，实际 init=${JSON.stringify(init)}`,
+          )
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+          configWrites.push(body)
+          if (options.configWriteThrows) throw new Error('配置那条断了')
+          const writeStatus = options.configWriteHttp ?? 200
+          if (writeStatus === 200 && !options.configWriteAnswer) {
+            // 只在这里模拟宿主那条语义：空串 = 删掉这一项（回落到下一层）
+            if ('serverUrl' in body) {
+              configAnswer.serverUrl = body.serverUrl === '' ? configAnswer.defaultServerUrl : body.serverUrl
+            }
+            if ('hostToken' in body) {
+              configAnswer.hostTokenSet = body.hostToken !== ''
+              configAnswer.hostTokenSource = body.hostToken === '' ? 'none' : 'user'
+            }
+          }
+          return {
+            ok: writeStatus === 200,
+            status: writeStatus,
+            json: async () =>
+              options.configWriteAnswer ?? {
+                state: 'ok',
+                restartRequired: true,
+                config: configAnswer,
+              },
+          }
+        }
+        if (options.configWriteThrows) throw new Error('配置那条断了')
+        const readStatus = options.configHttp ?? 200
+        return { ok: readStatus === 200, status: readStatus, json: async () => configAnswer }
       }
       assert.equal(method, 'GET', `${url} 不该收到 ${method}`)
       return { ok: true, status: 200, json: async () => ({}) }
@@ -562,6 +646,7 @@ function load(options: LoadOptions = {}): Harness {
   return {
     module,
     requests,
+    configWrites,
     signals,
     errors,
     warnings,
@@ -1344,7 +1429,18 @@ test('反证：产物里的路由常量与宿主侧定义逐字一致（分叉�
   const found = [...new Set([...bundle.matchAll(/\/plugins\/[a-z0-9./-]+/g)].map((match) => match[0]))].sort()
   assert.deepEqual(
     found,
-    [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_MINIPROGRAM_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE].sort(),
+    [
+      PAIR_NEW_ROUTE,
+      PAIR_IMAGE_ROUTE,
+      PAIR_MINIPROGRAM_ROUTE,
+      PAIR_STATUS_ROUTE,
+      PAIR_UNPAIR_ROUTE,
+      // 2026-10-11 加：设置页「进阶」那一栏（自部署地址 / token）。
+      // ⚠️ 它**不在** `pill/routes.ts` 的 `PAIR_*` 那六个常量里，而在 `config-routes.ts` 里
+      // （注册点是同一个 `registerPillRoutes`）—— 两边拼错一个字符的表现是
+      // "保存按钮点了没反应，而日志全绿"。
+      PLUGIN_CONFIG_ROUTE,
+    ].sort(),
   )
 })
 
@@ -1941,21 +2037,18 @@ test('排版：分区有标题、状态行、二维码卡片、键值行、按�
    * 实测（2026-10-09，headless Chrome）：旧版面「连接」+「怎么用」两张卡
    * 合计 510px，占整栏 802px 的 63% —— 那是"大空间放小内容"的另一半。
    */
-  const meta = root.find('drc-sec-meta')
-  assert.ok(meta, '元信息要有容器（页脚那一行）')
-  const items = meta!.children ?? []
-  assert.ok(items.length >= 2, `元信息至少两项（中继 + 版本），实得 ${items.length} 项`)
-  for (const item of items) {
-    assert.equal(item.className, 'drc-sec-meta-item')
-    assert.equal(item.children.length, 2, '一项两格：标签 + 值')
-    assert.ok(String(item.children[1]!.textContent).length > 0, '值不能是空的（空值那一项应当根本不画）')
-  }
-  // 页脚：三步 + 一句补充说明
-  const steps = root.find('drc-sec-steps')?.children ?? []
-  assert.equal(steps.length, 3, '「怎么用」压成一行三步（旧版面是一张 255px 的卡、四条说明）')
-  for (const step of steps) assert.equal(step.className, 'drc-sec-step')
+  /**
+   * ⚠️ 2026-10-11（用户裁决）：元信息与页脚**整段删除**。
+   *
+   * 这一段原来钉的是「meta 至少两项（中继 + 版本）+ 三步齐全」。两样都拿掉了，
+   * 所以这里改成**反向断言**（见本文件另一条专门讲这件事的判据，这里只做结构层的兜底）：
+   * 页面上**不许**再有这些容器。
+   */
+  assert.equal(root.find('drc-sec-meta'), undefined, '底部那行元信息（中继/版本）已删')
+  assert.equal(root.find('drc-sec-steps'), undefined, '三步说明已删')
+  assert.equal(root.find('drc-sec-footer'), undefined, '页脚容器已删')
   const actions = root.find('drc-sec-actions')?.children ?? []
-  assert.ok(actions.length >= 1, '要有动作按钮')
+  assert.ok(actions.length >= 1, '要有动作按钮（删页脚不许把按钮一起删掉）')
   for (const node of actions) assert.equal(node.className, 'drc-sec-btn', '按钮要走同一套样式')
 })
 
@@ -2145,15 +2238,19 @@ test('反向判据：把标题或键值行去掉 ⇒ 结构与取值两条立刻
   await flush()
   const root = mountSettings(harness)
   await flush()
-  // 夹具自检：现在是齐的
-  assert.ok(root.find('drc-sec-title'))
-  assert.ok(root.findAll('drc-sec-meta-item').length >= 2)
+  // ⚠️ 2026-10-11：这条原来拿 `drc-sec-meta-item`（底部元信息的两格）当"键值行"样本，
+  // 而那些节点随页脚一起删掉了 ⇒ 夹具自检 `length >= 2` 恒不成立，这条**自己红了**。
+  // ⇒ 样本换成**删掉页脚之后仍然存在**的结构：状态行与动作区。
+  assert.ok(root.find('drc-sec-title'), '夹具自检：标题在')
+  assert.ok(root.find('drc-sec-statushead'), '夹具自检：状态行在')
+  assert.ok((root.find('drc-sec-actions')?.children ?? []).length >= 1, '夹具自检：动作区非空')
+
   // 把标题摘掉之后，"有标题"这条必须不成立
   root.find('drc-sec-title')!.remove()
   assert.equal(root.find('drc-sec-title'), undefined, '摘掉之后必须找不到标题')
-  // 把键值行清空之后，"至少两行"这条必须不成立
-  for (const item of root.findAll('drc-sec-meta-item')) item.remove()
-  assert.equal(root.findAll('drc-sec-meta-item').length, 0, '清空之后一项都不许剩')
+  // 把动作区清空之后，"至少一个按钮"这条必须不成立
+  for (const node of root.find('drc-sec-actions')!.children) node.remove()
+  assert.equal((root.find('drc-sec-actions')?.children ?? []).length, 0, '清空之后一个按钮都不许剩')
 })
 
 // ── 设置页 2026-10-09 的重排（用户："排版还是比较乱……大空间放小内容"）──────
@@ -2271,19 +2368,32 @@ test('重排：「怎么用」压成页脚里的三步 + 一句补充（2026-10-
   const root = mountSettings(harness)
   await flush()
   assert.equal(root.findAll('drc-sec-doc-item').length, 0, '旧的四条说明不该还在（它们是"大空间"的一部分）')
-  const steps = root.find('drc-sec-steps')?.children ?? []
-  assert.equal(steps.length, 3, `三步，实得 ${steps.length}`)
-  // ⚠️ 必须用 `allText()`：假 DOM 的 `textContent` **不聚合后代**（见本文件 722 行那条注释），
-  // 直接读 `step.textContent` 恒为 ''，于是这条判据会在"步骤文案变了"时也不红。
-  // `allText()` 用 ' ' 拼 [自身, ...后代]，自身那份是空串 ⇒ 结果带一个前导空格，必须 trim。
-  const words = steps.map((step) => String(step.allText()).trim())
-  for (const expected of ['扫上面的码', '在手机上下指令', '审批工具调用']) {
-    assert.ok(words.includes(expected), `少了一步「${expected}」：${words.join(' / ')}`)
-  }
-  // 两条**排错时真的会用到**的事实不许在压缩过程中丢掉
-  const footnote = String(root.find('drc-sec-footnote')?.textContent ?? '')
-  assert.match(footnote, /6 位码/, '「扫不出就手输那 6 位码」是用户真会遇到的，不能在压缩里丢')
-  assert.match(footnote, /退出配对/, '「退出配对会作废钥匙」同理')
+  /**
+   * 2026-10-11（用户裁决）：**页脚整段删除** —— 三步说明、那条脚注、以及
+   * 底部「中继 <地址>　版本 <x.y.z>」那行元信息。
+   *
+   * 原来这条判据钉的是「三步都在、脚注里有那两条事实」。它当时那句论证是
+   * 「排错时真的会用到，删不得」—— 而这次用户明确要删。
+   * ⇒ 于是判据**反向**：钉住"这些东西都不在页面上"。
+   * 反向判据比正向的更耐改（文案怎么重写都不影响），但**必须真删**，
+   * 否则它就是一条恒绿的装饰。
+   */
+  assert.equal(
+    root.find('drc-sec-steps'),
+    undefined,
+    '「扫上面的码 / 在手机上下指令 / 审批工具调用」那三步已经删了（2026-10-11 用户裁决）',
+  )
+  assert.equal(root.find('drc-sec-footer'), undefined, '页脚整段已经删了：三步 + 脚注 + 元信息一行（用户裁决）')
+  assert.equal(
+    root.find('drc-sec-footnote'),
+    undefined,
+    '那条脚注（「扫不出就手输 6 位码 · 端到端加密 · 退出配对会作废钥匙」）已经删了',
+  )
+  assert.equal(
+    root.find('drc-sec-meta'),
+    undefined,
+    '底部那行「中继 / 版本 / 待处理」也删了：中继地址与版本属于只读诊断，摆在配置页会让人以为该去改',
+  )
 })
 test('重排：小程序码取不到时把整张卡摘掉（不是留一张破图），配对那条路一个字不受影响', async () => {
   const harness = load({ react: FAKE_REACT, slots: true })
@@ -2291,7 +2401,9 @@ test('重排：小程序码取不到时把整张卡摘掉（不是留一张破�
   const root = mountSettings(harness)
   await flush()
   const before = root.findAll('drc-sec-card').length
-  assert.equal(before, 2, '前提：两张卡先都在（重做后网格里正好两张）')
+  // ⚠️ 2026-10-11：第三张是「进阶：自部署 / 自定义」——它**不在网格里**（是网格的兄弟），
+  // 所以"网格里正好两张"那条判据不受影响；这里数的是整页，跟着加一。
+  assert.equal(before, 3, '前提：两张配对卡 + 一张进阶卡都在')
   assert.ok(root.find('drc-mp'), '前提：图先是在的')
   root.find('drc-mp')!.emit('error')
   assert.equal(root.findAll('drc-sec-card').length, before - 1, '图挂了就把那张卡摘掉——留一张破图比少一张卡难看得多')
@@ -2309,4 +2421,152 @@ test('重排：卡片之外还有一句"这一页是干什么的"（副标题）
   assert.ok(sub, '缺副标题：第一次进来的人看到的是一张没有上下文的二维码')
   assert.ok(String(sub!.textContent).length >= 10, '副标题要真说一句，而不是"设置"这种空话')
   assert.ok(root.find('drc-sec-header'), '标题与副标题要收在同一个抬头块里（否则间距只能靠巧合）')
+})
+
+// ── 设置页「进阶：自部署 / 自定义」那一栏（2026-10-11）────────────────────
+//
+// 用户裁决的目标形态是「插件装完就能用」：默认走官方中继、口令自动认领。
+// 而**默认改成官方之后自部署用户会连错**，所以这一栏不是可选项 ——
+// 它必须留着，且必须真的能用（能读、能改、改坏了说得出为什么）。
+
+/**
+ * 那一栏的两行小字都是 `drc-adv-note`，按 `data-kind` 取。
+ * ⚠️ 不能用 `find('drc-adv-note[data-kind="failed"]')`：本仓的假 DOM 只按 className
+ * 精确匹配，属性选择器在这里恒返回 undefined（那样判据会变成"永远找不到 ⇒ 断言全过"）。
+ */
+function advNote(root: FakeElement, kind: string): FakeElement | undefined {
+  return root.findAll('drc-adv-note').find((node) => node.getAttribute('data-kind') === kind)
+}
+
+test('进阶那一栏：结构与读取都在（两个输入框 + 保存/清除/恢复三颗按钮）', async () => {
+  const harness = load({ react: FAKE_REACT, slots: true })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  const advanced = root.find('drc-adv-grid')
+  assert.ok(advanced, `这一栏必须存在（它是自部署用户唯一的入口）：${root.allText().slice(0, 300)}`)
+  const inputs = advanced!.children.filter((child) => child.tag === 'input')
+  assert.equal(inputs.length, 2, `两个输入框（中继地址 / 主机口令），实得 ${inputs.length}`)
+  // 口令**不许明文上屏**：这是凭据，截图与投屏都是常见场合
+  assert.equal(inputs[1]!.getAttribute('type'), 'password', '口令输入框必须是 password')
+  // GET 打过那条路由，且当前地址铺进了第一个输入框
+  assert.ok(harness.requests.includes(CONFIG_ROUTE), `设置页要 GET 一次当前配置：${harness.requests.join(' | ')}`)
+  assert.equal(inputs[0]!.value, 'wss://drc.provid.cc', '当前生效地址要填进输入框（否则用户不知道该改成什么）')
+  assert.equal(inputs[1]!.value, '', '口令框**不回填真值**，也没有可回填的东西（宿主不给）')
+  const buttons = root.find('drc-adv-grid')!.parent!.find('drc-sec-actions')
+  assert.ok(buttons, '那一栏要有自己的动作区')
+  assert.deepEqual(
+    buttons!.children.map((child) => child.textContent),
+    ['保存', '清除口令', '恢复默认'],
+  )
+})
+
+test('进阶那一栏：保存**只提交改动过的那一项**——留空的口令不许被当成"清空"', async () => {
+  // ⚠️ 这一条是这一整栏最容易犯、后果最重的错：口令框默认是空的（占位符说明"已设置"），
+  // 无条件把两个输入框都提交上去 ⇒ 用户每保存一次地址，就把自己的口令清空一次。
+  const harness = load({ react: FAKE_REACT, slots: true })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  const grid = root.find('drc-adv-grid')!
+  const inputs = grid.children.filter((child) => child.tag === 'input')
+  const save = root.find('drc-adv-grid')!.parent!.find('drc-sec-actions')!.children[0]!
+
+  // ① 一个字都没改就点保存 ⇒ 一个请求都不发（"没有改动"）
+  save.emit('click')
+  await flush()
+  assert.deepEqual(harness.configWrites, [], '没改动就不该打那条写路由')
+
+  // ② 只改地址 ⇒ body 里**只有 serverUrl**，没有 hostToken
+  inputs[0]!.value = 'wss://self.example.com'
+  save.emit('click')
+  await flush()
+  assert.deepEqual(harness.configWrites, [{ serverUrl: 'wss://self.example.com' }], '口令那一项不许跟着提交')
+
+  // ③ 上一步保存之后宿主回的是"生效值"，输入框里就是刚存进去的地址（夹具照真宿主回声）。
+  //     所以这一步只填口令 ⇒ body 里**只有 hostToken**（地址与已保存值相同，不算改动）。
+  assert.equal(inputs[0]!.value, 'wss://self.example.com', '保存之后输入框要显示生效值')
+  inputs[1]!.value = 'my-own-token-my-own-token-my-own-token'
+  save.emit('click')
+  await flush()
+  assert.deepEqual(
+    harness.configWrites[1],
+    { hostToken: 'my-own-token-my-own-token-my-own-token' },
+    '地址没改动就不该再提交一次（更不该把口令一起清掉）',
+  )
+
+  // ④ 保存完要说清"什么时候生效"：地址与口令是建连接时读一次的
+  assert.match(
+    String(advNote(root, 'ok')?.textContent ?? root.allText()),
+    /重启/,
+    `保存之后必须写明"重启才生效"（否则用户会以为保存没反应）：${root.allText().slice(-200)}`,
+  )
+})
+
+test('进阶那一栏：「恢复默认」发两个空串（空串 = 删掉这一项，回落到下一层）', async () => {
+  const harness = load({ react: FAKE_REACT, slots: true })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  const actions = root.find('drc-adv-grid')!.parent!.find('drc-sec-actions')!
+  actions.children.find((child) => child.textContent === '恢复默认')!.emit('click')
+  await flush()
+  assert.deepEqual(harness.configWrites, [{ serverUrl: '', hostToken: '' }], '空串是"删掉这两项"，不是空地址')
+})
+
+test('进阶那一栏：保存失败（400）要把宿主给的理由印出来，**不许**显示"已保存"', async () => {
+  const harness = load({
+    react: FAKE_REACT,
+    slots: true,
+    configWriteHttp: 400,
+    configWriteAnswer: { error: 'invalid', field: 'serverUrl', detail: 'must start with ws:// or wss://' },
+  })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  root.find('drc-adv-grid')!.children.filter((child) => child.tag === 'input')[0]!.value = 'http://nope'
+  root.find('drc-adv-grid')!.parent!.find('drc-sec-actions')!.children[0]!.emit('click')
+  await flush()
+  const note = advNote(root, 'failed')
+  assert.ok(note, `失败必须有 data-kind=failed 的那一行：${root.allText().slice(-200)}`)
+  assert.equal(advNote(root, 'ok'), undefined, '失败那一格绝不许同时写着"已保存"')
+  assert.match(String(note!.textContent), /must start with ws:\/\/ or wss:\/\//, '要把宿主说的原因带出来')
+})
+
+test('进阶那一栏：读不到配置（老版宿主 404）就说明白，而不是留一个空表单', async () => {
+  const harness = load({ react: FAKE_REACT, slots: true, configHttp: 404 })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  assert.match(
+    String(advNote(root, 'failed')?.textContent ?? ''),
+    /404/,
+    `那条路由没有时要留痕（含状态码）：${root.allText().slice(-200)}`,
+  )
+})
+
+test('⚠️ 状态轮询每 2 秒重画整页，但**进阶那一栏的输入内容不许被抹掉**', async () => {
+  // 现场形状：`paint()` 是 `box.replaceChildren(...)` 整块重建，而状态轮询每 2 秒来一次。
+  // 如果那一栏跟着重建，用户正在输入的中继地址会在两秒内被清零 ——
+  // 而屏幕上只是"我打的字自己没了"，没有任何报错。
+  const harness = load({ react: FAKE_REACT, slots: true })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  const inputs = root.find('drc-adv-grid')!.children.filter((child) => child.tag === 'input')
+  inputs[0]!.value = 'wss://typing.example.com'
+  const sameNode = inputs[0]!
+
+  // 打一拍状态轮询（它一定会 `paint()` 一次）
+  await harness.fireAndFlush(0)
+
+  const after = root.find('drc-adv-grid')!.children.filter((child) => child.tag === 'input')[0]!
+  assert.equal(after.value, 'wss://typing.example.com', '输入内容被重画抹掉了：那一栏必须只建一次')
+  assert.equal(after, sameNode, '连节点都换了 ⇒ 用户的光标位置也会丢')
+})
+
+test('反证：进阶那一栏那条路由的字面量与宿主侧常量逐字一致（拼错 = "保存点了没反应而日志全绿"）', () => {
+  assert.equal(CONFIG_ROUTE, PLUGIN_CONFIG_ROUTE, '浏览器面写死的那条路径必须与宿主注册的那条一样')
+  const bundle = readFileSync(CLIENT, 'utf8')
+  assert.ok(bundle.includes(CONFIG_ROUTE), `client.cjs 里没有 ${CONFIG_ROUTE}：那一栏会打到一条 404 上`)
 })

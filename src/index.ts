@@ -3,7 +3,7 @@
  *
  * 职责边界（取证 docs/legacy-spec/host-plugin-cordis.md §1）：这个文件只做三件事
  * —— 读配置并校验、探测内核载体、把内核端口/中继客户端/运行时/防休眠接起来并持续写状态快照。
- * 配对入口只有状态栏那颗 pill（`pill/start.ts` 那六条路由）。业务逻辑都在 `core/`，
+ * 配对入口只有状态栏那颗 pill（`pill/start.ts` 挂的那七条路由：六条配对 + 一条配置读写）。业务逻辑都在 `core/`，
  * 平台知识都在 `platform/`。
  *
  * 三条不可违反的纪律：
@@ -42,6 +42,9 @@ import {
   type PluginConfig,
 } from './shell/config.js'
 import { startPill, type PillHandle } from './pill/start.js'
+import type { ConfigSource, EffectivePluginConfig } from './pill/config-routes.js'
+import { claimHostToken, readStoredHostToken, resolveHostTokenFile, writeStoredHostToken } from './shell/claim-token.js'
+import { readUserConfig, resolveUserConfigFile, writeUserConfig, type UserOverrides } from './shell/user-config.js'
 import { guardedSubscribe } from './platform/guard.js'
 import { type LivePairing, type PillStatus } from './pill/routes.js'
 import { readMiniprogramImage } from './pill/miniprogram.js'
@@ -170,7 +173,29 @@ export function apply(ctx: LooseContext, injected: Partial<PluginConfig> = {}, c
 }
 
 function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: Clock): RuntimeHandle | undefined {
-  const config = readConfig(injected)
+  const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void => {
+    try {
+      process.stdout.write(`${JSON.stringify(buildLogRecord(message, fields, new Date().toISOString()))}\n`)
+    } catch {
+      /* GUI 宿主里 stdout 可能不可用 */
+    }
+  }
+
+  /**
+   * **四级配置**：`默认值 < 设置页写下的自定义项 < patch 注入 < 环境变量`
+   * （2026-10-11 加第三级；前两级与旧实现一致）。
+   *
+   * 为什么合成**两趟**：自定义项落在 `statusFile` 旁边（`user-config.json`），
+   * 而 `statusFile` 本身是第一趟才读出来的。两趟都是纯函数调用（各读一次盘），
+   * 代价可以忽略，换来的是"秘钥路径不靠猜"。
+   *
+   * ⚠️ 两趟之间**只有** `statusFile` 这一个用途；自定义项本身不含 `statusFile`
+   * （设置页那一栏只有"自部署地址 / token"两项）。
+   */
+  const baseConfig = readConfig(injected, process.env)
+  const userConfigFile = resolveUserConfigFile(baseConfig.statusFile)
+  let userOverrides = readUserConfig(userConfigFile, log)
+  const config = readConfig(injected, process.env, userOverrides)
   // 载具探测的复查（8s/25s/60s）与载具宽限都是"宿主还活着就顺手看一眼"的一次性动作。
   // 它们必须 unref 且在停机时撤掉，否则 60s 那一发会把事件循环钉住——`node e2e/run.mjs`
   // 1.2s 跑完却 60s 才退出、任何 headless/CLI 跑法白等一分钟，都出自这里（见 core/clock.ts）。
@@ -183,13 +208,61 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
    */
   const hostId = resolveHostId(config.statusFile ? path.dirname(config.statusFile) : '', config.hostId)
 
-  const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void => {
-    try {
-      process.stdout.write(`${JSON.stringify(buildLogRecord(message, fields, new Date().toISOString()))}\n`)
-    } catch {
-      /* GUI 宿主里 stdout 可能不可用 */
+  /**
+   * ── host token：谁给的 / 盘上认领来的 / 现在去认领（2026-10-11）──────────────
+   *
+   * 目标形态是「插件装完就能用」：装完**什么都不用配**。所以这里的顺序是
+   * ① env / patch / 设置页（`readConfig` 已经合成进 `config.hostToken`）；
+   * ② 盘上那枚**认领来的** token（`host-token.json`，只在 `serverUrl` 与当前一致时才算数）；
+   * ③ 都没有 ⇒ 向中继认领一枚（异步，**不阻断启动**）。
+   *
+   * ⚠️ 认领来的那一枚**不写回 `config.hostToken`**：那个字段的语义是"配置层合成出来的值"
+   * （`state()` 与设置页都靠它区分"用户配的"与"机器自己去要的"）。生效值走
+   * {@link effectiveTokenState}，两处都从那里读。
+   */
+  const hostTokenFile = resolveHostTokenFile(config.statusFile)
+  const envToken = (config.hostTokenEnv ? (process.env[config.hostTokenEnv] ?? '') : '').trim()
+  const patchToken = typeof injected?.hostToken === 'string' ? injected.hostToken.trim() : ''
+  const envUrl = (process.env.DRC_SERVER_URL ?? '').trim()
+  const patchUrl = typeof injected?.serverUrl === 'string' ? injected.serverUrl.trim() : ''
+  /** 盘上认领来的那一枚（空 = 没有）与**它是向哪台中继领的**。 */
+  let claimedToken = ''
+  let claimedForUrl = ''
+  /** `pending` = 认领请求还没落地，此刻**不许**打开启动闸门（RelayClient 是在构造时读 token 的）。 */
+  let claimState: 'not-needed' | 'pending' | 'ok' | 'failed' = 'not-needed'
+  let claimReason = ''
+  let claimStatus = 0
+
+  const effectiveTokenState = (): { token: string; source: ConfigSource } => {
+    if (config.hostToken) {
+      // `readConfig` 的合成顺序就是 env > patch > 用户配置，所以按同一个顺序回答来源。
+      return { token: config.hostToken, source: envToken ? 'env' : patchToken ? 'patch' : 'user' }
+    }
+    // ⚠️ **同时判 serverUrl**：认领来的那一枚属于某一台具体的中继，换地址之后拿它去连
+    // 只有两种结果——被拒，或者把上一台中继的凭据送给一台陌生的服务器（`claim-token.ts` 文件头）。
+    if (claimedToken && claimedForUrl === config.serverUrl) return { token: claimedToken, source: 'claimed' }
+    return { token: '', source: 'none' }
+  }
+
+  if (!config.hostToken && config.enabled) {
+    const stored = readStoredHostToken(hostTokenFile, config.serverUrl, log)
+    if (stored) {
+      claimedToken = stored
+      claimedForUrl = config.serverUrl
+      log('host token restored from disk', { file: path.basename(hostTokenFile), tokenLength: stored.length })
+    } else {
+      // 认领是**异步**的：这一刻还没有 token，但也不该因此拒绝启动
+      // （`validateConfig` 会为缺 token 报 error —— 那一条在下面被显式豁免）。
+      claimState = 'pending'
     }
   }
+  /**
+   * "token 会有"这件事：认领在路上，或者盘上已经有一枚。
+   *
+   * 它只影响**一个**判断：`validateConfig` 的 `hostToken: error` 在此时**不算阻断**
+   * —— 否则全新安装的机器永远走不到认领那一步（那是这条功能最核心的路径）。
+   */
+  const tokenWillArrive = claimState === 'pending' || claimedToken !== ''
 
   /**
    * 配对通道的密钥簿落盘（免扫码重连，见 `shell/pair-store.ts`）。
@@ -202,6 +275,18 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   const pairStore = new PairStore({ file: pairStoreFile, hostId, log })
   const restoredAtBoot = pairStoreFile ? pairStore.load() : []
   const problems = validateConfig(config)
+  /**
+   * 缺 token 那一条 error 在"认领在路上 / 盘上有一枚"时**不是问题**：它下一句就会被
+   * 认领结果取代。⚠️ 必须**从数组里摘掉**，不能只跳过一次日志 —— `state()` 会把
+   * `problems` 原样写进 `status.json`，留着它就会出现"token 明明认领成功、
+   * 快照却写着 error:hostToken"的假警报（与 2026-10-03 那条 `warn:pill` 并存事故同形）。
+   */
+  if (tokenWillArrive) {
+    for (let index = problems.length - 1; index >= 0; index -= 1) {
+      const problem = problems[index]
+      if (problem && problem.level === 'error' && problem.field === 'hostToken') problems.splice(index, 1)
+    }
+  }
   for (const problem of problems) {
     log(`config ${problem.level}`, { field: problem.field, message: problem.message })
   }
@@ -210,17 +295,74 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     status.write({ carrier: 'none', relay: 'idle', reason: 'disabled' })
     return undefined
   }
-  if (problems.some((problem) => problem.level === 'error')) {
-    // 有 error 级问题就不启动，但一定留下面包屑：否则"为什么什么都没发生"没有答案。
+  /** error 级问题 ⇒ 不启动（面包屑一定留下）。缺 token 那一条已经在上面被摘掉了。 */
+  const blocking = problems.filter((problem) => problem.level === 'error')
+  if (blocking.length > 0) {
     status.write({
       carrier: 'none',
       relay: 'idle',
       reason: 'invalid-config',
       serverUrl: config.serverUrl,
       hostToken: undefined,
-      problems: problems.map((problem) => `${problem.level}:${problem.field}:${problem.message}`),
+      problems: blocking.map((problem) => `${problem.level}:${problem.field}:${problem.message}`),
     })
     return undefined
+  }
+  if (claimState === 'pending') {
+    // 认领期间也留下面包屑：GUI 宿主里 stdout 没人看，而这段时间屏幕上什么都没有。
+    status.write({
+      carrier: 'none',
+      relay: 'idle',
+      reason: 'claiming-token',
+      serverUrl: config.serverUrl,
+      problems: problems.map((problem) => `${problem.level}:${problem.field}`),
+    })
+  }
+
+  /**
+   * 把认领结果落定：**无论成败都打开启动闸门**。
+   *
+   * "没认领到"的后果是"这台主机连不上中继"（relay 会拒掉空 token），
+   * **不是**"插件起不来" —— 后者会把"手机上看不到这台机器"变成"连设置页都没有"，
+   * 而设置页那一栏正是用户自己填 token 的地方（进阶项）。
+   */
+  const settleClaim = (): void => {
+    if (claimState === 'pending') return
+    if (pendingPort) start(pendingPort)
+    else tryStart()
+    startMockIfConfigured()
+    if (!runtime) reportNoCarrier()
+  }
+  if (claimState === 'pending') {
+    void claimHostToken({ serverUrl: config.serverUrl, log }).then((outcome) => {
+      if (outcome.ok) {
+        claimedToken = outcome.token
+        claimedForUrl = config.serverUrl
+        claimState = 'ok'
+        // 落盘走 `platform/secure-file.ts`（0600 + 原子写），与 status.json / 密钥簿同一条路。
+        writeStoredHostToken(
+          hostTokenFile,
+          { token: outcome.token, serverUrl: config.serverUrl, source: 'claimed', now: clock.now() },
+          log,
+        )
+        log('host token claimed', { serverUrl: config.serverUrl, tokenLength: outcome.token.length })
+      } else {
+        claimState = 'failed'
+        claimReason = outcome.reason
+        claimStatus = outcome.status ?? 0
+        // 一条 warn 进快照：否则"手机上看不到这台机器"在 status.json 里只剩下 relay offline。
+        problems.push({
+          level: 'warn',
+          field: 'hostToken',
+          message: `没能从中继认领到 host token（${outcome.reason}）：请把中继的 DRC_HOST_TOKEN 写进 ${config.hostTokenEnv || '(hostTokenEnv 为空)'}，或在设置页「进阶」那一栏自己填一枚`,
+        })
+        log('host token claim failed: this host cannot connect until a token is configured', {
+          reason: outcome.reason,
+          status: outcome.status ?? 0,
+        })
+      }
+      settleClaim()
+    })
   }
 
   const slots = new PairingSlots(() => clock.now())
@@ -276,15 +418,34 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     },
   }
 
+  /**
+   * 认领还在路上时暂存的载具端口（见 `start()` 的第一段）。
+   * 认领一落地就把它交给 `start()`，与"晚到的服务"走同一条路。
+   */
+  let pendingPort: KernelPort | undefined
+
   const start = (port: KernelPort): void => {
     if (runtime) return
+    if (claimState === 'pending') {
+      /**
+       * 认领还没落地：**把端口记下来，先不建中继客户端**。
+       *
+       * 为什么不能"先用空 token 连上、认领到了再换"：`RelayClient` 的 token 是
+       * **构造时读一次**的（`hello` 帧就在连接那一刻发出去），换 token 得重建客户端；
+       * 而"空 token 先连一次"会给中继留一条必然失败的鉴权记录，把真正的故障
+       * （认领失败）埋在一堆 auth failed 里。
+       */
+      pendingPort = port
+      return
+    }
     kernel = port
     startedCarrier = port.carrier
     relay = new RelayClient({
       url: config.serverUrl,
       hostId,
       label: config.hostLabel,
-      token: config.hostToken,
+      // 生效值可能来自**认领**（那一枚不在 `config.hostToken` 里，见 `effectiveTokenState`）。
+      token: effectiveTokenState().token,
       clock,
       log,
       lookupPairingSlot: (token) => slots.resolveFor(token),
@@ -543,7 +704,6 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       unarchiveOnPrompt: config.unarchiveOnPrompt,
       uploadDir: resolveUploadDir(config),
       maxFileBytes: config.maxFileBytes,
-      approvalTimeoutMs: config.approvalTimeoutSec * 1000,
       log: (message, fields) => log(message, fields),
     })
     /**
@@ -754,6 +914,25 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          * 手机/链路的锅）"，只能回去读代码。
          */
         attachmentLimits: runtime?.attachmentLimitsForDiagnostics ?? null,
+        /**
+         * **host token 是从哪来的 / 认领成功没有**（2026-10-11 加）。
+         *
+         * 为什么必须出到快照：`state()` 那一格只有 `hostTokenShape`（脱敏形态），
+         * 它回答不了"这枚 token 是用户配的、还是机器自己去认领的"；
+         * 而认领失败时的症状是**中继侧的 auth failed**（`relay: offline`），
+         * 在 GUI 宿主里没有任何地方说得清"原因其实是没认领到"。
+         *
+         * `claim` 的四个取值：`not-needed`（本来就有 token，没去认领）/ `pending`
+         * （请求在路上）/ `ok` / `failed`（`reason` 说清是哪一档：unreachable / http / shape / bad-url / no-fetch）。
+         * **绝不含 token 本身**，也绝不含它的任何片段。
+         */
+        hostToken: {
+          source: effectiveTokenState().source,
+          claim: claimState,
+          claimReason: claimState === 'failed' ? claimReason : '',
+          claimStatus: claimState === 'failed' ? claimStatus : 0,
+          file: hostTokenFile ? path.basename(hostTokenFile) : '',
+        },
       },
       kernel: kernel?.describe() ?? null,
       // 出站计数：手机上"没收到 X"的第一现场对比点（插件没发 vs 发了但路上丢了）。
@@ -764,7 +943,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       pill: pillRoutes?.probe ?? { webServer: 'not-started' },
       // token 永远不出现真值；这条有测试锁住。
       hostToken: undefined,
-      hostTokenShape: config.hostToken ? redact(config.hostToken) : undefined,
+      // ⚠️ 读**生效值**（可能是认领来的那一枚），不是 `config.hostToken` ——
+      // 后者只是配置层合成出来的那一份。形状（长度）是排错时"是不是拿错了变量"的唯一线索。
+      hostTokenShape: effectiveTokenState().token ? redact(effectiveTokenState().token) : undefined,
       mockBridgeForced: config.mockBridge,
       problems: [
         ...problems.map((problem) => `${problem.level}:${problem.field}`),
@@ -1435,8 +1616,14 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       /* 时钟不可用就少一次复查，不影响主流程 */
     }
   }
-  tryStart()
-  if (!runtime && config.mockBridge) {
+  /**
+   * 没有载具时的两件收尾：mock 兜底 + 一条"为什么什么都没起来"的面包屑。
+   *
+   * 抽成函数而不是留在原地内联（2026-10-11）：认领那条**异步**路落地时也要走这两步，
+   * 抄第二遍就等于第二处会漂移（本项目"两处各写一份必然漂移"的老账）。
+   */
+  const startMockIfConfigured = (): void => {
+    if (runtime || !config.mockBridge || decided) return
     decided = true
     // mock 载体只为开发与冒烟存在：它的会话 id 一律 `ses_mock` 前缀，
     // 真链路测试里有专门一条断言"看到 ses_mock 就判失败"。
@@ -1444,20 +1631,75 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       .then(({ createMockKernel }) => start(createMockKernel({ log, clock })))
       .catch(() => {})
   }
-  if (!runtime) {
+  /** 载具一个都没起来时留下面包屑（`state()` 已经能回答"探到了什么"，这里补"结论"）。 */
+  const reportNoCarrier = (): void => {
     status.write({ ...state(), carrier: 'none', reason: 'no-carrier', probe })
     log('no kernel carrier available', { hint: '需要 sessions 服务，或把 mockBridge 打开做开发' })
   }
 
-  // ── 配对入口：状态栏那颗 pill 的六条路由 ────────────────────────────
+  tryStart()
+  /**
+   * ⚠️ 认领还在路上时**这两步都要等**：此刻 `runtime` 必然 undefined，
+   * 照旧执行的话会写出 `no-carrier` / `claiming-token` 两条**互相矛盾**的面包屑，
+   * 而认领落地后 `settleClaim()` 会把它们各走一遍。
+   */
+  if (claimState !== 'pending') {
+    startMockIfConfigured()
+    if (!runtime) reportNoCarrier()
+  }
+
+  // ── 配对入口：状态栏那颗 pill 的七条路由 ────────────────────────────
   //
   // **配对入口就是这几条路由**（`/drc` 命令 2026-10-03 整个删掉了）；
-  // 其中 `miniprogram.jpg` 是设置页右栏那张静态小程序码，与配对本身无关。
+  // 其中 `miniprogram.jpg` 是设置页右栏那张静态小程序码，与配对本身无关；
+  // `GET|POST /config`（2026-10-11 加）是设置页「进阶」那一栏的读写口。
   // 主链路先成立：这一半起不来时，上面接好的那些一行都不许被回滚。
   //
   // 整段再包一层 try 不是冗余：`startPill` 内部已经层层兜住，但"层层兜住"是设计不是证明。
   // 它一旦抛出，宿主会把我们这条 fiber 标 FAILED 并 dispose 掉那几个 inject 子 fiber——
   // 那就等于用一个界面功能砸了配对链路（真机取证见 `apply()` 里那条纪律）。
+  //
+  /**
+   * 设置页「进阶」那一栏读回来的东西：**每次请求现算**（`status` 那条路由的同一条纪律：
+   * 状态是"此刻"的，缓存一份在 apply 里就会写出过期读数）。
+   */
+  const describeEffectiveConfig = (): EffectivePluginConfig => {
+    const token = effectiveTokenState()
+    const urlSource: ConfigSource = envUrl ? 'env' : patchUrl ? 'patch' : userOverrides.serverUrl ? 'user' : 'default'
+    return {
+      serverUrl: config.serverUrl,
+      defaultServerUrl: DEFAULT_CONFIG.serverUrl,
+      serverUrlSource: urlSource,
+      hostTokenSet: token.token !== '',
+      hostTokenShape: token.token ? redact(token.token) : '',
+      hostTokenSource: token.source,
+      userConfigFile,
+    }
+  }
+  /**
+   * 落盘设置页那两项。**合并而不是整体替换**：表单只提交它改过的那一项，
+   * 而"空串 = 删掉这一项"的语义由 `normalizeUserOverrides` 保证（key 在 = 用户动过它）。
+   */
+  const saveUserOverrides = (input: UserOverrides): { ok: true } | { ok: false; field: string; error: string } => {
+    const next: UserOverrides = { ...userOverrides }
+    if ('serverUrl' in input) next.serverUrl = input.serverUrl
+    if ('hostToken' in input) next.hostToken = input.hostToken
+    if (!writeUserConfig(userConfigFile, next, clock.now(), log)) {
+      return { ok: false, field: 'file', error: 'cannot write the config file' }
+    }
+    userOverrides = next
+    /**
+     * 立刻反映到生效值上，让用户保存完就看见新地址。
+     *
+     * ⚠️ **但连接不会跟着换**：中继地址与 token 是 `RelayClient` 构造时读一次的，
+     * 所以路由的回答里带 `restartRequired: true`（不说这一句，用户会以为"保存没生效"）。
+     * 重新合成一次而不是手写"回落到默认值"：优先级只有 `readConfig` 那一处说了算。
+     */
+    const fresh = readConfig(injected, process.env, userOverrides)
+    config.serverUrl = fresh.serverUrl
+    config.hostToken = fresh.hostToken
+    return { ok: true }
+  }
   try {
     pillRoutes = startPill(ctx, {
       enabled: config.pill.enabled,
@@ -1467,6 +1709,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       status: () => pillStatus(),
       unpair: () => unpairAll(),
       miniprogramCode: () => readMiniprogramImage(),
+      // 设置页「进阶」那一栏：路由那一层**不碰文件系统**，读写都收在这里。
+      config: () => describeEffectiveConfig(),
+      saveConfig: (overrides) => saveUserOverrides(overrides),
       log,
     })
   } catch (error) {
@@ -1487,7 +1732,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     stop(): void {
       // 复查定时器要先撤：停机之后它们再去写 status.json，写的是已经过期的取证。
       oneShot.cancelAll()
-      // pill 那六条路由也要一起收：它是不在主链路上的旁路，所以单独一句。
+      // pill 那七条路由也要一起收：它是不在主链路上的旁路，所以单独一句。
       pillRoutes?.stop()
       status.stop()
       for (const hook of stopHooks) {

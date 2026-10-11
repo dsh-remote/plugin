@@ -321,8 +321,6 @@ function fixture(options: Partial<ConstructorParameters<typeof HostRuntime>[4]> 
   const events: Array<{ message: string; fields?: Record<string, string | number | boolean | undefined> }> = []
   const runtime = new HostRuntime(kernel, transport, sleep, clock, {
     listingRefreshMs: 3_600_000,
-    approvalTimeoutMs: 5_000,
-    questionTimeoutMs: 5_000,
     log: (message, fields) => {
       logs.push(message)
       events.push({ message, fields })
@@ -593,12 +591,16 @@ test('此刻没有已配对的手机时审批返回 decline，把决定权交还
   )
 })
 
-test('审批超时返回 decline 并配对释放锁：手机迟迟不点时不该替用户决定', async () => {
-  const { runtime, kernel, transport, clock, sleep } = fixture({ approvalTimeoutMs: 1_000 })
+test('审批不会自己到期：推进时钟十万次也还在等（2026-10-11 用户裁决）', async () => {
+  const { runtime, kernel, transport, clock, sleep } = fixture()
   runtime.start()
   await settle()
   transport.pair('c_dddddddddddd')
-  const kernelSide = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash' })
+  let done = false
+  const kernelSide = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash' }).then((v) => {
+    done = true
+    return v
+  })
   await settle()
   const card = transport.replies
     .map((item) => item.payload)
@@ -607,14 +609,26 @@ test('审批超时返回 decline 并配对释放锁：手机迟迟不点时不�
     { t: 'ev.permission_request' }
   >
   assert.ok(sleep.holdIds.includes(card.requestId), '挂起审批必须 hold 住锁，否则用户还没决定笔记本先睡了')
+  // 帧里不许再带到期时刻
+  assert.equal(card.expiresAt, undefined, '审批帧不该带 expiresAt —— 期限已改成跟随弹窗自身生命周期')
 
-  await clock.advance(1_001)
-  assert.equal(await kernelSide, 'decline', '超时该 decline（交还桌面），而不是自行 allowed-once')
+  // ⚠️ 反向断言：这条原来是"推进 1001ms 就该判 decline 并放锁"。
+  // 现在**推多久都不结算** —— 只有三种路能结算它：手机答、桌面先答、宿主撤。
+  await clock.advance(3_600_000)
+  await settle()
+  assert.equal(done, false, '推进一小时后审批自己结算了 —— 桌面上那一位不会自己结束，两端必须一致')
   assert.equal(
     sleep.liveHolds.size,
-    0,
-    `超时的审批没释放挂锁：还挂着 ${JSON.stringify([...sleep.liveHolds])} → 旧实现正是这样泄漏的`,
+    1,
+    `挂锁被提前放了：${JSON.stringify([...sleep.liveHolds])} —— 卡还挂着，锁就必须还挂着`,
   )
+
+  // 走其中一条真能结算的路：宿主撤（AbortSignal）
+  // （桌面先答那条由 ev.permission_resolved 的用例覆盖，不在这里重复）
+  runtime.stop()
+  await settle()
+  assert.equal(await kernelSide, 'decline', 'stop() 必须结算所有挂起交互，否则 agent 永远等下去')
+  assert.equal(sleep.liveHolds.size, 0, 'stop() 之后挂锁必须全放掉，否则机器再也不睡')
 })
 
 test('手机平台撤销审批（AbortSignal）时结论是 cancelled，并且同样释放挂锁', async () => {
@@ -668,21 +682,29 @@ test('桌面先答时必须给手机补一帧 ev.run_state，把那张作废的�
   assert.ok(logs.includes('pending card voided'), '结算点没留痕：现场分不清"没发"与"发了没人收"')
 })
 
-test('审批超时时同样补这一帧（主机已经不等了，卡片不该还亮着）', async () => {
-  const { runtime, kernel, transport, clock, events } = fixture({ approvalTimeoutMs: 1_000 })
+test('宿主撤掉审批时同样补这一帧（桌面那一位先收场，手机那张卡就该当场收掉）', async () => {
+  const { runtime, kernel, transport, clock, events } = fixture()
   runtime.start()
   await settle()
   transport.pair('c_g1b')
   kernel.runStateFor = { sessionId: 'ses_live', running: false }
-  const kernelSide = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash' })
+  const controller = new AbortController()
+  const kernelSide = kernel.sink?.approval({
+    sessionId: 'ses_live',
+    action: 'bash',
+    signal: controller.signal,
+  })
   await settle()
-  await clock.advance(1_001)
-  assert.equal(await kernelSide, 'decline')
+  // ⚠️ 原来这条推的是时钟（超时那一路）。那条路 2026-10-11 删掉了 ——
+  // 补这一帧的职责没变，**触发它的那条路**从"到期"换成了"宿主撤"。
+  controller.abort()
+  await settle()
+  assert.equal(await kernelSide, 'cancelled')
   await settle()
   const beat = lastRunState(transport)
-  assert.ok(beat !== undefined, '超时后手机那张卡会一直亮着，而主机这边早就把它判掉了')
+  assert.ok(beat !== undefined, '卡被收掉了却没补运行态帧，手机上那张卡会一直亮着')
   assert.equal(beat.state, 'idle', '内核说这一回合已经停了，就不能硬发 running（手机上会凭空多一个转圈）')
-  assert.equal(voidReason(events), 'timeout', '超时收的场要写成 timeout：与"桌面先答"混在一起就没法解释卡片为什么没了')
+  assert.equal(voidReason(events), 'withdrawn', '收场原因要和"桌面先答"分得开，否则没法解释卡片为什么没了')
 })
 
 test('手机自己点掉时不许补这一帧：那一侧的卡由手机自己清，多发一帧会把运行态拨错方向', async () => {
@@ -735,8 +757,8 @@ test('读不到内核真相时退回缓存快照；快照里也没有这条会�
   assert.equal(last?.state, 'idle', '两处都不知道这一回合在不在跑时报 idle：宁可少一个转圈，不能凭空多一个')
 })
 
-test('提问被撤回或超时时也要补同一帧（同一处结算点管两类卡片）', async () => {
-  const { runtime, kernel, transport, clock } = fixture({ questionTimeoutMs: 1_000 })
+test('提问被撤回时也要补同一帧（同一处结算点管两类卡片）', async () => {
+  const { runtime, kernel, transport } = fixture()
   runtime.start()
   await settle()
   transport.pair('c_g1e')
@@ -747,6 +769,9 @@ test('提问被撤回或超时时也要补同一帧（同一处结算点管两�
     signal: controller.signal,
   })
   await settle()
+  // ⚠️ 这一条原来还有第二段：「提问**超时**也要补同一帧」，那段随 2026-10-11
+  // 那个改动一起删了 —— 提问不再有期限，自然也没有"到期"那一路可补。
+  // 剩下的撤回这一路与审批**共用同一个结算点**，所以断言与原来逐字相同。
   controller.abort('desktop')
   assert.equal(await asked, null)
   await settle()
@@ -754,61 +779,26 @@ test('提问被撤回或超时时也要补同一帧（同一处结算点管两�
     lastRunState(transport) !== undefined,
     '提问被撤回而手机那张提问卡不作废：手机上会一直等一个已经没人要的答案',
   )
-
-  const asked2 = kernel.sink?.question({
-    sessionId: 'ses_live',
-    questions: [{ id: 'q1', question: '要哪个', options: [{ id: 'o1', label: '甲' }] }],
-  })
-  await settle()
-  await clock.advance(1_001)
-  assert.equal(await asked2, null)
-  await settle()
-  const beats = transport.ofType(PAYLOAD_TYPES.evRunState) as Extract<EvPayload, { t: 'ev.run_state' }>[]
-  assert.equal(beats.length, 2, `提问的超时也要补帧，实际一共 ${beats.length} 帧`)
 })
 
-/** 最近一条**回给某个对端**的帧（作废帧是 reply 不是 broadcast，它按 requestId 收单）。 */
 function lastReplyOf(transport: FakeTransport, type: string): Record<string, unknown> | undefined {
   const hits = transport.replies.map((item) => item.payload).filter((payload) => payload.t === type)
   return hits[hits.length - 1] as Record<string, unknown> | undefined
 }
-
-/**
- * 精确作废帧这一组：`ev.permission_resolved` / `ev.question_resolved` 按 `requestId` 收单，
- * 而 `ev.run_state` 是"这一会话的卡片全收"。两条一起发：精确帧是正路（mp 1.0.1 起认），
- * run_state 只为兜住 1.0.1 以前的存量安装（那一档的分发是 `if (p.t === …)`，认不出静默忽略）。
- */
-test('桌面先答时两条都要发：按 requestId 的精确作废帧，加上老版手机认的 ev.run_state', async () => {
+test('平台撤掉时发 by=cancelled：by 说的是"谁收的场"，不是答案', async () => {
   const { runtime, kernel, transport } = fixture()
   runtime.start()
   await settle()
-  transport.pair('c_h1a')
-  const controller = new AbortController()
-  const kernelSide = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash', signal: controller.signal })
-  await settle()
-  const card = transport.replies
-    .map((item) => item.payload)
-    .find((payload) => payload.t === PAYLOAD_TYPES.evPermissionRequest) as Extract<
-    EvPayload,
-    { t: 'ev.permission_request' }
-  >
-  controller.abort('desktop')
-  assert.equal(await kernelSide, 'cancelled')
-  await settle()
-  const resolved = lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)
-  assert.ok(resolved !== undefined, '只发了粗收单那一帧：新版手机收不到"是哪一张卡作废"')
-  assert.equal(resolved?.requestId, card.requestId, '作废帧必须对得上那张卡的 requestId')
-  assert.equal(resolved?.sessionId, 'ses_live', '缺了 sessionId，手机无从判断该不该在这条会话的页面上收卡')
-  assert.equal(resolved?.by, 'desktop', '桌面先答要说成 desktop，手机端才有得显示')
-  assert.ok(lastRunState(transport) !== undefined, '老版手机只认 ev.run_state，这一帧不能省')
-})
-
-test('超时与平台撤回都发 by=cancelled：by 说的是"谁收的场"，不是答案', async () => {
-  const { runtime, kernel, transport, clock } = fixture({ approvalTimeoutMs: 1_000 })
-  runtime.start()
-  await settle()
   transport.pair('c_h1b')
-  const kernelSide = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash' })
+  // ⚠️ 原来这条有两段：「**超时**」与「平台撤回」都该发 by=cancelled。
+  // 第一段随 2026-10-11 那个改动一起删了 —— 主机不再自己判超时，
+  // 所以"自己不等了"这条路已经不存在，剩下一路就是平台撤销。
+  const controller = new AbortController()
+  const withdrawn = kernel.sink?.approval({
+    sessionId: 'ses_live',
+    action: 'bash',
+    signal: controller.signal,
+  })
   await settle()
   const card = transport.replies
     .map((item) => item.payload)
@@ -816,23 +806,11 @@ test('超时与平台撤回都发 by=cancelled：by 说的是"谁收的场"，�
     EvPayload,
     { t: 'ev.permission_request' }
   >
-  await clock.advance(1_001)
-  assert.equal(await kernelSide, 'decline')
-  await settle()
-  assert.equal(
-    lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)?.by,
-    'cancelled',
-    '主机自己不等了就要说 cancelled：写成 desktop 会让人以为有人在桌面上答过',
-  )
-  assert.equal(lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)?.requestId, card.requestId)
-
-  const controller = new AbortController()
-  const withdrawn = kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash', signal: controller.signal })
-  await settle()
   controller.abort('platform')
   assert.equal(await withdrawn, 'cancelled')
   await settle()
-  assert.equal(lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)?.by, 'cancelled', '平台撤回同样是 cancelled')
+  assert.equal(lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)?.by, 'cancelled')
+  assert.equal(lastReplyOf(transport, PAYLOAD_TYPES.evPermissionResolved)?.requestId, card.requestId)
 })
 
 test('手机自己答完不许发作废帧：那张卡是手机自己收的，再发一次等于告诉它"你没答"', async () => {
@@ -861,8 +839,8 @@ test('手机自己答完不许发作废帧：那张卡是手机自己收的，�
   )
 })
 
-test('ev.question_request 必须带 expiresAt：那张卡以前没有任何倒计时，而主机 300 秒就判没答上', async () => {
-  const { runtime, kernel, transport } = fixture({ questionTimeoutMs: 60_000 })
+test('ev.question_request 不带 expiresAt：期限改成跟随弹窗自身生命周期（2026-10-11）', async () => {
+  const { runtime, kernel, transport, clock } = fixture()
   runtime.start()
   await settle()
   transport.pair('c_h1d')
@@ -878,9 +856,23 @@ test('ev.question_request 必须带 expiresAt：那张卡以前没有任何倒�
     { t: 'ev.question_request' }
   >
   assert.ok(card !== undefined, '没推出提问卡')
-  assert.equal(typeof card.expiresAt, 'string', '缺了 expiresAt，手机上那张卡就是"看不见什么时候作废"')
-  const left = Date.parse(card.expiresAt ?? '') - Date.now()
-  assert.ok(left > 50_000 && left <= 60_000, `到期时刻要落在配置的超时窗口里，实际还剩 ${Math.round(left / 1000)} 秒`)
+  // ⚠️ 反向断言：以前这里断言"必须带 expiresAt"，现在断言"**不带**"。
+  // 那个期限是插件自己加的（宿主入参 `onQuestionRequest({sessionId, questions, signal?})`
+  // 本就没有任何期限字段），而它造成过真实故障：页面退后台 → 事件退订 → 卡帧到了
+  // client 没到界面 → 用户回到页面时主机早已判超时，于是"手机上点不动"。
+  assert.equal(
+    card.expiresAt,
+    undefined,
+    '帧里不该再有 expiresAt：带它手机就会起倒计时并在到点清卡，而主机已经不等任何期限了',
+  )
+  // 再进一步：把时钟推过任何曾经的默认窗口，这张卡也**不许**自己消失。
+  clock.advance(10 * 60 * 1000)
+  await settle()
+  assert.equal(
+    transport.replies.filter((item) => item.payload.t === PAYLOAD_TYPES.evQuestionResolved).length,
+    0,
+    '推了十分钟还没人答，却自己结算了 —— 桌面那一位同样不会自己结束，两端必须一致',
+  )
 })
 
 test('提问收场发 ev.question_resolved：审批那两条不能顺手把提问卡也标成已答', async () => {
@@ -923,7 +915,7 @@ test('提问收场发 ev.question_resolved：审批那两条不能顺手把提�
 // 原地重写，不翻倍；结算点的精确作废帧新旧两份一起收，不留幽灵卡。
 
 test('replayPending：挂着的提问在新通道上按原样重发（同一 requestId、同一 expiresAt）', async () => {
-  const { runtime, kernel, transport } = fixture({ questionTimeoutMs: 60_000 })
+  const { runtime, kernel, transport } = fixture()
   runtime.start()
   await settle()
   transport.pair('c_old')
@@ -1211,7 +1203,7 @@ test('cmd.answer 把手机回传的 id 反查成平台要的 label：映射错 =
 })
 
 test('提问没人应答时返回 null（适配器必须转成明确失败，绝不静默挂住 agent）', async () => {
-  const { runtime, kernel, clock } = fixture({ questionTimeoutMs: 1_000 })
+  const { runtime, kernel, clock } = fixture()
   runtime.start()
   await settle()
   assert.equal(runtime.handleCommand !== undefined, true, '夹具自检：runtime 已起')
@@ -1222,17 +1214,33 @@ test('提问没人应答时返回 null（适配器必须转成明确失败，绝
   await clock.advance(0)
 })
 
-test('提问超时同样返回 null，并且释放挂锁', async () => {
-  const { runtime, kernel, transport, sleep, clock } = fixture({ questionTimeoutMs: 1_000 })
+test('提问同样不会自己到期：推进时钟后仍挂着，宿主撤了才返回 null 并放锁', async () => {
+  const { runtime, kernel, transport, sleep, clock } = fixture()
   runtime.start()
   await settle()
-  transport.pair('c_ffffffff03')
-  const kernelSide = kernel.sink?.question({ sessionId: 'ses_live', questions: [{ id: 'q1', question: '跑哪个？' }] })
+  transport.pair('c_iiiiiiiiiiii')
+  const controller = new AbortController()
+  let done = false
+  const asked = kernel.sink
+    ?.question({
+      sessionId: 'ses_live',
+      questions: [{ id: 'q1', question: '要哪个', options: [{ id: 'o1', label: '甲' }] }],
+      signal: controller.signal,
+    })
+    .then((v) => {
+      done = true
+      return v
+    })
   await settle()
-  assert.equal(sleep.holdIds.length >= 1, true, '挂起的提问同样要 hold 锁')
-  await clock.advance(1_001)
-  assert.equal(await kernelSide, null, '超时=没人应答，必须明确失败')
-  assert.equal(sleep.liveHolds.size, 0, '提问超时也要释放挂锁')
+  await clock.advance(600_000)
+  await settle()
+  assert.equal(done, false, '推了十分钟提问自己结算了 —— 桌面那一位同样不会自己结束')
+  assert.equal(sleep.liveHolds.size, 1, '卡还挂着，挂锁就必须在')
+
+  controller.abort()
+  await settle()
+  assert.equal(await asked, null, '宿主撤了这次提问 ⇒ 返回 null')
+  assert.equal(sleep.liveHolds.size, 0, '撤了之后挂锁必须放掉')
 })
 
 test('cmd.keep_awake 关掉时不带 idleReleaseSec：带了就会覆盖用户设定的空闲阈值', async () => {
@@ -1858,7 +1866,7 @@ test('恢复失败时把底层原因回给手机，且不再发指令：手机 t
 })
 
 test('挂起审批期间每 pendingRefreshMs 续锁，且 runtime 侧的 hold 与 release 严格配对（旧实现的 60s 心跳永不释放）', async () => {
-  const { runtime, kernel, transport, sleep, sleepPort, clock } = fixture({ approvalTimeoutMs: 2 * 3_600_000 })
+  const { runtime, kernel, transport, sleep, sleepPort, clock } = fixture()
   sleep.setEnabled(true, 300) // 空闲 300 秒就该放锁
   runtime.start()
   await settle()
@@ -2620,15 +2628,17 @@ test('模型补发只带**当前列表里**的会话：缓存里的旧会话不�
   assert.equal(models[0]?.model, 'keep-model', '补发的模型值不许串台')
 })
 
-test('待办双端一致：新一轮开始时，手机上**上一轮**的待办必须被收掉', async () => {
-  // 2026-10-07 用户实测：这一轮没写待办，手机上还挂着上一轮的清单，宿主此刻是空的。
+test('待办只转发内核实际发来的：轮次开始时**不合成**空清单（2026-10-11）', async () => {
+  // ⚠️ 这条原来是反的，而**它的前提是错的**。
   //
-  // 内核**不会**为"这一轮没有待办"专门发一帧 `todo/write`，所以指望不到它来清。
-  // 宿主那一侧是按轮清的（这一轮没写就是空），手机要一致就得由宿主在
-  // **轮次开始**时补一帧空快照——这也是 host 侧唯一知道"轮次换了"的位置。
+  // 原注释说：「内核**不会**为『这一轮没有待办』专门发一帧 `todo/write`，所以指望不到它来清」
+  // ⇒ 于是插件在轮次开始时**自己合成**一帧空清单。
   //
-  // 与历史快照那条（carrier-services 的 historyPageFromLog）是同一个病的两条通路：
-  // 那条治"重进会话时"，这条治"不重进、同一页里跑下一轮"。
+  // **内核确实会发** —— 同一条用例的后半段就直接喂了 `todos: []` 来验证这一点，
+  // 两处断言互相矛盾，前提那一条是猜的。
+  // ⇒ 自己合成造成的是**双重清空**，而且第二条依据的是"上一轮有过"这个已过期的事实。
+  //
+  // 现在：只转发内核发来的清单。它说空就是空，它不说就不动。
   const { runtime, transport, kernel, clock } = fixture()
   runtime.start()
   await settle()
@@ -2638,7 +2648,7 @@ test('待办双端一致：新一轮开始时，手机上**上一轮**的待办�
   const todos = (): Array<Extract<EvPayload, { t: 'ev.todo' }>> =>
     transport.ofType(PAYLOAD_TYPES.evTodo) as Array<Extract<EvPayload, { t: 'ev.todo' }>>
 
-  // ── 第一轮：内核写了待办 ────────────────────────────────────────
+  // ── 第一轮：内核写了待办 ────────────────────────────────────────────
   await clock.advance(1_000)
   kernel.feed({ kind: 'todo', sessionId: 'ses_live', todos: [{ content: '上一轮要做的事', status: 'in_progress' }] })
   await settle()
@@ -2648,18 +2658,18 @@ test('待办双端一致：新一轮开始时，手机上**上一轮**的待办�
     '夹具自检：第一轮待办到了手机',
   )
 
-  // ── 第二轮开始：这一轮不写待办 ──────────────────────────────────
+  // ── 第二轮开始：内核没说话 ⇒ 手机上**一个字都不许多** ────────────────
   await clock.advance(1_000)
   transport.broadcasts.length = 0
   kernel.feed({ kind: 'run-state', sessionId: 'ses_live', state: 'running' })
   await settle()
-  assert.deepEqual(
-    todos().at(-1)?.todos,
-    [],
-    '新一轮开始却没把上一轮的待办收掉：手机显示一件没在发生的事，宿主此刻是空的（双端不一致）',
+  assert.equal(
+    transport.ofType(PAYLOAD_TYPES.evTodo).length,
+    0,
+    '轮次开始时自己合成了一帧空清单 —— 内核没说要清，插件替它说了（这就是"自己加的逻辑"）',
   )
 
-  // ── 这一轮真的写了待办：照常显示 ────────────────────────────────
+  // ── 这一轮真的写了待办：照常显示 ──────────────────────────────────
   await clock.advance(1_000)
   kernel.feed({ kind: 'todo', sessionId: 'ses_live', todos: [{ content: '这一轮要做的事', status: 'pending' }] })
   await settle()
@@ -2669,32 +2679,24 @@ test('待办双端一致：新一轮开始时，手机上**上一轮**的待办�
     '这一轮的待办要能正常上来',
   )
 
-  // ── 内核把清单清空（发一帧空）之后：下一轮开始**不该**再补一帧空 ──
-  // 这是"只在真有清单时才补"那半句的判据。少了它，实现把空清单也记进
-  // todoShown 之后，从第二轮起每轮都会白发一帧——单看"清空"那几条是绿的。
+  // ── 内核自己清空：那一帧照发不误 ──────────────────────────────────
   await clock.advance(1_000)
+  transport.broadcasts.length = 0
   kernel.feed({ kind: 'todo', sessionId: 'ses_live', todos: [] })
   await settle()
+  assert.equal(
+    transport.ofType(PAYLOAD_TYPES.evTodo).length,
+    1,
+    '内核发来的空清单必须原样转发 —— 它才是这件事的唯一事实源',
+  )
+  assert.deepEqual(todos().at(-1)?.todos, [], '转发的是内核说的那份空')
+
+  // ── 之后每一轮开始都不许再补 ──────────────────────────────────────
   await clock.advance(1_000)
   transport.broadcasts.length = 0
   kernel.feed({ kind: 'run-state', sessionId: 'ses_live', state: 'running' })
   await settle()
-  assert.equal(
-    transport.ofType(PAYLOAD_TYPES.evTodo).length,
-    0,
-    '清单已经是空的了，下一轮开始还补一帧空：每轮白发一帧只是白花渲染',
-  )
-
-  // ── 从没用过待办的会话：同样不许收到空清单 ──────────────────────
-  await clock.advance(1_000)
-  transport.broadcasts.length = 0
-  kernel.feed({ kind: 'run-state', sessionId: 'ses_other', state: 'running' })
-  await settle()
-  assert.equal(
-    transport.ofType(PAYLOAD_TYPES.evTodo).length,
-    0,
-    '这个会话压根没用过待办，却收到了一帧空清单：每轮白发一帧只是白花渲染',
-  )
+  assert.equal(transport.ofType(PAYLOAD_TYPES.evTodo).length, 0, '轮次开始又补了一帧空：插件没有任何理由替内核宣布清空')
 })
 
 // ── cmd.new_session 的 workspace（2026-10-07 接线）─────────────────────
@@ -3799,4 +3801,78 @@ test('配过手机但不在线：审批与提问都挂账（不是 decline），
   // 挂账的卡必须真的在 `pending` 里 —— 否则 `replayPending` 还是无物可放，
   // 而那正是这个修复存在的全部理由。
   assert.equal(runtime.pendingAsks.now, 2, '挂账的审批与提问都要进 pending 账')
+})
+
+/**
+ * 2026-10-11：期限**只跟随宿主**。
+ *
+ * 前两条形状判据（`e2e/npm-publish-tp.test.mjs`）钉的是源码；这条钉的是**行为** ——
+ * 宿主给不给期限，两条路各跑一遍。形状对了而行为反了（例如定时器建了却不结算、
+ * 或没给期限也结算），源码那条是抓不到的。
+ */
+test('宿主给了期限就跟随，没给就不自己加（审批与提问两条同形）', async () => {
+  // ── ① 宿主没给 ⇒ 推多久都不结算，帧里也没有 expiresAt ──
+  for (const kind of ['approval', 'question'] as const) {
+    const { runtime, kernel, transport, clock, sleep } = fixture()
+    runtime.start()
+    await settle()
+    transport.pair(`c_noexp_${kind}`)
+    let done = false
+    const side = (
+      kind === 'approval'
+        ? kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash' })
+        : kernel.sink?.question({
+            sessionId: 'ses_live',
+            questions: [{ id: 'q1', question: '要哪个', options: [{ id: 'o1', label: '甲' }] }],
+          })
+    )?.then((v) => {
+      done = true
+      return v
+    })
+    await settle()
+    const card = transport.replies
+      .map((item) => item.payload)
+      .find((payload) =>
+        kind === 'approval'
+          ? payload.t === PAYLOAD_TYPES.evPermissionRequest
+          : payload.t === PAYLOAD_TYPES.evQuestionRequest,
+      ) as Extract<EvPayload, { t: 'ev.permission_request' }> | undefined
+    assert.equal(card?.expiresAt, undefined, `${kind}：宿主没给期限，帧里不该有 expiresAt`)
+    await clock.advance(3_600_000)
+    await settle()
+    assert.equal(done, false, `${kind}：宿主没给期限，插件却自己判超时结算了`)
+    assert.equal(sleep.liveHolds.size, 1, `${kind}：卡还挂着，挂锁就必须在`)
+    runtime.stop()
+    await settle()
+    await side
+  }
+
+  // ── ② 宿主给了 ⇒ 到点结算，且帧里带 expiresAt ──
+  for (const kind of ['approval', 'question'] as const) {
+    const { runtime, kernel, transport, clock, sleep } = fixture()
+    runtime.start()
+    await settle()
+    transport.pair(`c_exp_${kind}`)
+    const side =
+      kind === 'approval'
+        ? kernel.sink?.approval({ sessionId: 'ses_live', action: 'bash', timeoutMs: 60_000 })
+        : kernel.sink?.question({
+            sessionId: 'ses_live',
+            questions: [{ id: 'q1', question: '要哪个', options: [{ id: 'o1', label: '甲' }] }],
+            timeoutMs: 60_000,
+          })
+    await settle()
+    const card = transport.replies
+      .map((item) => item.payload)
+      .find((payload) =>
+        kind === 'approval'
+          ? payload.t === PAYLOAD_TYPES.evPermissionRequest
+          : payload.t === PAYLOAD_TYPES.evQuestionRequest,
+      ) as Extract<EvPayload, { t: 'ev.permission_request' }> | undefined
+    assert.equal(typeof card?.expiresAt, 'string', `${kind}：宿主给了期限，帧里必须带 expiresAt（手机要据此起倒计时）`)
+    await clock.advance(60_001)
+    await settle()
+    assert.equal(sleep.liveHolds.size, 0, `${kind}：宿主给的期限到了却没释放挂锁`)
+    await side
+  }
 })

@@ -337,36 +337,27 @@ test('pairTtlMs 的 Infinity 也要夹：只判"正数"会把"这张码永不过
   }
 })
 
-test('approvalTimeoutSec / listingRefreshSec / maxFileBytes 非法值必须 warn + 夹回默认值', () => {
-  // 头注承诺的是"其余一律 warn + 夹回默认值"，而这三个字段此前**一个都不夹**：
-  //   - approvalTimeoutSec: NaN → setTimeout(NaN) 立刻触发 = 审批瞬间超时；
-  //   - listingRefreshSec: 0/负/NaN → 刷新节拍变成热循环；
-  //   - maxFileBytes: NaN → 每个文件都被判超限。
-  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0, -5]) {
-    const config = base({ approvalTimeoutSec: bad, listingRefreshSec: bad, maxFileBytes: bad })
-    const problems = validateConfig(config)
-    for (const field of ['approvalTimeoutSec', 'listingRefreshSec', 'maxFileBytes'] as const) {
-      assert.ok(
-        problems.some((problem) => problem.field === field && problem.level === 'warn'),
-        `${field}=${String(bad)} 没有 warn：NaN/0/负值都不是"用户想要的配置"`,
-      )
-    }
-    assert.equal(config.approvalTimeoutSec, 180, `approvalTimeoutSec=${String(bad)} 没夹回 180`)
-    assert.equal(config.listingRefreshSec, 15, `listingRefreshSec=${String(bad)} 没夹回 15`)
-    assert.equal(config.maxFileBytes, 512 * 1024, `maxFileBytes=${String(bad)} 没夹回 512KB`)
-  }
+test('秒数字段非法值必须 warn + 夹回默认值（approvalTimeoutSec 已于 2026-10-11 删掉）', () => {
+  // ⚠️ 这条断言的字段少了一个：`approvalTimeoutSec` 随"期限跟随弹窗生命周期"那个改动
+  // 一起删了 —— 插件不再自己设上限，那个旋钮也就没有存在理由（留着就是死配置）。
+  // 剩下的两个数字字段仍走同一条夹取。
+  const bad = Number.NaN
+  const config = base({ listingRefreshSec: bad, maxFileBytes: bad })
+  const problems = validateConfig(config)
 
-  // 合法值一个都不许动（含"小于默认值但大于 0"的：那是用户有意调快的）。
-  const fine = base({ approvalTimeoutSec: 30, listingRefreshSec: 5, maxFileBytes: 4096 })
-  const problems = validateConfig(fine)
-  assert.equal(fine.approvalTimeoutSec, 30, '合法的 approvalTimeoutSec 被改写了')
+  for (const field of ['listingRefreshSec', 'maxFileBytes'] as const) {
+    assert.ok(
+      problems.some((problem) => problem.field === field),
+      `${field}=NaN 没有 warn —— 那会让刷新节拍变成热循环 / 每个文件都被判超限`,
+    )
+  }
+  assert.equal(config.listingRefreshSec, 15, `listingRefreshSec=${String(bad)} 没夹回 15`)
+  assert.equal(config.maxFileBytes, 512 * 1024, 'maxFileBytes 没夹回默认值')
+
+  const fine = base({ listingRefreshSec: 5, maxFileBytes: 4096 })
+  validateConfig(fine)
   assert.equal(fine.listingRefreshSec, 5, '合法的 listingRefreshSec 被改写了')
   assert.equal(fine.maxFileBytes, 4096, '合法的 maxFileBytes 被改写了')
-  assert.equal(
-    problems.some((problem) => ['approvalTimeoutSec', 'listingRefreshSec', 'maxFileBytes'].includes(problem.field)),
-    false,
-    '合法值不该报任何问题',
-  )
 })
 
 test('carrierGraceMs 是死键：已从配置面上删掉（全 src 零读取）', () => {

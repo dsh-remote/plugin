@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@dsh-remote/protocol':
         specifier: ^3.0.0
-        version: 3.0.5
+        version: 3.0.6
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -26,7 +26,7 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^26.6.3
-        version: 26.6.4
+        version: 26.6.5
       '@types/qrcode':
         specifier: ^1.5.5
         version: 1.5.6
@@ -45,8 +45,8 @@ importers:
 
 packages:
 
-  '@dsh-remote/protocol@3.0.5':
-    resolution: {integrity: sha512-sigOzHgPPezGKzBL59o3QhmD4NGk92yxLFIrVwCbCCIqODsnGxWmZ6tVUrNW/Bk0WyAhVHMS/sieq0WP24/83Q==}
+  '@dsh-remote/protocol@3.0.6':
+    resolution: {integrity: sha512-GkZOey90Bp98p69Vtj1nozo6vaHh8WUbjN8KUdiq8lKr9yhlTdYR9fupW5lzRZFpdfKokOH2CuOV9WjHYqMz3Q==}
     engines: {node: '>=20'}
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -205,8 +205,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@types/node@26.6.4':
-    resolution: {integrity: sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg==}
+  '@types/node@26.6.5':
+    resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
 
   '@types/qrcode@1.5.6':
     resolution: {integrity: sha512-te7NQcV2BOvdj2b1hCAHzAoMNuj65kNBMz0KBaxM6c3VGBOhU0dURQKOtH8CFNI/dsKkwlv32p26qYQTWoB5bw==}
@@ -481,7 +481,7 @@ packages:
 
 snapshots:
 
-  '@dsh-remote/protocol@3.0.5':
+  '@dsh-remote/protocol@3.0.6':
     dependencies:
       tweetnacl: 1.0.3
       zod: 4.6.5
@@ -564,17 +564,17 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@types/node@26.6.4':
+  '@types/node@26.6.5':
     dependencies:
       undici-types: 8.9.0
 
   '@types/qrcode@1.5.6':
     dependencies:
-      '@types/node': 26.6.4
+      '@types/node': 26.6.5
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 26.6.4
+      '@types/node': 26.6.5
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true

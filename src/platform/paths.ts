@@ -131,7 +131,7 @@ const pathFor = (platform: Platform): typeof path.posix => (platform === 'win32'
  * 数据目录：`~/.dsh/dsh-remote-control`。
  *
  * ⚠️ **这个目录名是稳定的运行时标识**，不是随手起的：宿主插件的
- * 这个前缀下的六条路由、`status.json` 的排错入口、密钥簿
+ * 这个前缀下的七条路由、`status.json` 的排错入口、密钥簿
  * `conversations-<hostId>.json` 都指向它。改它会让在用的装机找不到自己的状态文件
  * （见 HANDOFF §4「稳定标识」）。
  *

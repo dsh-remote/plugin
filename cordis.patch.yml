@@ -5,19 +5,27 @@
 # 那比带着次优配置跑起来更难排查（取证 docs/legacy-spec/host-plugin-cordis.md §2.2/§2.3）。
 # `name` 必须是**包的完整名**——loader 用它去解析模块，写成别的名字的表现是
 # "文件都在、bundles 列表里也有，插件就是不加载"。`id` 是**运行时 id**，故意与包名
-# 分开：数据目录 `~/.dsh/dsh-remote-control`、四条 pill 路由前缀都跟着它，
+# 分开：数据目录 `~/.dsh/dsh-remote-control`、七条 pill 路由前缀都跟着它，
 # 所以改包名不会丢已落盘的配对。
 - insert:
     - id: dsh-remote-control
       name: '@dsh-remote/plugin'
       config:
         enabled: true
-        serverUrl: ws://127.0.0.1:8787
+        # ⚠️ **刻意不写 `serverUrl`**（2026-10-11）：默认值只有一个来源，就是
+        # `src/shell/config.ts` 的 `DEFAULT_CONFIG.serverUrl`（官方中继 `wss://drc.provid.cc`）。
+        # 这里再写一份就会漂移，而漂移的表现是"改了代码里的默认值、装机后不生效"
+        # —— 这份 patch 是**注入层**，优先级高于默认值。
+        # 自部署用户改：环境变量 `DRC_SERVER_URL`、profile 自己的 patch，
+        # 或设置页「远程控制 › 进阶」那一栏（写进 `~/.dsh/dsh-remote-control/user-config.json`）。
         hostTokenEnv: DRC_HOST_TOKEN
         hostLabel: dsh-host
         unarchiveOnPrompt: true
         listingRefreshSec: 15
-        approvalTimeoutSec: 180
+        # ⚠️ `approvalTimeoutSec` 2026-10-11 随"期限跟随弹窗生命周期"那个改动一起删了
+        # （见 packages/plugin/CHANGELOG.md）。留在这里**不会报错、只会被静默忽略**，
+        # 而 README 又写着"没有这个键"——两份随包发出去的东西互相打脸。
+        # 判据：伞仓 `e2e/host-config-docs.test.mjs` 那条"分发出去的配置键必须都是真键"。
         keepAwake:
           enabled: true
           idleReleaseSec: 300

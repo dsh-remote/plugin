@@ -175,8 +175,6 @@ function harness(readHistory: NonNullable<MockKernel['readHistory']>): Harness {
   transport.peers.add('c_000000000001')
   const runtime = new HostRuntime(kernel, transport, IDLE_SLEEP, clock, {
     listingRefreshMs: 3_600_000,
-    approvalTimeoutMs: 5_000,
-    questionTimeoutMs: 5_000,
     log: () => {},
   })
   runtime.start()

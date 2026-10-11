@@ -1,7 +1,7 @@
 /**
  * pill-isolation.test — "界面上那一半不许连累配对链路"这条隔离的对照测试。
  *
- * 2026-10-03 这一半原来是右栏自动弹码 + 一条只读路由；现在它是状态栏那颗 pill 与设置页的六条路由
+ * 2026-10-03 这一半原来是右栏自动弹码 + 一条只读路由；现在它是状态栏那颗 pill 与设置页的七条路由
  * （发码 / 图 / 状态 / 退出配对）。隔离的形状没变：**它需要宿主的 `webServer` 服务，
  * 而主插件刻意不写任何 `inject:` 闸门**，所以"这代宿主没这个服务"时只有这一旁路不起，
  * 配对、中继、状态快照一行都不受影响。原来这条隔离是靠"拆成两个 cordis 条目"这个结构
@@ -28,7 +28,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { apply } from '../src/index.js'
@@ -43,6 +43,29 @@ import {
   PAIR_MINIPROGRAM_ROUTE,
 } from '../src/pill/routes.js'
 import { startPill } from '../src/pill/start.js'
+import { hasPosixModes } from './test-platform.js'
+import { PLUGIN_CONFIG_ROUTE, type ConfigRouteDeps } from '../src/pill/config-routes.js'
+
+/**
+ * 设置页「进阶」那一栏那两条的读/写口（2026-10-11 加）。
+ * 这一组判据关心的是"配对入口在不在"，所以给一份最朴素的实现：官方默认地址、没配过 token。
+ * 那一条路由自己的行为判据在 `config-routes.test.ts`。
+ */
+function configDeps(): ConfigRouteDeps {
+  return {
+    config: () => ({
+      serverUrl: 'wss://drc.provid.cc',
+      defaultServerUrl: 'wss://drc.provid.cc',
+      serverUrlSource: 'default',
+      hostTokenSet: false,
+      hostTokenShape: '',
+      hostTokenSource: 'none',
+      userConfigFile: '/tmp/drc-user-config.json',
+    }),
+    saveConfig: () => ({ ok: true }),
+    log: () => {},
+  }
+}
 
 /** 一眼假的 token：仓库里不许出现真凭据，这条只验形状（同 status.test.ts）。 */
 const FAKE_TOKEN = 'fake-host-token-not-a-real-secret-0123456789abcdef'
@@ -97,6 +120,8 @@ interface Booted {
   flushInject(): void
   waitForCarrier(): Promise<Record<string, unknown>>
   dispose(): void
+  /** 这一次 boot 用的数据目录：认领落盘（`host-token.json`）就写在它旁边。 */
+  statusDir: string
 }
 
 function boot(
@@ -112,6 +137,16 @@ function boot(
      * 演真机那个形状：注入回调可能在 `apply()` 返回之后才触发。
      */
     lateWeb?: boolean
+    /**
+     * 注入的 hostToken（默认 `FAKE_TOKEN`）。`''` = **没配过 token** ——
+     * 那是"装完就能用"这条新路径的起点（会去认领）。
+     */
+    hostToken?: string
+    /**
+     * 预先在数据目录里放一份 `host-token.json`（演"上次已经认领过"）。
+     * `serverUrl` 默认与 fixture 的中继地址一致——传别的值就是"这枚属于另一台中继"。
+     */
+    seedClaimedToken?: { token: string; serverUrl?: string }
   } = {},
 ): Booted {
   const disposers: Array<() => void> = []
@@ -121,6 +156,19 @@ function boot(
   let unregistered = 0
   let disposed = false
   const statusDir = mkdtempSync(path.join(tmpdir(), 'drc-isolation-'))
+  if (options.seedClaimedToken) {
+    // 演"上一次已认领过"：文件必须先于 `apply()` 存在（启动时就要读它）。
+    writeFileSync(
+      path.join(statusDir, 'host-token.json'),
+      JSON.stringify({
+        version: 1,
+        token: options.seedClaimedToken.token,
+        serverUrl: options.seedClaimedToken.serverUrl ?? 'ws://127.0.0.1:1',
+        source: 'claimed',
+        savedAt: 1,
+      }),
+    )
+  }
 
   const wantsWeb =
     options.webServer !== undefined ||
@@ -176,7 +224,7 @@ function boot(
     enabled: true,
     // 故意不可达：这条要的是"中继连不上"这个确定分支，不许它真连上任何东西。
     serverUrl: 'ws://127.0.0.1:1',
-    hostToken: FAKE_TOKEN,
+    hostToken: options.hostToken ?? FAKE_TOKEN,
     hostId: 'isolation_host',
     // 本机名还在**状态快照**里（配置回显那一路），只是 pill 弹窗里已经撤了（现在那三行是中继/状态/版本）。
     hostLabel: 'linbin-desk',
@@ -198,6 +246,7 @@ function boot(
       return commandCount
     },
     providedKeys: Object.keys(provided),
+    statusDir,
     registerCalls,
     unregistered: () => unregistered,
     flushInject(): void {
@@ -285,15 +334,15 @@ test('webServer 晚到（注入回调在 apply 返回之后才触发）：挂上
     late.flushInject()
     const state = await late.waitForCarrier()
     assert.equal((state.pill as Record<string, string>).webServer, 'via inject')
-    assert.equal((state.pill as Record<string, string>).routes, 'registered', '六条路由补挂上了')
-    assert.equal(late.registerCalls.length, 6, '六条一起挂')
+    assert.equal((state.pill as Record<string, string>).routes, 'registered', '六条配对路由补挂上了')
+    assert.equal(late.registerCalls.length, 7, '七条一起挂（六条配对 + 一条配置）')
     assert.equal(
       pillProblem(state),
       undefined,
       `routes 已 registered 却还报 warn:pill = 启动快照的假警报：${JSON.stringify(state.problems)}`,
     )
     late.dispose()
-    assert.equal(late.unregistered(), 6, '晚到挂上的路由，停机时同样要注销干净')
+    assert.equal(late.unregistered(), 7, '晚到挂上的路由，停机时同样要注销干净')
   } finally {
     late.dispose()
   }
@@ -336,11 +385,21 @@ test('对照：主链路字段逐个相等、字段集合逐个相同，差别�
     // 唯一允许的两处差别，都要精确断言而不是"允许不同"。
     assert.equal((a.pill as Record<string, string>).webServer, 'none')
     assert.equal((b.pill as Record<string, string>).webServer, 'via get')
-    assert.equal((b.pill as Record<string, string>).routes, 'registered', '六条路由一起挂上')
+    assert.equal((b.pill as Record<string, string>).routes, 'registered', '六条配对路由一起挂上')
     assert.deepEqual(
       withWeb.registerCalls.map((call) => call.path),
-      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE, PAIR_PAGE_ROUTE, PAIR_MINIPROGRAM_ROUTE],
-      '六条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码',
+      [
+        PAIR_NEW_ROUTE,
+        PAIR_IMAGE_ROUTE,
+        PAIR_STATUS_ROUTE,
+        PAIR_UNPAIR_ROUTE,
+        PAIR_PAGE_ROUTE,
+        PAIR_MINIPROGRAM_ROUTE,
+        // 2026-10-11 加：设置页「进阶」那一栏（自部署地址 / token）。
+        // ⚠️ 它排在**最后**，前面六条的编号语义因此没变（"第 N 条就抛了"那两条判据靠它）。
+        PLUGIN_CONFIG_ROUTE,
+      ],
+      '七条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码 + 配置读写',
     )
     // problems 的差别必须是**恰好那一条** warn:pill，多一条少一条都算红。
     assert.ok(pillProblem(a), '没 webServer 那侧必须有 warn:pill')
@@ -355,7 +414,7 @@ test('对照：主链路字段逐个相等、字段集合逐个相同，差别�
     // 而表现是"重载一次之后那颗 pill 再也不出现"。这里在断言之后 dispose，两个 finally
     // 里的 dispose 是同一次（helper 内部有 once 守卫）。
     withWeb.dispose()
-    assert.equal(withWeb.unregistered(), 6, '六条路由都要注销')
+    assert.equal(withWeb.unregistered(), 7, '七条路由都要注销')
   } finally {
     without.dispose()
     withWeb.dispose()
@@ -401,7 +460,7 @@ test('register() 抛错（路由名被占）：只废掉界面那一半，命令
   }
 })
 
-test('六条里只挂上两条：available 仍是 false——pill 点不开就是没有配对入口', async () => {
+test('挂到第三条就抛：只有前两条挂上了，available 仍是 false——pill 点不开就是没有配对入口', async () => {
   const partial = boot({ registerThrowsFrom: 2 })
   try {
     const state = await partial.waitForCarrier()
@@ -436,16 +495,26 @@ test('pill.enabled=false：显式关掉唯一配对入口，路由一条都不�
   }
 })
 
-test('那六条挂上去的就是带守卫的那六条（接线，不是又拼一遍 deps）', async () => {
+test('那六条配对路由挂上去的就是带守卫的那六条（接线，不是又拼一遍 deps）', async () => {
   const withWeb = boot({ webServer: true })
   try {
     const state = await withWeb.waitForCarrier()
     assert.equal(state.relay, 'offline', '这条 fixture 的中继是故意不可达的')
-    // 六条都在、顺序与 registerPillRoutes 一致。
+    // 六条配对路由 + 一条配置读写，顺序与 registerPillRoutes 一致。
     assert.deepEqual(
       withWeb.registerCalls.map((call) => call.path),
-      [PAIR_NEW_ROUTE, PAIR_IMAGE_ROUTE, PAIR_STATUS_ROUTE, PAIR_UNPAIR_ROUTE, PAIR_PAGE_ROUTE, PAIR_MINIPROGRAM_ROUTE],
-      '六条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码',
+      [
+        PAIR_NEW_ROUTE,
+        PAIR_IMAGE_ROUTE,
+        PAIR_STATUS_ROUTE,
+        PAIR_UNPAIR_ROUTE,
+        PAIR_PAGE_ROUTE,
+        PAIR_MINIPROGRAM_ROUTE,
+        // 2026-10-11 加：设置页「进阶」那一栏（自部署地址 / token）。
+        // ⚠️ 它排在**最后**，前面六条的编号语义因此没变（"第 N 条就抛了"那两条判据靠它）。
+        PLUGIN_CONFIG_ROUTE,
+      ],
+      '七条路由一起挂：发码 + 弹窗的图 + 抬头状态 + 退出配对 + 不依赖会话的配对页 + 静态小程序码 + 配置读写',
     )
 
     const handlerFor = (p: string) => {
@@ -543,7 +612,7 @@ test('那六条挂上去的就是带守卫的那六条（接线，不是又拼�
 })
 
 test('凭据红线：真发码（state:"ready"）那一条回答里只有 token，没有 psk / dshr: / 完整 URI', async () => {
-  // 用**与插件同一个注册入口**（`registerPillRoutes`）挂上六条，再打那条发码路由：
+  // 用**与插件同一个注册入口**（`registerPillRoutes`）挂上那几条，再打那条发码路由：
   // 只差"中继可达"这一个条件——中继在这套夹具里故意不可达，所以真码由 deps 直接给。
   const fakePsk = 'A'.repeat(64)
   const fakeToken = '482913'
@@ -570,8 +639,10 @@ test('凭据红线：真发码（state:"ready"）那一条回答里只有 token�
     }),
     unpair: () => 0,
     miniprogramCode: () => undefined,
+    // 设置页「进阶」那一栏那两条的读/写口（2026-10-11 加）：夹具给一份\"没配过自定义\"的。
+    ...configDeps(),
     log: () => {},
-  } satisfies PillRouteDeps)
+  } satisfies PillRouteDeps & ConfigRouteDeps)
   let status = 0
   let body = ''
   const res = {
@@ -629,9 +700,11 @@ test('startPill：stop() 之后 available 必须变 false——路由都摘了�
     }),
     unpair: () => 0,
     miniprogramCode: () => undefined,
+    // 设置页「进阶」那一栏那两条的读/写口（2026-10-11 加）：夹具给一份\"没配过自定义\"的。
+    ...configDeps(),
     log: () => {},
-  } satisfies PillRouteDeps & { enabled: boolean })
-  assert.equal(handle.available, true, '六条挂上了就该说可用')
+  } satisfies PillRouteDeps & ConfigRouteDeps & { enabled: boolean })
+  assert.equal(handle.available, true, '六条配对路由挂上了就该说可用')
   assert.deepEqual(registered, [
     PAIR_NEW_ROUTE,
     PAIR_IMAGE_ROUTE,
@@ -639,9 +712,10 @@ test('startPill：stop() 之后 available 必须变 false——路由都摘了�
     PAIR_UNPAIR_ROUTE,
     PAIR_PAGE_ROUTE,
     PAIR_MINIPROGRAM_ROUTE,
+    PLUGIN_CONFIG_ROUTE,
   ])
   handle.stop()
-  assert.equal(unregistered, 6, '停机要把六条一起注销')
+  assert.equal(unregistered, 7, '停机要把七条一起注销')
   assert.equal(
     handle.available,
     false,
@@ -650,4 +724,165 @@ test('startPill：stop() 之后 available 必须变 false——路由都摘了�
   assert.equal(handle.probe.routes, 'registered', 'probe 里"起过"的留痕可以留，但 available 必须跟着停')
   handle.stop() // 幂等：再停一次不许变回 true
   assert.equal(handle.available, false)
+})
+
+// ── 「装完就能用」：没有 token 时自动认领（2026-10-11）──────────────────────
+//
+// 这一组守的是**启动路径**上最高风险的那一处（HANDOFF 里点名的"风险最高的一处"）：
+// 它要往盘上写凭据、要处理失败回退，还要**不能让"没认领到"变成"启动失败"**。
+//
+// ⚠️ 全程不联网：`claimHostToken` 读的是 `globalThis.fetch`，夹具临时换掉它，
+// 用完在 `finally` 里换回来（这条路径上任何一次真请求都会让 CI 打到公网）。
+
+/** 夹具用的合法 token（48 位小写十六进制，与中继 `randomBytes(24).toString('hex')` 同形）。 */
+const CLAIMED = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678abcdef01'
+
+/** 临时把 fetch 换成一个记账用的假实现；返回恢复函数。 */
+function withFakeFetch(answer: { body?: unknown; status?: number; throws?: Error }): {
+  calls: Array<{ url: string; method?: string }>
+  restore: () => void
+} {
+  const saved = globalThis.fetch
+  const calls: Array<{ url: string; method?: string }> = []
+  globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
+    calls.push({ url: String(input), method: init?.method })
+    if (answer.throws) throw answer.throws
+    const status = answer.status ?? 200
+    return { ok: status === 200, status, json: async () => answer.body }
+  }) as unknown as typeof fetch
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = saved
+    },
+  }
+}
+
+/** 临时清掉两个会影响配置合成的环境变量（否则这台开发机上的真值会改变被测路径）。 */
+function withoutClaimEnv<T>(run: () => T): T {
+  const url = process.env.DRC_SERVER_URL
+  const token = process.env.DRC_HOST_TOKEN
+  delete process.env.DRC_SERVER_URL
+  delete process.env.DRC_HOST_TOKEN
+  try {
+    return run()
+  } finally {
+    if (url !== undefined) process.env.DRC_SERVER_URL = url
+    if (token !== undefined) process.env.DRC_HOST_TOKEN = token
+  }
+}
+
+test('没 token 时自动认领一枚：POST 那条地址、落盘 0600、启动不被阻断', async () => {
+  const fake = withFakeFetch({ body: { token: CLAIMED } })
+  const booted = withoutClaimEnv(() => boot({ webServer: true, hostToken: '' }))
+  try {
+    const state = await booted.waitForCarrier()
+    // ① 认领请求：**POST**（GET 在浏览器地址栏一发就能把 token 领走）到 ws→http 那条地址
+    assert.equal(fake.calls.length, 1, `只认领一次（实得 ${JSON.stringify(fake.calls)}）`)
+    assert.equal(fake.calls[0]!.method, 'POST')
+    assert.equal(fake.calls[0]!.url, 'http://127.0.0.1:1/api/claim-token', 'ws→http，且路径是整段替换')
+    // ② 启动没被阻断：载具起来了（而不是 invalid-config 什么都不做）
+    assert.equal(state.carrier, 'mock', `认领不该阻断启动：${JSON.stringify(state).slice(0, 200)}`)
+    assert.ok(
+      !(state.problems as string[]).some((entry) => entry.startsWith('error:hostToken')),
+      `认领这条路上不该再报 error:hostToken：${JSON.stringify(state.problems)}`,
+    )
+    // ③ 快照：来源与认领状态（GUI 宿主里日志没人看，这一格是唯一的现场）
+    const diag = state.diagnostics as { hostToken: Record<string, unknown> }
+    assert.equal(diag.hostToken.source, 'claimed', '生效的那一枚来自认领')
+    assert.equal(diag.hostToken.claim, 'ok')
+    assert.equal(diag.hostToken.file, 'host-token.json')
+    assert.equal(
+      state.hostTokenShape,
+      `${CLAIMED.slice(0, 4)}…${CLAIMED.slice(-2)}(48)`,
+      '形状（脱敏）要能回答"是不是那一枚"：长度口径必须与中继一致（48 位十六进制）',
+    )
+    // ④ 落盘：0600 + 内容对（**走的是 SecureFilePort 那条路**，不是新开一条写文件的）
+    //
+    // ⚠️ 权限位那一句走 `hasPosixModes()`（`tests/test-platform.ts` 的装置，跨平台闸认它）：
+    // win32 上 `chmod` 只切只读位，`mode & 0o777 === 0o600` **永远不成立**
+    // —— 写成裸断言的话那条腿恒红；写成静默 `if` 又等于假绿。所以这里显式分叉：
+    // POSIX 上验权限位，win32 上只验"文件真的写出来了"（那是这条用例真正要保的东西）。
+    const file = path.join(booted.statusDir, 'host-token.json')
+    if (hasPosixModes()) {
+      assert.equal(statSync(file).mode & 0o777, 0o600, 'token 是凭据：必须是 0600')
+    } else {
+      assert.ok(statSync(file).isFile(), 'win32 没有权限位这回事：至少确认文件真的落盘了')
+    }
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    assert.equal(stored.token, CLAIMED)
+    assert.equal(stored.serverUrl, 'ws://127.0.0.1:1', '落盘要带上"向哪台中继领的"')
+    assert.equal(stored.source, 'claimed')
+  } finally {
+    fake.restore()
+    booted.dispose()
+  }
+})
+
+test('认领失败**不许变成启动失败**：留一条 warn、载具照常起来、中继照常去连', async () => {
+  // ⚠️ 这条是 HANDOFF 点名的那条纪律："认领失败必须还能走回现在的形态"。
+  // 最坏的做法是让失败抛出去（插件不加载）或退回 invalid-config（什么都不做）——
+  // 那样"手机上看不到这台机器"会升级成"连设置页都没有"，而设置页正是用户自己填 token 的地方。
+  const fake = withFakeFetch({ throws: new Error('ECONNREFUSED') })
+  const booted = withoutClaimEnv(() => boot({ webServer: true, hostToken: '' }))
+  try {
+    const state = await booted.waitForCarrier()
+    assert.equal(fake.calls.length, 1, '试过一次就不许无限重试（启动路径上不许有循环重试）')
+    assert.equal(state.carrier, 'mock', '载具照常起来：认领失败不是"插件不加载"')
+    assert.equal(state.relay, 'offline', '中继照常去连（连不上是中继的事，不是启动路径的事）')
+    assert.ok(
+      (state.problems as string[]).includes('warn:hostToken'),
+      `失败要留一条可查的痕（否则 status.json 里只剩 relay offline）：${JSON.stringify(state.problems)}`,
+    )
+    const diag = state.diagnostics as { hostToken: Record<string, unknown> }
+    assert.equal(diag.hostToken.claim, 'failed')
+    assert.equal(diag.hostToken.claimReason, 'unreachable', '要分得出是"网络不通"还是"中继没这条接口"')
+    assert.equal(state.hostTokenShape, undefined, '没拿到就不该有形状')
+    // 也没写盘（写一份空的不如不写：下次启动读到的会是坏文件）
+    let exists = true
+    try {
+      readFileSync(path.join(booted.statusDir, 'host-token.json'), 'utf8')
+    } catch {
+      exists = false
+    }
+    assert.equal(exists, false, '认领失败不许留下半个文件')
+  } finally {
+    fake.restore()
+    booted.dispose()
+  }
+})
+
+test('盘上已经有一枚（同一台中继）：**一次请求都不发**，直接用盘上那枚', async () => {
+  const fake = withFakeFetch({ body: { token: 'b'.repeat(48) } })
+  const booted = withoutClaimEnv(() => boot({ webServer: true, hostToken: '', seedClaimedToken: { token: CLAIMED } }))
+  try {
+    const state = await booted.waitForCarrier()
+    assert.deepEqual(fake.calls, [], '盘上有就不许再领一枚：认领会**作废上一枚**（中继侧语义），白换一次')
+    assert.equal(state.hostTokenShape, `${CLAIMED.slice(0, 4)}…${CLAIMED.slice(-2)}(48)`)
+    const diag = state.diagnostics as { hostToken: Record<string, unknown> }
+    assert.equal(diag.hostToken.source, 'claimed')
+    assert.equal(diag.hostToken.claim, 'not-needed', '没去认领就是 not-needed（pending/ok/failed 都不是）')
+  } finally {
+    fake.restore()
+    booted.dispose()
+  }
+})
+
+test('盘上那枚属于**另一台中继**：不认它（别把旧凭据送给陌生人），重新认领一枚', async () => {
+  const fake = withFakeFetch({ body: { token: CLAIMED } })
+  const booted = withoutClaimEnv(() =>
+    boot({
+      webServer: true,
+      hostToken: '',
+      seedClaimedToken: { token: 'c'.repeat(48), serverUrl: 'wss://other.example.com' },
+    }),
+  )
+  try {
+    const state = await booted.waitForCarrier()
+    assert.equal(fake.calls.length, 1, '换中继之后要重新认领（旧那枚属于上一台）')
+    assert.equal(state.hostTokenShape, `${CLAIMED.slice(0, 4)}…${CLAIMED.slice(-2)}(48)`)
+  } finally {
+    fake.restore()
+    booted.dispose()
+  }
 })

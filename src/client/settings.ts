@@ -16,7 +16,8 @@
  * ## 形状上的三条决定，都有据
  *
  * 1. **内容全部走 `pill.ts` 已经导出的那几个函数**（`panelViewFor` 判成败、`pillLabel`
- *    出抬头那句、`relayRow`/`versionRow`/`waitingRow` 出三行、`secondsText` 出倒计时）。
+ *    出抬头那句、`secondsText` 出倒计时）。
+ *    ⚠️ 2026-10-11：`relayRow`/`versionRow`/`waitingRow` 随页脚一起删除 —— 它们只服务于那三行。
  *    这里**一行决策逻辑都不重写**：同一件事在两个地方各判一次，迟早会在一个地方改、
  *    另一个地方不改（本仓 F2 那条纪律就是从这类事故里长出来的）。
  * 2. **React 只给一个挂载点**（`<div ref>`），DOM 命令式地建——与 pill 同一套做法，
@@ -45,11 +46,8 @@ import {
   panelViewFor,
   pairingCount,
   pillLabel,
-  relayRow,
   relayStateRow,
   secondsText,
-  versionRow,
-  waitingRow,
   warnSection,
   type CreateElement,
   type PanelView,
@@ -71,6 +69,91 @@ export const SETTINGS_ORDER = 30
  * 由 `e2e/plugin-settings-section` 钉住"它非空且不是英文键名"。
  */
 export const SETTINGS_LABEL = '远程控制'
+
+/**
+ * 设置页「进阶」那一栏的读写路由（GET 读 / POST 写）。
+ *
+ * ⚠️ **逐字等于宿主侧 `pill/config-routes.ts` 的 `PLUGIN_CONFIG_ROUTE`**，而这里刻意
+ * **不从那个模块 import**：它是 Node 侧的（import 了 `node:http` 与 `hostIsLoopback`），
+ * 打进浏览器产物会把整条宿主路由链拖进去。两边一致这件事由
+ * `client-bundle.test.ts` 的那条反证判据守着（它把产物里的 `/plugins/*` 字面量全列出来比）。
+ */
+export const CONFIG_ROUTE = '/plugins/dsh-remote-control/config'
+
+/**
+ * 「进阶」那一栏**自带**的一张小样式表。
+ *
+ * 为什么不并进 `pill.ts` 那张：`pill.ts` 是**只读**的（用户裁决：那颗 pill 只负责
+ * 自动注册与展示，不参与配置），而这一栏是 2026-10-11 新加的。两张表各自按
+ * `data-plugin-css` 对齐内容，互不覆盖。
+ *
+ * ⚠️ 两处形态纪律照 `pill.ts` 那张表：**不许出现反引号**（模板会当场截断），
+ * 颜色一律走宿主变量（`hostVar`）而不是裸色号。
+ */
+const ADV_STYLE_ID = 'dsh-remote-control/settings.css'
+/** 宿主变量的取值形态：以 `--dsw-alias-*` 为名、带回退值。与 `pill.ts` 的 `hostVar` 同一形状。 */
+const hostVar = (name: string, fallback: string): string => `var(--dsw-alias-${name}, ${fallback})`
+const ADV_CSS = `
+.drc-adv-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 12px;
+  align-items: center; }
+.drc-adv-label { font-size: 13px; line-height: 20px; color: ${hostVar('label-secondary', '#6b7280')}; }
+.drc-adv-input { appearance: none; box-sizing: border-box; width: 100%; min-width: 0; font: inherit;
+  font-size: 13px; line-height: 20px; padding: 4px 8px; border-radius: 8px;
+  border: 1px solid ${hostVar('border-l2', 'rgba(128,128,128,.35)')};
+  background: ${hostVar('bg-layer-3', 'transparent')};
+  color: ${hostVar('label-primary', 'inherit')}; }
+.drc-adv-input:focus-visible { outline: 2px solid ${hostVar('brand-primary', '#4d6bfe')}; outline-offset: 1px; }
+.drc-adv-note { margin: 0; font-size: 12px; line-height: 1.6; color: ${hostVar('label-tertiary', '#8a8f98')}; }
+.drc-adv-note[data-kind="failed"] { color: ${hostVar('state-error-primary', '#d92d20')}; }
+.drc-adv-note[data-kind="ok"] { color: ${hostVar('label-secondary', '#6b7280')}; }
+`
+
+/** 注入「进阶」那张小样式表（幂等：已插过就按内容对齐；与 `ensureStyle` 同一套做法）。 */
+function ensureAdvancedStyle(doc: Document): void {
+  try {
+    const existing = doc.querySelector(`style[data-plugin-css="${ADV_STYLE_ID}"]`)
+    // ⚠️ 还要求属性**逐字对上**：夹具（`FakeDocument.querySelector`）对任何含
+    // `data-plugin-css` 的选择器都会返回那份预置的旧表 —— 不校验属性的话，这里会把
+    // pill 那张表的内容改写成这一张（真 DOM 上不会，但判据会因此变成碰运气）。
+    if (existing && existing.getAttribute('data-plugin-css') === ADV_STYLE_ID) {
+      existing.setAttribute('data-plugin', SETTINGS_ID)
+      if (existing.textContent !== ADV_CSS) existing.textContent = ADV_CSS
+      return
+    }
+    const element = doc.createElement('style')
+    element.setAttribute('data-plugin-css', ADV_STYLE_ID)
+    element.setAttribute('data-plugin', SETTINGS_ID)
+    element.textContent = ADV_CSS
+    doc.head.appendChild(element)
+  } catch (error) {
+    warnSection('进阶那一栏的样式注入失败（表单仍可用，只是没排版）', error)
+  }
+}
+
+/** `GET /config` 的回答（宿主侧 `EffectivePluginConfig` 的同形）。**不含 token 真值。** */
+interface ConfigAnswer {
+  serverUrl?: unknown
+  defaultServerUrl?: unknown
+  serverUrlSource?: unknown
+  hostTokenSet?: unknown
+  hostTokenShape?: unknown
+  hostTokenSource?: unknown
+  userConfigFile?: unknown
+}
+
+/** 来源的中文说法。认不出的来源一律照原样印出来（比"未知"更有用于排错）。 */
+const SOURCE_TEXT: Record<string, string> = {
+  env: '环境变量',
+  patch: '配置文件（patch）',
+  user: '本页',
+  claimed: '机器自动认领',
+  default: '官方默认',
+  none: '未设置',
+}
+const sourceText = (value: unknown): string => {
+  const key = typeof value === 'string' ? value : ''
+  return SOURCE_TEXT[key] ?? (key === '' ? '未知' : key)
+}
 
 /** 发码/退出配对这两条写路由的 CSRF 判据（宿主侧 `routes.ts` 同一个头）。 */
 const MARKER: Record<string, string> = { 'x-drc-pair': '1' }
@@ -95,6 +178,8 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
   const doc = root.ownerDocument
   // 自己注入样式：没有会话时 pill 不会挂上，没有人替我们插这张表（见 `ensureStyle` 的注释）。
   ensureStyle(doc)
+  // 「进阶」那一栏自带的那张小表（与 pill 那张分开，见 `ensureAdvancedStyle` 的注释）。
+  ensureAdvancedStyle(doc)
   const box = doc.createElement('div')
   box.className = 'drc-sec'
   root.appendChild(box)
@@ -113,6 +198,22 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
   let countNode: HTMLElement | undefined
   /** 已经发过码没有：决定动作那一排给"刷新"还是"退出配对"。 */
   let paired = false
+  /**
+   * ── 「进阶」那一栏（自部署地址 / token，2026-10-11 加）────────────────────
+   *
+   * 目标形态是「装完就能用」：默认走官方中继、token 自动认领。这一栏留给**自部署与
+   * 自定义**的人——它必须留着：默认改成官方之后**自部署用户会连错**
+   * （用户裁决：自定义项不是可选项）。
+   *
+   * ⚠️ 这张卡**只建一次**（`advancedCard`），不跟着 `paint()` 重建：
+   * 状态轮询每 2 秒 `paint()` 一次，重建会把用户正在输入的内容抹掉。
+   */
+  let cfg: ConfigAnswer | undefined
+  let advancedCard: HTMLElement | undefined
+  let advUrlInput: HTMLInputElement | undefined
+  let advTokenInput: HTMLInputElement | undefined
+  let advHint: HTMLElement | undefined
+  let advNote: HTMLElement | undefined
 
   const fail = (message: string, error?: unknown): void => {
     warnSection(message, error)
@@ -258,6 +359,181 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
     node.textContent = label
     node.addEventListener('click', onClick)
     return node
+  }
+
+  // ── 进阶那一栏（自部署地址 / token）──────────────────────────────────
+
+  /** 状态行：最近一次动作的结果（保存失败那句话就是唯一的现场）。 */
+  const setNote = (message: string, kind?: 'ok' | 'failed'): void => {
+    if (!advNote) return
+    advNote.textContent = message
+    /**
+     * ⚠️ 不用 `removeAttribute`：本仓的假 DOM 夹具（`client-bundle.test.ts` 的 FakeElement）
+     * 没有那个方法，写了会在判据里抛错。空串属性足以表达"没有 kind"——
+     * CSS 里那两条选择器都带具体取值（`[data-kind="failed"]`）。
+     */
+    advNote.setAttribute('data-kind', kind ?? '')
+  }
+
+  /** 把 `GET /config` 的回答铺到表单上（**不重建那张卡**，否则输入内容会被抹掉）。 */
+  const showConfig = (answer: ConfigAnswer): void => {
+    cfg = answer
+    if (advUrlInput) advUrlInput.value = typeof answer.serverUrl === 'string' ? answer.serverUrl : ''
+    if (advTokenInput) {
+      advTokenInput.value = ''
+      advTokenInput.setAttribute(
+        'placeholder',
+        answer.hostTokenSet === true ? '已设置，留空不改动' : '未设置（官方中继会自动认领）',
+      )
+    }
+    if (advHint) {
+      const locked = answer.serverUrlSource === 'env' || answer.serverUrlSource === 'patch'
+      const shape =
+        typeof answer.hostTokenShape === 'string' && answer.hostTokenShape !== '' ? `（${answer.hostTokenShape}）` : ''
+      advHint.textContent =
+        `中继地址：${sourceText(answer.serverUrlSource)}　口令：${sourceText(answer.hostTokenSource)}${shape}` +
+        (locked ? '。当前地址由 patch / 环境变量决定，在这一页保存会被它们盖住' : '')
+    }
+  }
+
+  /** 读一次当前配置。读不到**不重画整页**：那一栏就地说明白，配对那条路一个字不受影响。 */
+  const loadConfig = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, { method: 'GET' })
+    if (disposed) return
+    if (answer.ok && answer.body && typeof answer.body.serverUrl === 'string') {
+      showConfig(answer.body as ConfigAnswer)
+      return
+    }
+    // 老版宿主没有这一条路由（404）：这一栏就是"用不了"，说清楚而不是留一个空表单。
+    setNote(`读不到当前配置（HTTP ${answer.status}）——这一版宿主没有 /config 路由`, 'failed')
+  }
+
+  /**
+   * 保存。**只提交改动过的那一项**：口令输入框默认是空的（占位符说明"已设置"），
+   * 无条件提交就等于每保存一次都把口令清空一次 —— 那是最容易犯、后果最重的一种。
+   */
+  const submitAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const url = advUrlInput?.value.trim() ?? ''
+    const token = advTokenInput?.value.trim() ?? ''
+    const payload: Record<string, string> = {}
+    // 与当前生效值不同 ⇒ 提交；**空串是有意义的值**（= 删掉这一项、回落到下一层）。
+    if (!cfg || url !== (typeof cfg.serverUrl === 'string' ? cfg.serverUrl : '')) payload.serverUrl = url
+    if (token !== '') payload.hostToken = token
+    if (Object.keys(payload).length === 0) {
+      setNote('没有改动', undefined)
+      return
+    }
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      const detail = String(answer.body.detail ?? answer.body.error ?? `HTTP ${answer.status}`)
+      setNote(`保存失败：${detail}`, 'failed')
+      return
+    }
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已保存。中继地址与口令在**下次启动**时生效（重启 Harness）。', 'ok')
+  }
+
+  /** 只清口令（地址不动）。走"空串 = 删掉这一项"那条语义，宿主侧不用另开一条接口。 */
+  const clearTokenAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify({ hostToken: '' }),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      setNote(`清除失败：HTTP ${answer.status}`, 'failed')
+      return
+    }
+    if (advTokenInput) advTokenInput.value = ''
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已清除自定义口令。重启 Harness 后这台主机会回到环境变量 / 配置文件 / 自动认领那一枚。', 'ok')
+  }
+
+  /** 恢复默认：把这一页写的两项都删掉（自部署用户改回官方中继、或清掉自己填的口令）。 */
+  const resetAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: '', hostToken: '' }),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      setNote(`恢复失败：HTTP ${answer.status}`, 'failed')
+      return
+    }
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已恢复默认（这一页写的自定义项都删掉了）。重启 Harness 后生效。', 'ok')
+  }
+
+  /**
+   * 建这一栏的 DOM。**只调用一次**（`paint()` 里懒建之后复用同一个节点）。
+   *
+   * 它刻意长得像"另一张卡"而不是并进配对卡：这一栏是**给进阶玩家的**，
+   * 摆在配对卡里会让"我该不该动它"变成每个用户都要回答的问题。
+   */
+  const buildAdvanced = (): HTMLElement => {
+    const section = card('进阶：自部署 / 自定义')
+    section.setAttribute('data-role', 'advanced')
+    section.appendChild(
+      text(
+        'p',
+        'drc-sec-note',
+        '默认走官方中继，口令由主机自动认领，什么都不用填。自己搭了中继、或想用另一枚口令，才需要改这里。',
+      ),
+    )
+    const grid = doc.createElement('div')
+    grid.className = 'drc-adv-grid'
+
+    const urlId = `${SETTINGS_ID}-server-url`
+    const urlLabel = text('label', 'drc-adv-label', '中继地址')
+    urlLabel.setAttribute('for', urlId)
+    const urlInput = doc.createElement('input')
+    urlInput.id = urlId
+    urlInput.className = 'drc-adv-input'
+    urlInput.setAttribute('type', 'text')
+    urlInput.setAttribute('spellcheck', 'false')
+    urlInput.setAttribute('autocomplete', 'off')
+    urlInput.setAttribute('placeholder', 'wss://drc.provid.cc')
+    advUrlInput = urlInput
+
+    const tokenId = `${SETTINGS_ID}-host-token`
+    const tokenLabel = text('label', 'drc-adv-label', '主机口令')
+    tokenLabel.setAttribute('for', tokenId)
+    const tokenInput = doc.createElement('input')
+    tokenInput.id = tokenId
+    tokenInput.className = 'drc-adv-input'
+    // `password`：口令是凭据，屏幕上不许明文摆着（截图、投屏、旁边的人）。
+    tokenInput.setAttribute('type', 'password')
+    tokenInput.setAttribute('autocomplete', 'off')
+    tokenInput.setAttribute('placeholder', '未设置（官方中继会自动认领）')
+    advTokenInput = tokenInput
+
+    for (const node of [urlLabel, urlInput, tokenLabel, tokenInput]) grid.appendChild(node)
+    section.appendChild(grid)
+
+    const actions = doc.createElement('div')
+    actions.className = 'drc-sec-actions'
+    actions.appendChild(button('保存', () => void submitAdvanced(), 'primary'))
+    actions.appendChild(button('清除口令', () => void clearTokenAdvanced()))
+    actions.appendChild(button('恢复默认', () => void resetAdvanced()))
+    section.appendChild(actions)
+
+    advHint = text('p', 'drc-adv-note', '正在读取当前配置…')
+    section.appendChild(advHint)
+    advNote = text('p', 'drc-adv-note', '')
+    advNote.setAttribute('data-kind', '')
+    section.appendChild(advNote)
+    return section
   }
 
   /**
@@ -421,60 +697,40 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
     grid.appendChild(mp)
 
     // ⚠️ **原来那张「连接」卡整张删掉了**（2026-10-09 重排）。
-    // 那四行读数（中继状态 / 中继地址 / 主机版本 / 待处理）现在进了**状态条那一行**，
-    // 它们是"知道就行"的信息，不该各占一整张卡 —— 实测那两张纯文字卡
-    // （连接 + 怎么用）加起来 510px，占整栏 802px 的 63%。
+    // ⚠️ 这里原来构造 `meta`（中继 / 版本 / 待处理 三条 `drc-sec-meta-item`），
+    // 它**只被页脚 push** —— 2026-10-11 删掉页脚后它就成了"建了没人用"的死代码，一并删。
     //
-    // 「待处理」仍然**必须留在这一行**：一张挂起的审批卡住远端一条正在跑的回合
-    // （docs/PRODUCT.md §3），那是这一页唯一一条"看完要做点什么"的读数。
-    const meta = doc.createElement('div')
-    meta.className = 'drc-sec-meta'
-    for (const [key, value] of [
-      ['中继', relayRow(status)],
-      ['版本', versionRow(status)],
-      ['待处理', waitingRow(status)],
-    ] as const) {
-      if (!value) continue
-      const item = doc.createElement('span')
-      item.className = 'drc-sec-meta-item'
-      item.appendChild(text('span', 'drc-sec-meta-key', key))
-      item.appendChild(text('span', 'drc-sec-meta-value', value))
-      meta.appendChild(item)
-    }
-
+    // 「中继地址」与「主机版本」属于**只读诊断**：这一页是给小白配东西的地方，
+    // 把诊断摆在配置页底部只会让人以为"我该去改它"。要排错走 status.json 与 host-doctor。
     children.push(grid)
     // ⚠️ 这里原来有一段「── 第四张卡：怎么用 ──」的注释，列着四条说明文案，
     // 而**它描述的结构在这一轮重排里已经不存在了**（下一段就是页脚）。
     // 留着它 = 下一位读代码会以为页面上还有那四条说明 —— 而实际上「环境自检」
     // 「不用再扫」这两条**页面上一个都不存在**（它们在别的文档里，不在这一栏）。
 
-    // ── 页脚：三步一行 + 元信息 ────────────────────────────────────
+    // ── 页脚：2026-10-11 **整段删除**（用户裁决）────────────────────────
     //
-    // 「怎么用」原来是一张 255px 的卡、四条 2×2 的说明。它们是这个页面的**第三等**内容
-    // （第一等是配对码，第二等是连没连上），压成一行之后整页才装得下不必滚。
-    const footer = doc.createElement('div')
-    footer.className = 'drc-sec-footer'
-    const steps = doc.createElement('ol')
-    steps.className = 'drc-sec-steps'
-    // 句子按"一行三步"的宽度裁过；原来那版是照整行写的，每条要占四五行。
-    for (const step of ['扫上面的码', '在手机上下指令', '审批工具调用']) {
-      const li = doc.createElement('li')
-      li.className = 'drc-sec-step'
-      li.appendChild(text('span', '', step))
-      steps.appendChild(li)
-    }
-    footer.appendChild(steps)
-    // 两条**排错时会用到的**事实留在这里（比正文低一等，但删不得）：
-    // 「扫不出怎么办」与「退出配对会作废钥匙」都是用户真的会遇到的。
-    footer.appendChild(
-      text(
-        'p',
-        'drc-sec-footnote',
-        '扫不出就在小程序「手动输入」里填那 6 位码 · 端到端加密，中继只见密文 · 「退出配对」会作废手机上那把钥匙',
-      ),
-    )
-    if (meta.children.length > 0) footer.appendChild(meta)
-    children.push(footer)
+    // 删掉的是三样东西：
+    //   1. 「扫上面的码 / 在手机上下指令 / 审批工具调用」这三步；
+    //   2. 那条脚注（「扫不出怎么办 · 端到端加密 · 退出配对会作废钥匙」）；
+    //   3. 底部那行「中继 <地址>　版本 <x.y.z>」元信息（`meta`）。
+    //
+    // 为什么这次连"排错时会用到"的理由也不保留：那一段的论证是"比正文低一等但删不得"，
+    // 而低一等的东西在这一页恰恰是**用户根本不会去找**的 —— 它假设用户已经知道
+    // "小程序里有手动输入""退出配对会作废钥匙"，而这两件事都属于**不该让用户知道**的内部。
+    //
+    // 「中继地址 / 版本」同理：这两个值属于**只读诊断**，而这一页是**给小白配东西的地方**，
+    // 把诊断信息摆在配置页底部只会让人以为"我该去改它"。要排错走 status.json 与 host-doctor。
+
+    /**
+     * ── 「进阶：自部署 / 自定义」那一张卡（2026-10-11 加）──────────────
+     *
+     * ⚠️ **只建一次**：`paint()` 每 2 秒被状态轮询调一次，每次重建这张卡会把
+     * 用户正在输入的内容抹掉（输入框的值只活在节点上）。所以这里复用同一个节点，
+     * 表单值由 `loadConfig()` / 提交结果**就地更新**。
+     */
+    if (!advancedCard) advancedCard = buildAdvanced()
+    children.push(advancedCard)
 
     box.replaceChildren(...(children as Node[]))
   }
@@ -482,6 +738,9 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
   paint()
   void loadStatus()
   void mint()
+  // 「进阶」那一栏的读数：与状态轮询分开取（它不在那条 2 秒节拍上——那是"手机上刚扫完，
+  // 电脑这一页马上就变"的路，而配置几乎不会在你看这一页的时候变）。
+  void loadConfig()
   /**
    * 状态每 2 秒回来一次：这是"手机上刚扫完，电脑这一页马上就变"的那条路。
    * 与 pill 同一个节拍——用户在设置页停留时也应当看到别人扫码的结果。

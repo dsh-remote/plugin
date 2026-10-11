@@ -1,8 +1,9 @@
 /**
  * config — 插件配置：合成、校验、夹取。
  *
- * 优先级与旧实现一致：**环境变量 > patch 注入的 config > 默认值**
- * （取证 docs/legacy-spec/host-plugin-cordis.md §5.1）。
+ * 优先级：**环境变量 > patch 注入的 config > 设置页写下的自定义项 > 默认值**
+ * （前三级与旧实现一致，取证 docs/legacy-spec/host-plugin-cordis.md §5.1；
+ * 第四级是 2026-10-11 为「装完就能用 + 设置页保留自定义」加的，见 `shell/user-config.ts`）。
  * **键名一律继承旧名**：这些键写在用户的 `~/.dsh/profiles/desktop/cordis.patch.yml` 里，
  * 改名等于让线上配置静默失效——那是"语义继承"允许、而"结构照抄"禁止的分界线上
  * 唯一必须站在继承一侧的维度（复核 §5.4）。
@@ -16,6 +17,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
 import { defaultPairStoreFile } from './pair-store.js'
+import { type UserOverrides } from './user-config.js'
 import { dataDir, isAbsolutePath, isForeignAbsolutePath, resolveAgainstBase } from '../platform/paths.js'
 import { MAX_ATTACHMENT_BYTES } from '@dsh-remote/protocol/limits'
 import { MAX_ATTACH_TOTAL_BYTES } from './uploads.js'
@@ -36,14 +38,13 @@ export interface PluginConfig {
   pairOnStartSec: number
   /** 向中继申请 PSK 有效期；服务端权威值会覆盖它（见 transport/relay.ts）。 */
   pairTtlMs: number
-  approvalTimeoutSec: number
   listingRefreshSec: number
   /**
    * 状态栏那颗 pill（**配对的唯一入口**）。
    *
    * 2026-10-03 这一半原来是"右栏自动弹码"（独立 cordis 条目，键名
    * `sidebarQr`，带 `imageFile`/`refreshMs` 两个落盘参数）。那套删了之后 pill 不需要任何
-   * 宿主侧节拍与落盘——它要图的时候自己发请求。剩下的唯一开关就是"挂不挂那六条路由"。
+   * 宿主侧节拍与落盘——它要图的时候自己发请求。剩下的唯一开关就是"挂不挂那七条路由"（六条配对 + 一条配置读写，2026-10-11 起）。
    *
    * ⚠️ 这里的键**绝不能是 error 级**：error 会让主插件整个不启动，那等于把一个界面功能
    * 变成配对链路的单点。同理 `pill.enabled:false` 的代价要能被查见（见 index.ts 的 problems）。
@@ -120,7 +121,22 @@ export interface PluginConfig {
 
 export const DEFAULT_CONFIG: PluginConfig = {
   enabled: true,
-  serverUrl: 'ws://127.0.0.1:8787',
+  /**
+   * **官方中继**（2026-10-11 改；此前是 `ws://127.0.0.1:8787`）。
+   *
+   * 目标形态是「插件装完就能用」：用户 `npm i` 之后什么都不用配。
+   * 旧默认值指向**本机回环**，而只有恰好在本机跑着中继的人才能连上——
+   * 对下载插件的绝大多数人来说，那个默认值的真实含义是"配完也不通"
+   * （用户原话：下载下来发现不能用，直接就卸载了）。
+   *
+   * ⚠️ **默认值是唯一事实源，随包分发的 `cordis.patch.yml` 里不许再写一遍**
+   * ——两处各写一份就会漂移，而漂移的表现是"改了代码里的默认值、装机后不生效"
+   * （那份 patch 是注入层，优先级高于默认值）。判据见伞仓 `e2e/host-config-docs.test.mjs`。
+   *
+   * 自部署用户改这一项：`DRC_SERVER_URL` 环境变量、patch 里的 `serverUrl`，
+   * 或设置页「远程控制 › 进阶」那一栏（写进 `user-config.json`，见 `shell/user-config.ts`）。
+   */
+  serverUrl: 'wss://drc.provid.cc',
   hostToken: '',
   hostTokenEnv: 'DRC_HOST_TOKEN',
   hostId: '',
@@ -131,7 +147,6 @@ export const DEFAULT_CONFIG: PluginConfig = {
   unarchiveOnPrompt: true,
   pairOnStartSec: 0,
   pairTtlMs: 120_000,
-  approvalTimeoutSec: 180,
   listingRefreshSec: 15,
   conversationIdleTtlSec: 86_400,
   // 恢复出来的会话按 7 天剪，与中继的 DRC_CONV_IDLE_TTL_MS 对齐（理由见该字段注释）。
@@ -210,13 +225,21 @@ function envFlag(value: string | undefined, fallback: boolean): boolean {
   return fallback
 }
 
-/** 合成三级配置。`injected` 来自 cordis 的 patch 层。 */
+/** 合成四级配置。`injected` 来自 cordis 的 patch 层；`overrides` 来自设置页那一栏。 */
 export function readConfig(
   injected: Partial<PluginConfig> | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  overrides: UserOverrides = {},
 ): PluginConfig {
   const merged: PluginConfig = {
     ...DEFAULT_CONFIG,
+    // 设置页写下的自定义项：**压在默认值之上、patch 之下**（理由见 `shell/user-config.ts`
+    // 的文件头：手写 patch 的人仍然说了算，一个网页表单不许悄悄盖掉他那一行）。
+    //
+    // ⚠️ `undefined` 的那一项要**滤掉**：`{ serverUrl: undefined }` 在对象展开里是
+    // "把这一项设成 undefined"，会把默认值抹掉（而不是"回到默认值"）。
+    // 那个形态是**保存路径**上的中间态（"用户清空了这一项"），不是有效取值。
+    ...definedOnly(overrides),
     ...(injected ?? {}),
     keepAwake: { ...DEFAULT_CONFIG.keepAwake, ...(injected?.keepAwake ?? {}) },
     // 逐键合并：patch 里只写 `pill.enabled` 时不能把整个对象覆盖掉（虽然它现在只有一个键，
@@ -238,6 +261,15 @@ export function readConfig(
   // 比留在环境变量里更容易被顺手提交或贴进工单。
   if (merged.hostTokenEnv) merged.hostToken = env[merged.hostTokenEnv] ?? merged.hostToken
   return merged
+}
+
+/** 去掉取值为 `undefined` 的键：它们在对象展开里会**抹掉**下一层的值（而不是回落到它）。 */
+function definedOnly<T extends object>(source: T): Partial<T> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined) out[key] = value
+  }
+  return out as Partial<T>
 }
 
 const secondsSchema = z.number().finite()
@@ -355,13 +387,10 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
   }
   /**
    * 剩下这几个数字字段原来是**一个都不夹**的（头注却承诺"其余一律 warn + 夹回默认值"）：
-   * - `approvalTimeoutSec: NaN` → `setTimeout(NaN)` 立刻触发 = 审批**瞬间超时**，
-   *   而且没有任何一行日志会说这件事；
    * - `listingRefreshSec: 0` / 负值 / NaN → 刷新节拍变成热循环（0ms 自续期）；
    * - `maxFileBytes: NaN` → 每个文件都被判超限（NaN 比较恒 false，两个方向都失控）。
    * 统一走这一条：非有限或越界就 warn + 夹回默认值（与 idleReleaseSec 同形）。
    */
-  clampSeconds(config, problems, 'approvalTimeoutSec', 1, 180)
   clampSeconds(config, problems, 'listingRefreshSec', 1, 15)
   if (!secondsSchema.safeParse(config.maxFileBytes).success || config.maxFileBytes < 1) {
     problems.push({
@@ -399,7 +428,7 @@ export function validateConfig(config: PluginConfig): ConfigProblem[] {
 function clampSeconds(
   config: PluginConfig,
   problems: ConfigProblem[],
-  field: 'approvalTimeoutSec' | 'listingRefreshSec',
+  field: 'listingRefreshSec',
   min: number,
   fallback: number,
 ): void {
