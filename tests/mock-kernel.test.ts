@@ -43,7 +43,7 @@ test('newSession({workspace}) 必须把工作区记进会话摘要（否则"手�
   )
 })
 
-test('不带 workspace 时不凭空造一个空串（老主机/老内核那一档）', async () => {
+test('不带 workspace 时不凭空造一个空串', async () => {
   const kernel = new MockKernel({ clock: new FakeClock() })
   const made = await kernel.newSession!()
   const row = await summaryOf(kernel, made.sessionId ?? '')

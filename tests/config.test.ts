@@ -360,16 +360,20 @@ test('秒数字段非法值必须 warn + 夹回默认值（approvalTimeoutSec �
   assert.equal(fine.maxFileBytes, 4096, '合法的 maxFileBytes 被改写了')
 })
 
-test('carrierGraceMs 是死键：已从配置面上删掉（全 src 零读取）', () => {
+test('carrierGraceMs 是死键：不在默认配置里，也不会被合成出来', () => {
   assert.equal(
     'carrierGraceMs' in DEFAULT_CONFIG,
     false,
     '这个键从来没有任何读取点：留着它等于让用户以为"载具宽限期"可调',
   )
-  // 用户 patch 里可能还留着这一行：与其余删掉的键同一条约定——**不报错也不生效**
-  // （`readConfig` 的 `...injected` 只是原样带着走，没有任何一处读它）。
+  /**
+   * ⚠️ 2026-10-11 晚：这条原来是为"用户 patch 里还留着删掉的键"写的（兼容口径）。
+   * 现在它只钉**通用形状**：合成不会因为多一个陌生键而改掉已知键的值
+   * （`readConfig` 不校验未知键 —— 那件事归 `pill/config-routes.ts` 的写入守卫）。
+   */
   const config = readConfig({ carrierGraceMs: 50 } as unknown as Partial<PluginConfig>, {})
-  assert.equal(config.serverUrl, DEFAULT_CONFIG.serverUrl, '带着一个死键也要能正常合成配置')
+  assert.equal(config.serverUrl, DEFAULT_CONFIG.serverUrl, '多一个陌生键不该影响已知键的合成')
+  assert.equal(config.statusFile, DEFAULT_CONFIG.statusFile, '同上：其余默认值也照旧')
 })
 
 // ── 2026-10-07 审计：两个"写了不报错、不告警、不生效"的配置 ───────────────

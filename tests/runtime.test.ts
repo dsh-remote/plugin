@@ -2733,7 +2733,7 @@ test('cmd.new_session：手机指定的 workspace 必须原样交给内核端口
   )
 })
 
-test('cmd.new_session：老手机不带 workspace 时端口收到 undefined（向后兼容那一档）', async () => {
+test('cmd.new_session：手机不知道落在哪时，端口收到 undefined（不许编一个空串）', async () => {
   // 反证：接线不能变成"没有 workspace 也造一个空串塞进去"——那会让载体以为
   // 手机指定了一个空目录，而 `cmd.workspace ? … : undefined` 正是为此留的。
   const { runtime, transport, kernel, clock } = fixture()
@@ -3322,7 +3322,7 @@ test('G1：未知决策词仍按拒绝处理（F10 的 fail-open 防线不许因
 // 推断（看形状、看有没有报错）必然在边界情形下静默错。
 //
 // 四条义务（§13.2 L1–L4）在这个文件里的落点：
-//   L1 取自注册表 → 下面「caps » 那一条 + `evHostInfo.parse` 必须过；
+//   L1 报出去的每一项都真的存在 → `evHostInfo.parse` 必须过；
 //   L2 报**此刻真正执行**的值 → 「限额的执行点」两条（这是最容易写成空头承诺的一格）；
 //   L3 不许用字段缺失推断不支持 → 「四个限额必须都在」那一条（0 与 undefined 是两件事）；
 //   L4 （重）连上与能力变化各发一次 → 「sendHostInfo」那一条 + `index.ts` 的接线。
@@ -3336,9 +3336,8 @@ function lastReply(transport: FakeTransport, type: string): Record<string, unkno
   return undefined
 }
 
-test('ev.host_info：caps 是"此刻真成立"的那一份（L1 注册表 + 平台推导向后端）', async () => {
+test('ev.host_info：报的是"此刻真成立"的限额与自身信息', async () => {
   const { runtime, kernel } = fixture({ hostMeta: () => ({ platform: 'darwin', arch: 'arm64' }) })
-  // 内核这一代**有** `readHistory` ⇒ `drc.payload.resume` 成立。
   kernel.readHistory = () => Promise.resolve({ events: [], nextBeforeSeq: undefined, latestSeq: 0 })
   runtime.start()
   await settle()
@@ -3353,16 +3352,9 @@ test('ev.host_info：caps 是"此刻真成立"的那一份（L1 注册表 + 平�
     'caffeinate',
     'state.sleep 必须走 detectBackend(platform)（与 SystemSleepBackend.backend() 同源），不是念一个固定的值',
   )
-  assert.ok(
-    payload.caps.includes('drc.payload.resume'),
-    '内核有 readHistory 时 resume 必须报出去：不报 ⇒ 手机永远走"重拉一页"，差量那条路白写',
-  )
-  assert.ok(payload.caps.includes('drc.host.info'), '自己这条能力也要报：否则手机无法判断该不该等这一帧')
-
-  // L1 的运行期闸：`caps` 里的每一项都必须是注册表认得的 id。
-  // 这条断言看着像在测 schema，其实测的是**生产端**——`HOST_CAPABILITIES` 是手写的清单，
-  // 打错一个字母编译期不报（它是 `CapabilityId[]`，拼错会报，但"加了一个还没进注册表的 id"
-  // 不会），而症状是**整帧被手机丢弃**，与"主机根本没发"长得一模一样。
+  // ⚠️ 2026-10-11 晚：能力位（`caps`）已经从这一帧里删掉了（单版本制，见协议层 `payloads.ts`）。
+  // 这里留下的是"这一帧的形状只有一种，且主机自己产的必须过协议层的校验器"。
+  assert.equal('caps' in payload, false, 'caps 已经不是这一帧的一部分')
   assert.doesNotThrow(
     () => evHostInfo.parse(payload),
     '主机自己产的 ev.host_info 必须能过协议层的校验器：过不了 ⇒ 手机侧整帧被丢，且看不出发生过什么',
@@ -3451,31 +3443,6 @@ test('L2 的执行点：报出去的 maxTextChars 必须真的被执行（边界
   assert.equal(rejected?.['ok'], false)
   assert.match(String(rejected?.['message']), /太长/, '超限要说"太长"，不能只说失败——用户手上只有这句话')
   assert.equal(kernel.calls.sendPrompt.length, 1, '被拒的那条不许已经送到内核上')
-})
-
-test('B3 反向判据：内核没有 readHistory ⇒ caps 里**不许**出现 drc.payload.resume（老主机必须退回重拉）', async () => {
-  // 这是 B3 在宿主侧的那一半。客户端侧那条判据（mp）要证明"没这一位时不发 since"，
-  // 而**那一条的前提是这一条**：主机不许在自己不具备能力时报"支持"。
-  //
-  // ⚠️ 这个夹具的**默认**状态就是"没有 readHistory"（`KernelPort.readHistory` 是可选成员，
-  // `makeKernel()` 不实现它）—— 也就是说下面这条断言测的是老主机那一档，
-  // 而不是"我故意构造了一个畸形"。这正是 §8.2 要防的：老主机仍报 resume ⇒ 手机发 since
-  // ⇒ 永远收不到差量页，而它已经不再走"重拉一页"那条路了，用户看到的是"重连之后少了十几行"。
-  const { runtime, kernel } = fixture()
-  assert.equal(kernel.readHistory, undefined, '夹具前提：这一档内核没有 readHistory')
-  runtime.start()
-  await settle()
-
-  const { caps, limits } = runtime.hostInfoPayload()
-  assert.ok(
-    !caps.includes('drc.payload.resume'),
-    '内核这一代没有 readHistory 时**不许**报 resume：报了就是静默降级（手机发 since、主机明确拒绝、永远补不回来）',
-  )
-  // 反向的另一半：减去一项 ≠ 整份清单空了。只断言"不含 resume"在清单被误清空时也会绿，
-  // 而清单清空的症状是"手机把所有能力都当成不支持"，比多一项严重得多。
-  assert.ok(caps.includes('drc.payload.history'), '减法只该减 resume 那一项')
-  assert.ok(caps.length >= 10, `caps 只剩 ${caps.length} 项：这不是"减一项"，是清单被清掉了`)
-  assert.ok(limits.maxTextChars > 0, '能力面做减法不该把限额也一起减掉')
 })
 
 test('L4：sendHostInfo 在 start() 之前不许发、之后必须真的发到那条会话上', async () => {
@@ -3727,12 +3694,7 @@ test('挂起卡的分诊读数：手机问过几次 / 主机重放过几帧（20
 })
 
 test('sendHostInfo 永不抛：它挂在 peer-joined 那条路上，异常会把整个配对流程带崩', async () => {
-  // ## 为什么这条判据必须是"传输层炸了"而不是"caps 拷没拷"
-  //
-  // 我原本在这里断言的是"改一份 caps 不会污染下一次上报"。写完才发现它**证伪不了**：
-  // `effectiveCapabilities` 用的是 `.filter()`（天然新数组），`hostInfo()` 里还有一层
-  // `[...args.caps]`，而返回类型是可变数组、入参是 `readonly` —— 想写出共享引用的版本
-  // **编译就过不去**。一条永远不会红的判据给的是假信心，比没有更坏，所以换掉。
+  // ## 为什么这条判据必须是"传输层炸了"
   //
   // 真正会坏且挡不住的是这一条：`sendHostInfo` 被 `index.ts` 的 `onPeerJoined` 直接调用，
   // 而那个回调处在**配对流程**上。`apply()` 那条红线是"配对流程不许因为我们的异常而中断"

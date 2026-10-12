@@ -11,8 +11,8 @@
  * 而 GUI 宿主里那是唯一的排错入口（`carrier` / `relay` / `problems` 全部冻在
  * 启动那一版，且没有任何日志说这件事）。
  *
- * 实测触发路径：中继回一条 `pair-ready{ttlMs: 1e17}`（协议层那条约束是
- * 2026-10-07 才补的，而**更老的中继仍在跑**）→ 端点算 `createdAt + ttlMs`
+ * 实测触发路径：中继回一条 `pair-ready{ttlMs: 1e17}`（协议层那条上界是
+ * 2026-10-07 才补的；那一刻跑着补过之前的构建）→ 端点算 `createdAt + ttlMs`
  * → 写进 status 快照时 `toISOString` 抛 → 每 3 秒的快照全丢。
  *
  * ## 口径：越界 ⇒ `undefined`，不是"回一个假的"

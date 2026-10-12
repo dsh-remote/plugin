@@ -218,7 +218,7 @@ const LIST_LIMIT_DEFAULT = 100
  * 新建会话时，为了推断"用户此刻在哪个项目下"而扫多少条会话。
  *
  * 取 20 而不是 1：列表按 `createdAt` 排，而**最新建的那条完全可能没有 cwd**
- * （它自己就是从手机在旧版本里不带 cwd 建出来的那一条）。只看第一条时，
+ * （它自己可能就是手机不知道落在哪、不带 cwd 建出来的那一条）。只看第一条时，
  * 推断会直接落空 → 内核退回宿主默认目录 → 会话落进 DSH 的**未分组**。
  * 扫前 20 条找第一条带 cwd 的，既够（真正"最近在用的项目"不会排在 20 名之后，
  * 那说明这台机器上有几百条从未再碰过的历史会话），又便宜（列表本来就是一次调用）。
@@ -676,7 +676,7 @@ export function createServicesKernel(services: ServicesBundle, options: Services
       // 手机传来的值仍然过 `badWorkspace()`：它是不可信输入，判定的是**形状**。
       //
       // ②③ 都必须存在：旧实现只有一个退化版本（`listSessions(1)[0]`，而那份列表按 createdAt 排），
-      // "最新建的那条"完全可能没有 cwd（它自己可能就是手机在旧版本里不带 cwd 建出来的那条），
+      // "最新建的那条"完全可能没有 cwd（它自己可能就是手机不知道落在哪、不带 cwd 建出来的那条），
       // 于是推断直接落空、cwd 为空、内核退回 `/`——用户看到的就是**未分组**。
       //
       // ⚠️ 仍然永远不给 sessionId（那会让内核复用旧会话而不是新建），
@@ -2662,8 +2662,8 @@ function charCountOf(event: KernelEvent): number {
  * `compact-checkpoint`、`schedule`、`team-message`、`agent-message`、`user-approval`、
  * `ptc-mode`。判据必须是 `source`，不是事件类型 —— 事件类型它们全都一样。
  *
- * **缺 `source` 时按真人处理**：宿主若真的发了不带 `source` 的一条，那是旧一代的形状，
- * 而把真人指令误判成注入 = 用户发的话凭空消失，代价比多显示一条注入大得多。
+ * **缺 `source` 时按真人处理**（内核面的宽容：宿主给不给我们决定不了）：
+ * 把真人指令误判成注入 = 用户发的话凭空消失，代价比多显示一条注入大得多。
  */
 function isHumanUserMessage(data: LooseObject): boolean {
   const source = data?.source

@@ -20,8 +20,15 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { writeSecure } from '../platform/secure-file.js'
 
-/** 认下来的身份形状：可读、可 grep、不含路径分隔符。旧写法那种 `h_xxxx` 也在里面。 */
-const HOST_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
+/**
+ * 盘上那个身份文件认什么形状：**只认我们自己产出的那一种**（`drc-` + 12 位十六进制）。
+ *
+ * 2026-10-11 晚收紧：原来认的是"看得过去的任意字符串"，理由是"旧写法那种 `h_xxxx`
+ * 也让它继续用"。没有老用户 ⇒ 这条放宽没有意义，而它的代价是**一个被手改坏的身份
+ * 会被当成有效身份用下去**（`h_` 前缀、超长串、带奇怪字符的都算）。
+ * 形状不对就现造一个并覆盖修好 —— 与"文件半写/被改坏"走同一条路。
+ */
+const HOST_ID = /^drc-[0-9a-f]{12}$/
 
 /** 新造一个身份。前缀 `drc-` 是为了在中继日志里一眼认出"这是远程控制的主机"。 */
 export function newHostId(): string {

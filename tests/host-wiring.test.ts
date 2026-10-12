@@ -541,11 +541,11 @@ test('接线：onClientRejoined 必须调 replayPending（重连那条路原来�
       '而 replayPending 原来只挂在配对那条路上（onPeerJoined）⇒ 手机停在列表页时卡会漏。' +
       '把它挪走或删掉之前，先看这条判据的注释与 runtime.ts 的 replayPending。',
   )
-  // 顺序：能力面必须先到（手机 _onHelloOk 会把 hostCaps 清成 null，卡片渲染按它决定）
+  // 顺序：限额那一帧必须先到（手机 _onHelloOk 会把上一连接的那份结论清空，页面按它决定）
   assert.match(code, /sendHostInfo\s*\(/, 'onClientRejoined 还要继续发 ev.host_info（规范 §13.2 L4）')
   assert.ok(
     code.indexOf('sendHostInfo') < code.indexOf('replayPending'),
-    'sendHostInfo 必须排在 replayPending 之前：手机 _onHelloOk 会把 hostCaps 清成 null，' +
+    'sendHostInfo 必须排在 replayPending 之前：手机 _onHelloOk 会把上一连接的那份结论清空，' +
       '卡片渲染要按能力位决定，能力面后到会让它按"什么都不支持"降级',
   )
 

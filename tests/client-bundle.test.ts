@@ -2503,6 +2503,31 @@ test('进阶那一栏：保存**只提交改动过的那一项**——留空的�
   )
 })
 
+test('进阶那一栏：读不到当前配置时，空地址**不许**被当成"清空"提交（2026-10-11）', async () => {
+  /**
+   * ⚠️ 这条钉的是一个**静默删数据**的形状，触发条件是"`GET /config` 没成功"：
+   * 老版宿主没有这条路由（404）、或它临时 500 —— 那一刻 `cfg` 还是 undefined，
+   * 而地址输入框里本来就是空的。用户只填了口令就点保存，
+   * 旧写法把空串当成"用户清空了地址"提交上去 ⇒ 盘上写过的自部署地址被删掉，
+   * 而界面上只会显示"已保存"（没有第二次机会）。
+   */
+  const harness = load({ react: FAKE_REACT, slots: true, configHttp: 404 })
+  await flush()
+  const root = mountSettings(harness)
+  await flush()
+  assert.equal(harness.configWrites.length, 0, '夹具自检：这一段不该先写一次')
+  const inputs = root.find('drc-adv-grid')!.children.filter((child) => child.tag === 'input')
+  // 只填口令（地址留空 —— 因为压根没读到）
+  inputs[1]!.value = 'my-own-token-my-own-token-my-own-token'
+  root.find('drc-adv-grid')!.parent!.find('drc-sec-actions')!.children[0]!.emit('click')
+  await flush()
+  assert.deepEqual(
+    harness.configWrites,
+    [{ hostToken: 'my-own-token-my-own-token-my-own-token' }],
+    '读不到当前配置时把空地址也提交了 ⇒ 盘上的自部署地址被静默删掉',
+  )
+})
+
 test('进阶那一栏：「恢复默认」发两个空串（空串 = 删掉这一项，回落到下一层）', async () => {
   const harness = load({ react: FAKE_REACT, slots: true })
   await flush()

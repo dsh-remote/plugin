@@ -31,6 +31,7 @@ import type { CmdPayload, EvPayload } from '@dsh-remote/protocol'
 import { RelayClient } from '../src/transport/relay.js'
 import { ConversationBook, PairingSlots } from '../src/core/keys.js'
 import { FakeClock } from '../src/core/clock.js'
+import { PROTOCOL_VERSION } from '@dsh-remote/protocol/negotiate'
 
 /** `ws` 的 `WebSocket.OPEN` 常量值；`raw()` 只比较这个数。 */
 const SOCKET_OPEN = 1
@@ -381,7 +382,7 @@ test('enc-batch 逐项解密并保持数组顺序（F12/T3：客户端没有排�
 
 test('重连不再清会话：hello-ok 之后 resync 必须仍然声明着这些 convId（免扫码重连的第一半）', () => {
   const { client, slots, feed, gone, outOf } = harness()
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   assert.equal(client.conversationCount, 0, '夹具自检：新连接还没有会话')
 
   const slot = slots.create(120_000)
@@ -391,7 +392,7 @@ test('重连不再清会话：hello-ok 之后 resync 必须仍然声明着这些
   // 第二次 hello-ok = 又连上了。这在旧实现里等于 `closeBefore` 清空全部会话，
   // 而它清掉的理由是"中继重启过，它手里的 convId 全没了"—— 但主机侧分辨不出
   // 「中继重启」与「主机自己重启」，于是**每次主机重启都自毁全部配对**（自举迭代要命的正是这条）。
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   assert.equal(
     client.conversationCount,
     1,
@@ -416,11 +417,11 @@ test('重连不再清会话：hello-ok 之后 resync 必须仍然声明着这些
 
 test('代次仍然每次 hello-ok 递增：发码窗口靠它判断中继的 pending-pair 表是不是清空了', () => {
   const { feed, states } = harness()
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   const first = states.at(-1)
   assert.ok(first !== undefined, '一次状态都没回调：代次无处可读')
   assert.equal(first.generation, 1, '第一次连上时代次必须是 1：PairingWindow 用它认领当前挂出的码')
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   const second = states.at(-1)
   assert.ok(second !== undefined, '夹具自检：第二次连接也该有状态回调')
   assert.equal(
@@ -439,7 +440,7 @@ test('恢复出来的会话：密钥可用、resync 声明它、成员表从空�
   assert.equal(client.clientCount, 0, '恢复阶段就报"有手机连着"：此刻主机刚起来，没有任何客户端连着')
   assert.equal(client.hasClient(convId), false, 'hasClient 谎报有对端 → broadcast 会往没人收的通道发帧')
 
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   const resync = outOf('resync').at(-1) as { sessionIds: string[] }
   assert.deepEqual(resync.sessionIds, [convId], 'resync 没声明恢复出来的会话：中继据此删除它，免扫码重连失败')
 
@@ -453,7 +454,7 @@ test('恢复出来的会话：密钥可用、resync 声明它、成员表从空�
 
 test('会话簿的结构性变化必须立刻通知上层落盘：崩了也不能丢（新配对那一秒最脆弱）', () => {
   const { client, slots, feed, structural } = harness()
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   const before = structural.length
 
   const slot = slots.create(120_000)
@@ -852,7 +853,7 @@ test('中继来帧的 sessionId 逐字用作会话键（F3：两套 id 一旦混
 
 test('状态回调如实汇报会话数与代次：status.json 的 conversations/generation 就是从这来的', () => {
   const { client, slots, feed, states } = harness()
-  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test' })
+  feed({ t: 'hello-ok', role: 'host', hostId: 'h_test', protocol: PROTOCOL_VERSION })
   const slot = slots.create(120_000)
   feed({ t: 'peer-joined', sessionId: 'c_bbccddeeff00', clientId: 'k_mp', pairingToken: slot.token })
   const last = states[states.length - 1]
@@ -1157,9 +1158,9 @@ test('pair-fail 的 pairingToken 原样交给接线方', () => {
   assert.equal(h.pairFails[0]?.pairingToken, '999999', '必须点名是哪一张：接线方靠它避免把"当前展示的那张"误当成废码')
 })
 
-test('反向判据：中继没带 token 时给 undefined（而不是空串或猜一个）', () => {
-  // 更老的中继仍在跑（升级要重启容器，插件升级只要重开 Harness）。
-  // 那一侧必须让接线方**知道**"没有这个信息"，好退回旧行为；
+test('反向判据：中继没点名时给 undefined（而不是空串或猜一个）', () => {
+  // 中继**确实可能点不出名字**（收到坏帧那条分支没有 token 可点名）。
+  // 那一侧必须让接线方**知道**"没有这个信息"，好退回"作废展示中的那张"；
   // 给空串会让 `forget('')` 变成一次无意义的查表，而接线方也分不出两种情况。
   const h = harness()
   h.feed({ t: 'pair-fail', reason: 'already_used' })

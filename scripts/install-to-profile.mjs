@@ -152,7 +152,7 @@ writeFileSync(
 )
 process.stdout.write(`   已写入 ${target}\n     ${BUNDLE_ID} @ ${version}（含浏览器面 client.cjs）\n`)
 
-process.stdout.write('→ 注册 bundle 到 profile 的 bundles 列表（幂等），并清掉旧的 file: 依赖…\n')
+process.stdout.write('→ 注册 bundle 到 profile 的 bundles 列表（幂等）…\n')
 // ⚠️ 这一段在 v2 是 heredoc 里的 JS，而那段代码有个真实的静默失败：
 // 「脚本跑完、只写了备份、什么都没改，退出码还是 0」。现在它是本文件的普通代码，
 // 失败就是失败（throw ⇒ 非 0 退出），那类"静默成功"从结构上不再可能。
@@ -177,16 +177,6 @@ process.stdout.write('→ 注册 bundle 到 profile 的 bundles 列表（幂等�
   const list = pkg.dsh.profile.bundles || []
   if (!list.includes(BUNDLE_ID)) list.push(BUNDLE_ID)
   pkg.dsh.profile.bundles = list
-
-  // 旧机制退役：'file:' 依赖会让 pnpm 再物化一份插件进 profile，
-  // 两个实例同时挂在中继上（两个 hostId、两份会话），手机连到谁全凭运气。
-  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
-    if (!pkg[field] || typeof pkg[field] !== 'object') continue
-    if (BUNDLE_ID in pkg[field]) {
-      process.stdout.write(`   删除 ${field}.${BUNDLE_ID} = ${JSON.stringify(pkg[field][BUNDLE_ID])}\n`)
-      delete pkg[field][BUNDLE_ID]
-    }
-  }
   writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n')
   process.stdout.write(`   bundles: ${list.join(', ')}\n`)
 }

@@ -245,9 +245,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   }
 
   if (!config.hostToken && config.enabled) {
-    // hostId 也参与判定：盘上那枚可能是**上一个身份**领的（按 hostId 一机一枚之后），
-    // 拿它去连只会一直 bad_token 而不会自愈 —— 见 `claim-token.ts` 文件头。
-    const stored = readStoredHostToken(hostTokenFile, config.serverUrl, log, hostId)
+    // hostId 也参与判定：盘上那枚是**绑在某个身份上的**，拿别的身份的令牌去连
+    // 只会一直 `bad_token`（而它盘上有令牌就不会重新认领）—— 见 `claim-token.ts` 文件头。
+    const stored = readStoredHostToken(hostTokenFile, config.serverUrl, hostId, log)
     if (stored) {
       claimedToken = stored
       claimedForUrl = config.serverUrl
@@ -336,8 +336,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     if (!runtime) reportNoCarrier()
   }
   if (claimState === 'pending') {
-    // ⚠️ 必须带 `hostId`：不带的话中继会把这枚落到"未绑定槽位"，
-    // 而那个槽位**任何一台不带 hostId 的机器都能互相顶掉**（就是这次事故的形态）。
+    // ⚠️ 必须带 `hostId`：中继从 2026-10-11 晚起**没有**"未绑定槽位"了，
+    // 不带身份一律 400 `host_id_required`（那枚令牌原来对谁都算数，是一把万能钥匙）。
     void claimHostToken({ serverUrl: config.serverUrl, hostId, log }).then((outcome) => {
       if (outcome.ok) {
         claimedToken = outcome.token
@@ -366,6 +366,124 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
         })
       }
       settleClaim()
+    })
+  }
+
+  /**
+   * ── 自愈：中继说"你这枚令牌不认" ⇒ 带自己的 hostId 重新认领一枚并重连 ──────────
+   *
+   * ## 为什么非有不可
+   *
+   * 认领接口是**无认证**的，而且它对**指定的 hostId** 会覆盖槽位（"后面的顶掉前面的"）。
+   * 所以任何知道某台机器 hostId 的人，都能领一枚覆盖掉那台的令牌 ——
+   * 而那台机器"盘上有 token 就不再认领"，于是**永久连不上**。
+   * 这次事故的形态（2026-10-11 一天被顶掉三次）改掉的是"谁都能顶所有人"，
+   * 但"定点顶掉某一台"要靠这里自愈来兜。
+   *
+   * ## 触发面只有一处：中继的 `error{bad_token}`
+   *
+   * 中继**只在主机鉴权那一处**发这个码（`server.ts` 的 `sendError(peer, 'bad_token')`），
+   * 所以它无歧义地等于"你这枚 host token 被拒了"。
+   *
+   * ## 三条边界
+   *
+   * ① **只自愈"机器自己领来的"那一枚**（`effectiveTokenState().source === 'claimed'/'none'`）。
+   *    env / patch / 设置页写下的令牌是**用户明确写的**：静默换掉会把"配置写错了"
+   *    变成"看起来好了、重启后又坏"，而且换来的那枚压根不会被下一次启动读到
+   *    （有 `config.hostToken` 时 `readStoredHostToken` 根本不参与）。
+   *    那种情况只留一条可查的痕。
+   * ② **有额度、有冷却**：最多 `HEAL_MAX_ATTEMPTS` 次，两次之间至少隔 `HEAL_COOLDOWN_MS`，
+   *    同一时刻只允许一次请求在路上 —— 否则"中继一直拒"就变成自造 DDoS
+   *    （那条接口是**无认证**的，还带 4 秒/IP 的限频）。
+   * ③ **任何一条路径上都不许留下一条挂死的 socket**：中继拒绝时不关连接，而 `hello`
+   *    只在 `open` 时发一次 ⇒ "这次不重试"也必须**排一次**重连（`reconnectIn`，
+   *    排在冷却窗口结束时），否则那台主机会以"连接中"的样子永远挂着 ——
+   *    那正是这次要修的形状。额度用尽则**停手**（不再重连、不再认领）并留一条
+   *    problem：那时候"安静地告诉人"比"每秒重试一次"更有用。
+   */
+  const HEAL_MAX_ATTEMPTS = 5
+  const HEAL_COOLDOWN_MS = 60_000
+  let healInFlight = false
+  let healAttempts = 0
+  let healBlockedUntil = 0
+  let healReason = ''
+  let warnedConfiguredToken = false
+  let warnedHealExhausted = false
+
+  const healHostToken = (): void => {
+    if (healInFlight) return
+    const source = effectiveTokenState().source
+    if (source !== 'claimed' && source !== 'none') {
+      // 配置层写下的令牌：不换，但一定要留痕（否则用户只看到 relay offline）。
+      if (!warnedConfiguredToken) {
+        warnedConfiguredToken = true
+        problems.push({
+          level: 'warn',
+          field: 'hostToken',
+          message: `中继拒绝了当前这枚 host token（来自 ${source}）。它是你配置里写下的，插件**不会**替你换掉 —— 请核对 ${config.hostTokenEnv || 'hostToken'} 或设置页「进阶」那一栏`,
+        })
+        log('the relay rejected a configured host token; not self-healing by design', { source })
+      }
+      return
+    }
+    const now = clock.now()
+    /**
+     * ⚠️ 冷却窗口里**不打那条无认证的接口**，但必须**把重连排上**（`reconnectIn`）：
+     * 中继拒绝 host token 时**不关连接**，而 `hello` 只在 `open` 时发一次 —— 什么都不做
+     * 就等于让这条 socket 永远挂着，正是这次要修的形状（"连接中、没反应、也没日志"）。
+     * `reconnectIn` 自己会去重，所以每个 `bad_token` 都排一发也不会把窗口作废。
+     */
+    if (now < healBlockedUntil) {
+      relay?.reconnectIn(healBlockedUntil - now, 'waiting out the host-token self-heal cooldown')
+      return
+    }
+    if (healAttempts >= HEAL_MAX_ATTEMPTS) {
+      // 额度用尽 ⇒ **停手**（不再重连、不再认领）：继续每秒打一遍中继只会刷满它的日志，
+      // 而"安静地告诉人"更有用 —— 快照里那条 problem 就是留给用户的结论。
+      if (!warnedHealExhausted) {
+        warnedHealExhausted = true
+        log('host token self-heal gave up after the attempt budget', { attempts: healAttempts, reason: healReason })
+        problems.push({
+          level: 'warn',
+          field: 'hostToken',
+          message: `host token 被中继拒绝了，自愈用满 ${HEAL_MAX_ATTEMPTS} 次还没成功（最近一次：${healReason || '未知'}）⇒ 这台主机现在连不上。查网络与 /api/claim-token，或在设置页「进阶」那一栏自己填一枚，然后重启 Harness`,
+        })
+      }
+      return
+    }
+    healInFlight = true
+    healAttempts += 1
+    void claimHostToken({ serverUrl: config.serverUrl, hostId, log }).then((outcome) => {
+      healInFlight = false
+      healBlockedUntil = clock.now() + HEAL_COOLDOWN_MS
+      if (!outcome.ok) {
+        healReason = outcome.reason
+        log('host token self-heal failed; will retry after the cooldown', {
+          reason: outcome.reason,
+          attempts: healAttempts,
+        })
+        relay?.reconnectWithBackoff('host token rejected, self-heal failed')
+        return
+      }
+      claimedToken = outcome.token
+      claimedForUrl = config.serverUrl
+      claimState = 'ok'
+      writeStoredHostToken(
+        hostTokenFile,
+        { token: outcome.token, serverUrl: config.serverUrl, source: 'claimed', now: clock.now(), hostId },
+        log,
+      )
+      // 之前那条"没认领到"的 warn 已经过时：留着会让快照一直挂着一条假警报
+      // （与上面 `tokenWillArrive` 摘 error 那条同一个理由）。
+      for (let index = problems.length - 1; index >= 0; index -= 1) {
+        if (problems[index]?.field === 'hostToken') problems.splice(index, 1)
+      }
+      log('host token self-healed: the relay rejected the old one', {
+        attempts: healAttempts,
+        tokenLength: outcome.token.length,
+      })
+      // 换令牌 + 立刻重连：`hello` 只在 `open` 时发一次，而中继拒绝时**不关连接**。
+      relay?.replaceToken(outcome.token)
     })
   }
 
@@ -489,13 +607,12 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          * `pairingToken` 是必填参数 ⇒ 本回调**只在配对时触发**。
          *
          * 重连那一半现在挂在 `onClientRejoined` 上（见下面那个回调）——
-         * 少了一半的后果不是"少一帧"，是手机在 `_onHelloOk` 里把 `hostCaps` 清成 null
-         * 之后**再也收不到**新的能力面，于是 `supportsResume()` 恒为 false、
-         * B4 的差量续传在真机上永不生效（而且不报错）。
+         * 少了一半的后果不是"少一帧"，而是手机在 `_onHelloOk` 里把上一连接的那份结论
+         * 清空之后**再也收不到**新的那一帧，于是重连后手机手上什么都没有（而且不报错）。
          *
          * 为什么必须在 `runtime?.start()` **之后**：`sendHostInfo` 里第一句就是
-         * `if (!this.started) return false` —— `start()` 之前内核端口的能力面还没用上，
-         * 报出去的能力位会是空的，手机据此按"什么都不支持"表现（静默降级）。
+         * `if (!this.started) return false` —— `start()` 之前内核端口还没探过，
+         * 报出去的限额会是空的/错的，手机据此置灰或放行都会错。
          *
          * 它自带 try/catch：这一帧发不出去不该把配对流程带崩。
          */
@@ -528,10 +645,9 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       /**
        * 客户端**回来**了（规范 §13.2 L4 的"重连"那一半，2026-10-08 接线）。
        *
-       * 与 `onPeerJoined` 里那次是**同一帧、同一个理由**：手机在 `_onHelloOk` 里
-       * 把 `hostCaps` 清成 null（新连接 = 上一代能力面作废），必须有人把当前这份
-       * 重新告诉它，否则 `supportsResume()` 恒为 false —— 断线重连永远走整页重读，
-       * 而 B4 要的"只有差量到达"永远不会发生，并且**两端都不报错**。
+       * 与 `onPeerJoined` 里那次是**同一帧、同一个理由**：手机在 `_onHelloOk` 里把上一
+       * 连接的那份结论清空（新连接 = 上一代状态作废），必须有人把当前这份重新告诉它，
+       * 否则重连后手机手上的限额是空的 —— 附件闸门与页面判断全部落空，并且**两端都不报错**。
        *
        * ## 刻意不做的三件事
        *
@@ -573,8 +689,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          *
          * ## 顺序
          *
-         * 排在 `sendHostInfo` **之后**：手机 `_onHelloOk` 里会把 `hostCaps` 清成 null，
-         * 卡片渲染要按能力位决定，所以能力面必须先到（与配对那条路同一个理由）。
+         * 排在 `sendHostInfo` **之后**：手机 `_onHelloOk` 里会把上一连接的那份结论清空，
+         * 页面按它决定附件闸门与渲染，所以那一帧必须先到（与配对那条路同一个理由）。
          *
          * `replayPending` 自带 `hasClient` 守卫、永不抛（见它的第三条纪律），
          * 所以这里不包第二层 try —— 与 `onPeerJoined` 那处逐字同形。
@@ -646,7 +762,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          * ① 中继给了 token 且它就是展示中的那张 → 作废它（与从前同一条路）；
          * ② 中继给了 token 但**不是**展示中的那张 → 那张是别人扫的旧码，
          *    **只把它记成已花**（免得窗口再补一张一样的），展示位**不动**；
-         * ③ 中继没给（更老的一版）→ 退回"作废展示中的那张"，与从前一致。
+         * ③ 中继点不出是哪一张（收到坏帧那条分支）→ 退回"作废展示中的那张"。
          */
         //
         // 判定本身在 `shell/pairing-fail.ts`（纯函数、三种情形各有判据）：
@@ -670,9 +786,17 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       },
       /**
        * 中继的错误帧：主机第一次真的按 `code` 分支。
-       * 目前只对限速有反应 —— 那是唯一一条"立刻重试只会更糟"的码。
+       *
+       * 两个码有反应：`rate_limited`（立刻重试只会更糟，进退避窗口）与
+       * `bad_token`（**唯一一处**会发它的地方是主机鉴权守卫 ⇒ 无歧义地等于
+       * "这枚 host token 被拒了"，走自愈：重新认领一枚并重连）。
        */
       onRelayError: (code, retryAfterMs) => {
+        if (code === 'bad_token') {
+          log('the relay rejected our host token; trying to self-heal')
+          healHostToken()
+          return
+        }
         if (code !== 'rate_limited') return
         const wait = retryAfterMs ?? PAIR_RATE_LIMIT_BACKOFF_MS
         pairRateLimitedUntil = Math.max(pairRateLimitedUntil, clock.now() + wait)
@@ -927,7 +1051,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          * 在 GUI 宿主里没有任何地方说得清"原因其实是没认领到"。
          *
          * `claim` 的四个取值：`not-needed`（本来就有 token，没去认领）/ `pending`
-         * （请求在路上）/ `ok` / `failed`（`reason` 说清是哪一档：unreachable / http / shape / bad-url / no-fetch）。
+         * （请求在路上）/ `ok` / `failed`（`reason` 说清是哪一档：unreachable / http / shape /
+         * bad-url / no-fetch / no-host-id）。
+         * `heals` 是**自愈**用掉了几次（中继回 `bad_token` ⇒ 带自己的 hostId 重新认领），
+         * `healReason` 是最近一次自愈失败的原因（空 = 没失败过）。
          * **绝不含 token 本身**，也绝不含它的任何片段。
          */
         hostToken: {
@@ -936,6 +1063,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
           claimReason: claimState === 'failed' ? claimReason : '',
           claimStatus: claimState === 'failed' ? claimStatus : 0,
           file: hostTokenFile ? path.basename(hostTokenFile) : '',
+          heals: healAttempts,
+          healReason,
         },
       },
       kernel: kernel?.describe() ?? null,

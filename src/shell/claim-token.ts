@@ -22,12 +22,15 @@
  * 另外三台机器各顶掉一次（nginx 日志里三个公网 IP，UA 都是 `node`）。
  *
  * 现在中继按 `hostId` 一机一枚：**认领只顶掉这台机器自己旧的那一枚**。
- * ⇒ 请求体带上 `{hostId}`，响应里那枚就与它绑定；不带的话会落到中继的"未绑定槽位"
- * （老客户端语义，对谁都算数、也互相顶替）—— 那正是我们想摆脱的东西。
+ * ⇒ 请求体**必须**带 `{hostId}`（2026-10-11 晚起中继不带体一律回 400
+ * `host_id_required`，没有"未绑定槽位"那条兼容路了 —— 那枚令牌对谁都算数，
+ * 等于给无认证的认领接口留了一把能冒充任何主机的万能钥匙）。
+ * 本文件因此在**没有 hostId 时直接判失败**（`no-host-id`），绝不凭空编一个身份。
  *
  * 因此落盘也记下 `hostId`：`host-id` 变了（用户删了 host-id 文件 / 换了数据目录）时，
- * 盘上那枚属于**上一个身份**，拿它去连只会一直 `bad_token` 而**不会自愈**
- * （有 token 就不再认领）。所以 hostId 对不上时当它不存在，重新认领。
+ * 盘上那枚属于**上一个身份**，拿它去连只会一直 `bad_token`。所以 hostId 对不上时
+ * 当它不存在，重新认领；而**同一身份**下令牌被别人顶掉的那种情况，由 `index.ts` 的
+ * 自愈路径兜（收到 `bad_token` 就带自己的 hostId 重新认领并重连）。
  *
  * ## 三条纪律（都是本仓栽过的形状）
  *
@@ -81,8 +84,12 @@ export type FetchLike = (
 export interface ClaimDeps {
   serverUrl: string
   /**
-   * 本机的主机身份。带上它，中继就把令牌**绑到这一台**（只顶掉自己旧的那枚）。
-   * 省略 = 走中继的未绑定槽位（老客户端语义），只该在测试里出现。
+   * 本机的主机身份。**必给**（2026-10-11 晚起）：中继那边没有"未绑定槽位"了，
+   * 不带 hostId 的认领会回 400 `host_id_required`。
+   *
+   * 为什么不在这里兜一个默认值：**凭空编一个身份**会让中继把令牌绑到错误的槽位上
+   * —— 那台机器下次拿自己的 hostId 去连就是 `bad_token`，而它盘上有令牌、不会自动重领，
+   * 于是"插件连不上"且看不出原因。宁可当场判失败（`no-host-id`），把问题留在明处。
    */
   hostId?: string
   fetchImpl?: FetchLike
@@ -95,8 +102,12 @@ export interface StoredHostToken {
   serverUrl: string
   source: 'claimed' | 'user'
   savedAt: number
-  /** 认领时用的 hostId（老文件没有这个字段 ⇒ 当作"不知道"，照旧用）。 */
-  hostId?: string
+  /**
+   * 认领时用的 hostId。**必需**（2026-10-11 晚起）：没有它就说不清这枚令牌属于谁，
+   * 而"身份对不上还照用"的表现是那台机器永远 `bad_token`、且盘上那个文件看起来一切正常。
+   * 没有老用户，所以不为"缺这个字段的旧文件"留退路 —— 缺了就当这份文件不可用。
+   */
+  hostId: string
 }
 
 /**
@@ -106,7 +117,7 @@ export interface StoredHostToken {
  */
 export type ClaimOutcome =
   | { ok: true; token: string }
-  | { ok: false; reason: 'bad-url' | 'no-fetch' | 'unreachable' | 'http' | 'shape'; status?: number }
+  | { ok: false; reason: 'bad-url' | 'no-fetch' | 'unreachable' | 'http' | 'shape' | 'no-host-id'; status?: number }
 
 const storedSchema = z.object({
   version: z.literal(1),
@@ -114,8 +125,8 @@ const storedSchema = z.object({
   serverUrl: z.string().min(1),
   source: z.enum(['claimed', 'user']),
   savedAt: z.number().finite().nonnegative(),
-  /** 可选：3.1.2 及更早写下的文件没有它（那时中继还没有按 hostId 发令牌这回事）。 */
-  hostId: z.string().optional(),
+  /** 必需且非空：见 `StoredHostToken.hostId`。 */
+  hostId: z.string().min(1),
 })
 
 /**
@@ -152,16 +163,20 @@ export function resolveHostTokenFile(statusFile: string): string {
 }
 
 /**
- * 读盘上那枚 token。**只在 `serverUrl` 逐字相同时才算数**（理由见文件头）。
+ * 读盘上那枚 token。**只在 `serverUrl` 与 `hostId` 都逐字相同时才算数**（理由见文件头）。
  *
- * 读不到 / 坏了 / 形状不对 / 属于另一台中继，一律返回 `undefined` 并记一行日志
- * ——调用方据此走"认领"那条路，绝不抛（`apply()` 的红线）。
+ * 读不到 / 坏了 / 形状不对 / 属于另一台中继 / 属于另一个身份，一律返回 `undefined`
+ * 并记一行日志 —— 调用方据此走"认领"那条路，绝不抛（`apply()` 的红线）。
+ *
+ * ⚠️ `hostId` 是**必需入参**（2026-10-11 晚起）：没有它就无法判断"盘上这枚是不是我的"，
+ * 而按它比对正是"换了数据目录 / 删了 host-id 文件之后不会永久连不上"的那条保证。
+ * 没有老用户 ⇒ 也不再有"文件里没写 hostId 就照旧用"的退路（那种文件现在直接不可用）。
  */
 export function readStoredHostToken(
   file: string,
   serverUrl: string,
+  hostId: string,
   log?: ClaimDeps['log'],
-  hostId?: string,
 ): string | undefined {
   if (!file) return undefined
   let raw: string
@@ -197,18 +212,15 @@ export function readStoredHostToken(
     return undefined
   }
   /**
-   * 按 hostId 一机一枚（2026-10-11）之后，盘上那枚是**绑在某个身份上的**。
+   * 盘上那枚是**绑在某个身份上的**：身份对不上就当它不存在（调用方会重新认领）。
    *
-   * 两边都说得清身份时才比：老文件没有 `hostId`（那时还没这回事）⇒ 不比，照旧用；
-   * 调用方没给 hostId ⇒ 也不比。**只有"文件里写了 A、而本机现在是 B"才作废** ——
-   * 拿 A 的令牌去连 B 的槽位只会一直 `bad_token`，而插件有 token 就不再认领，
-   * 于是那台机器会**永久连不上**，且盘上那个文件看起来一切正常。
+   * 拿 A 的令牌去连 B 的槽位只会一直 `bad_token`，而插件有令牌就不再认领 ——
+   * 那台机器会**永久连不上**，且盘上那个文件看起来一切正常。
    */
-  const storedHostId = shape.data.hostId
-  if (hostId !== undefined && storedHostId !== undefined && storedHostId !== hostId) {
+  if (shape.data.hostId !== hostId) {
     log?.('host-token was issued for another host id, ignoring it', {
       // 两个 id 都不是秘密（它们本来就出现在中继日志里），但要截断以防被塞进超长串。
-      storedHostId: storedHostId.slice(0, 64),
+      storedHostId: shape.data.hostId.slice(0, 64),
       currentHostId: hostId.slice(0, 64),
     })
     return undefined
@@ -224,19 +236,23 @@ export function readStoredHostToken(
  */
 export function writeStoredHostToken(
   file: string,
-  entry: { token: string; serverUrl: string; source: 'claimed' | 'user'; now: number; hostId?: string },
+  entry: { token: string; serverUrl: string; source: 'claimed' | 'user'; now: number; hostId: string },
   log?: ClaimDeps['log'],
 ): boolean {
   if (!file) return false
+  if (!entry.hostId) {
+    // 空身份落盘 = 写一份下次一定读不出来的文件（`storedSchema` 要 `min(1)`）⇒ 当场不写。
+    log?.('host-token save skipped: this host has no host id')
+    return false
+  }
   const body: StoredHostToken & { version: 1 } = {
     version: 1,
     token: entry.token,
     serverUrl: entry.serverUrl,
     source: entry.source,
     savedAt: entry.now,
+    hostId: entry.hostId,
   }
-  // 只在知道身份时才写这个字段：老读者（以及我们自己读老文件的那条路径）不该被它干扰。
-  if (entry.hostId !== undefined && entry.hostId !== '') body.hostId = entry.hostId
   try {
     mkdirSync(path.dirname(file), { recursive: true })
     writeSecure(file, JSON.stringify(body, null, 2) + '\n')
@@ -259,6 +275,16 @@ export function writeStoredHostToken(
  */
 export async function claimHostToken(deps: ClaimDeps): Promise<ClaimOutcome> {
   const { serverUrl, log } = deps
+  /**
+   * **没有身份就不认领**（2026-10-11 晚）。中继那边不带 hostId 会回 400，
+   * 但我们在这里就先停：一条"缺身份"的日志比一条 HTTP 400 更说得清发生了什么，
+   * 而且绝不会去动中继上的任何槽位。
+   */
+  const hostId = deps.hostId?.trim()
+  if (!hostId) {
+    log?.('cannot claim a host token: this host has no host id')
+    return { ok: false, reason: 'no-host-id' }
+  }
   const url = claimUrlFor(serverUrl)
   if (!url) {
     log?.('cannot claim a host token: serverUrl is not a ws(s):// address', { serverUrl: serverUrl.slice(0, 80) })
@@ -286,17 +312,14 @@ export async function claimHostToken(deps: ClaimDeps): Promise<ClaimOutcome> {
   let body: unknown
   /**
    * 请求体带上 `hostId`（见文件头）：中继据此把令牌**绑到这一台**，
-   * 于是别人认领时顶不掉我们。中继那边**不带体也照收**（老客户端语义），
-   * 所以这一步是纯增强，不会因为中继版本新老而不兼容。
+   * 于是别人认领时顶不掉我们。上面已经挡掉了"没有 hostId"那种情况，
+   * 所以这里**恒**带体 —— 中继那边不带体会回 400（没有"未绑定槽位"那条路）。
    */
-  const hostId = deps.hostId?.trim()
   const init: { method: string; signal?: AbortSignal; headers?: Record<string, string>; body?: string } = {
     method: 'POST',
     signal,
-  }
-  if (hostId) {
-    init.headers = { 'content-type': 'application/json' }
-    init.body = JSON.stringify({ hostId })
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hostId }),
   }
   try {
     const response = await fetchImpl(url, init)
@@ -315,7 +338,7 @@ export async function claimHostToken(deps: ClaimDeps): Promise<ClaimOutcome> {
     return { ok: false, reason: 'unreachable' }
   }
   if (status !== 200) {
-    // 429 是限频（正常运维信号）、404 是老中继（没这条接口）、503 是停机中。
+    // 429 是限频（正常运维信号）、404 是中继没有这条接口（版本太旧）、503 是停机中。
     // 三种都归"这次没领到"，由调用方降级。
     log?.('host token claim failed: the relay answered with a non-200', { status })
     return { ok: false, reason: 'http', status }

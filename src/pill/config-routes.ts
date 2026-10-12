@@ -132,7 +132,12 @@ export function configWriteHandler(deps: ConfigRouteDeps) {
       return
     }
     const body = await readJsonBody(request)
-    if (body === undefined || typeof body !== 'object' || body === null) {
+    /**
+     * 数组也是 `typeof 'object'`：不显式挡掉的话 `POST [1,2,3]` 会**归一成一件事都没提交**
+     * 然后回 200 `restartRequired` —— 一条"保存成功"的假回答（中继那条认领接口
+     * 同一个位置就用 `!Array.isArray(parsed)` 挡着，两处口径保持一致）。
+     */
+    if (body === undefined || typeof body !== 'object' || body === null || Array.isArray(body)) {
       json(response, 400, { error: 'invalid', field: 'body', detail: 'body must be a JSON object' })
       return
     }

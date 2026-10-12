@@ -288,17 +288,18 @@ test('宿主注入的 user/message（source.kind 不是 user）一律不出站',
 })
 
 test('user/message 缺 source：按真人处理（宁可多显示一条，也不让用户的话凭空消失）', () => {
-  // 判据收紧成 `source.kind === 'user'` 之后，缺 source 的旧形状就被算成注入了。
+  // 判据收紧成 `source.kind === 'user'` 之后，**内核没给 source** 的那一帧就被算成注入了。
   // 那个代价是"用户发的话消失"——比多显示一条注入严重得多，所以这一支必须显式锁住。
+  // ⚠️ 这是**内核面**的形状宽容（宿主给不给我们决定不了），不是"我们自己两代之间兼容"。
   const events = sessionEventKernelEvents({
     sessionId: 'session-af3f',
     type: 'user/message',
     seq: 901,
-    data: { content: [{ type: 'text', text: '旧一代的形状，没有 source' }], id: 'm-legacy' },
+    data: { content: [{ type: 'text', text: '内核没给 source 的那一帧' }], id: 'm-nosource' },
   })
   const [delta] = asDelta(events)
   assert.equal(delta?.role, 'user', '缺 source 的 user/message 仍要当真人消息，否则用户发的话在手机上凭空消失')
-  assert.equal(delta?.text, '旧一代的形状，没有 source')
+  assert.equal(delta?.text, '内核没给 source 的那一帧')
 })
 
 // 2026-10-04 用户截图报的三件事：聊天框里的 XML / title 是 JSON / 结果是乱码

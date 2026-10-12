@@ -195,6 +195,9 @@ test('POST：坏地址 / 坏 JSON / 超长 body 都回 400，且**不落盘**', 
     ['坏地址', JSON.stringify({ serverUrl: 'http://x' }), 'serverUrl'],
     ['地址不是字符串', JSON.stringify({ serverUrl: 42 }), 'serverUrl'],
     ['不是 JSON', '{nope', 'body'],
+    // ⚠️ 数组也是 `typeof 'object'`：不显式挡掉会**归一成"一项都没提交"**然后回 200
+    // 「已保存」—— 一条假回答（中继那条认领接口同一个位置就是这么挡的）。
+    ['数组', '[1,2,3]', 'body'],
   ]
   for (const [why, body, field] of cases) {
     const d = deps()

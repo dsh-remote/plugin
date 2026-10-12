@@ -71,11 +71,20 @@ test('第二次加载（=重启）必须拿回同一个身份，且磁盘上那�
   }
 })
 
-test('升级前那种旧身份（h_xxxx）读到了就继续用，不许借机换号', () => {
+test('盘上那个身份只认我们自己产出的形状：别的（含旧写法 h_xxxx）一律换掉', () => {
   const { dir, cleanup } = tempDir()
   try {
-    writeFileSync(fileOf(dir), 'h_c2073b\n', { mode: 0o600 })
-    assert.equal(resolveHostId(dir, ''), 'h_c2073b', '老用户已经以这个身份配过对，换号等于把他踢下线')
+    /**
+     * ⚠️ 2026-10-11 晚收紧：原来这条钉的是"旧写法 `h_xxxx` 读到了就继续用"。
+     * 没有老用户，那条放宽只有一个实际效果 —— 一个被手改坏的身份被当成有效身份用下去。
+     * ⇒ 现在形状不对就现造一个并覆盖修好（与"半写/被改坏"走同一条路）。
+     */
+    for (const stale of ['h_c2073b', 'drc-ABCDEF012345', 'drc-0123456789ab extra']) {
+      writeFileSync(fileOf(dir), `${stale}\n`, { mode: 0o600 })
+      const id = resolveHostId(dir, '')
+      assert.match(id, /^drc-[0-9a-f]{12}$/, `${JSON.stringify(stale)} 该被换掉`)
+      assert.equal(readFileSync(fileOf(dir)).toString().trim(), id, '换掉之后要落回去')
+    }
   } finally {
     cleanup()
   }

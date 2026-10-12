@@ -144,9 +144,10 @@ function boot(
     hostToken?: string
     /**
      * 预先在数据目录里放一份 `host-token.json`（演"上次已经认领过"）。
-     * `serverUrl` 默认与 fixture 的中继地址一致——传别的值就是"这枚属于另一台中继"。
+     * `serverUrl` 默认与 fixture 的中继地址一致——传别的值就是"这枚属于另一台中继"；
+     * `hostId` 默认与上面 `apply()` 传的那个一致——传别的值是"这枚属于另一个身份"。
      */
-    seedClaimedToken?: { token: string; serverUrl?: string }
+    seedClaimedToken?: { token: string; serverUrl?: string; hostId?: string }
   } = {},
 ): Booted {
   const disposers: Array<() => void> = []
@@ -166,6 +167,8 @@ function boot(
         serverUrl: options.seedClaimedToken.serverUrl ?? 'ws://127.0.0.1:1',
         source: 'claimed',
         savedAt: 1,
+        // ⚠️ `hostId` 现在是必需字段（2026-10-11 晚起：缺了整份不可用），默认与 apply() 传的一致。
+        hostId: options.seedClaimedToken.hostId ?? 'isolation_host',
       }),
     )
   }

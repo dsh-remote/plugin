@@ -38,9 +38,9 @@ test('反向判据：把情形 ② 的 clearShown 写成 true —— 那正是�
   assert.notEqual(d.clearShown, true, '一张有效的展示码被别人的失败牵连掉 = 本次修的那个 bug')
 })
 
-test('情形 ③：中继没给 token（更老的一版）→ 退回"作废展示中的那张"', () => {
-  // 兼容那条路必须**逐字**保持旧行为：升级中继要重启容器、升级插件只要重开
-  // Harness，两者节奏不同，所以"新主机 + 老中继"是真实组合。
+test('情形 ③：中继没点名是哪张 → 退回"作废展示中的那张"', () => {
+  // 那个缺省有一个**现役**生产端：中继收到"帧本身坏了"的配对请求时点不出 token
+  // （`server.ts` 的 `bad_frame` 分支），只能回一条不带 `pairingToken` 的 pair-fail。
   const d = decidePairFail('111111', undefined)
   assert.equal(d.victim, '111111', '中继没点名时只能作废自己知道的那张')
   assert.equal(d.clearShown, true)

@@ -52,21 +52,8 @@ import {
   seal,
   sessionLeave,
 } from '@dsh-remote/protocol'
-import { HOST_CAPABILITIES } from '../core/capabilities.js'
 import { ConversationBook, DEFAULT_PRUNE_POLICY, type PairSlot, type PrunePolicy } from '../core/keys.js'
 import type { Clock } from '../ports/index.js'
-
-/**
- * 本插件在 `hello` 里声明的能力：**清单本体搬到了 `core/capabilities.ts`**。
- *
- * 搬家的理由：v3 的 `ev.host_info.caps`（规范 §13.2）要用**同一份**清单，
- * 而它是 `core/runtime.ts` 发的 —— 留在这一层就得让 core 反向依赖 transport，
- * 或者把清单抄第二遍。清单是"本插件支持什么"，与"怎么把这些字节送出去"无关。
- *
- * ⚠️ 这一份是**构建级**的（喂 `hello`，在认证前、`runtime.start()` 之前就要发出去，
- * 那一刻内核端口的能力面还没探过）。`ev.host_info` 用的是 `effectiveCapabilities()`
- * 那份**运行级**的 —— 差别与理由写在 `core/capabilities.ts` 的文件头。
- */
 
 export interface RelayClientOptions {
   url: string
@@ -123,19 +110,19 @@ export interface RelayClientOptions {
    *
    * ## 为什么必须修（规范 §13.2 L4）
    *
-   * L4 写的是 host MUST 在**（重）连上**与能力变化时各发一次 `ev.host_info`。
+   * L4 写的是 host MUST 在**（重）连上**与状态变化时各发一次 `ev.host_info`。
    * 缺了这一条，"重连"那一半从来没有发生过 —— 而它的后果正好是本轮 B4 要的东西：
-   * 手机在 `_onHelloOk` 里把 `hostCaps` 清成 null（那是对的：新连接 = 上一代的能力面
-   * 作废），此后**再也收不到**新的 `ev.host_info`，于是 `supportsResume()` 恒为 false、
-   * 断线重连永远走整页重读。`index.ts` 那段"这个位置同时覆盖新配对与重连"的注释
-   * 是**照设计意图写的**，不是照实际调用链写的（实际只有配对那一半）。
+   * 手机在 `_onHelloOk` 里把上一连接的那份结论清空（那是对的：新连接 = 上一代的状态作废），
+   * 此后**再也收不到**新的 `ev.host_info` ⇒ 重连后手机手上什么都没有，
+   * 断线重连永远走整页重读（且**不报错**）。`index.ts` 那段"这个位置同时覆盖新配对与重连"
+   * 的注释是**照设计意图写的**，不是照实际调用链写的（实际只有配对那一半）。
    *
    * ## 为什么在**解密的循环之前**触发
    *
    * 帧顺序是判据的一部分：手机重连后必定先发 `cmd.list_sessions`（`_onHelloOk`），
    * 而页面是在**收到它对应的 `ev.session_changed`** 时才把 status 翻成 `online`，
    * 并在那一刻调 `_tryLoadDelta()`。所以 `ev.host_info` 必须排在那条回执**之前**
-   * 走出去，手机才可能在同一个批次里"先知道能力位、再做补差量的决定"。
+   * 走出去，手机才可能在同一个批次里"先知道这一代主机的状态、再做附件的决定"。
    *
    * ⚠️ **真正决定顺序的是"同一个 tick"，不是"在这段代码里的第几行"**（2026-10-08 实测）：
    * `onCommand` 是 `void runtime.handleCommand(...)`，而 `handleCommand` 是 async、
@@ -169,8 +156,9 @@ export interface RelayClientOptions {
    * 接线方要做的是"清展示位 + 作废这张 + 按需补一张"；被限速时不建议立刻再申请。
    */
   /**
-   * @param pairingToken **是哪一张码失败的**；中继没给（更老的一版）时为 undefined，
-   *        此时接线方**必须**退回"当前展示的那张"—— 见下面那条误伤的说明。
+   * @param pairingToken **是哪一张码失败的**；中继电器在"收到坏帧，点不出是哪一张"
+   *        这一档给不出名字（`server.ts` 的 `bad_frame` 分支），此时接线方**必须**
+   *        退回"当前展示的那张"—— 见下面那条误伤的说明。
    *
    * ## 为什么这个参数是必需的（2026-10-07 补）
    *
@@ -182,8 +170,8 @@ export interface RelayClientOptions {
    * 症状不是"多扫一次码"：B 的 PSK 被丢弃意味着那条配对通道作废，
    * 而这正是本文件头引用的那起「取错 PSK 全线解不开」事故的前置条件。
    *
-   * 缺省是 undefined 而不是必填：发它的是中继，而"新主机 + 老中继"是真实组合
-   * （中继升级要重启容器、插件升级只要重开 Harness，两者节奏不同）。
+   * 缺省是 undefined 而不是必填：**中继不总能点出是哪一张**（收到坏帧那条分支没有
+   * token 可点名，`server.ts` 里那条 `bad_frame`）。缺省时接线方按"当前展示的那张"兜底。
    */
   onPairFail?: (reason: string, pairingToken: string | undefined) => void
   /**
@@ -400,18 +388,12 @@ export class RelayClient {
       this.transportCount.connects += 1
       this.connectedAtMs = this.options.clock.now()
       // D5：主机与客户端共用一条注册帧。PSK 从不上网（D1），这里只有 host token。
-      //
-      // ⚠️ `capabilities` 是**本插件真实支持的那几张**（规范 §5.3 C1/C3），不是全集。
-      // 它的用处是让对端能区分"这一代主机没有这个能力"与"它有但没开"——
-      // 而后者在 mp 侧是从**看能力面**推断出来的（`dsh-remote-mp` 不做别的协商），
-      // 所以少报一个 id 的代价是"明明支持却按不支持表现"，多报一个的代价是
-      // "发过去手机上干等 12 秒"。取交集要保守：这里报的都是**有实现且有判据钉着**的。
+      // `protocol` 由构造器恒写成本端版本（单版本制，见协议层的 `negotiate.ts`）。
       this.raw(
         helloForHost({
           token: this.options.token,
           hostId: this.options.hostId,
           label: this.options.label,
-          capabilities: HOST_CAPABILITIES,
         }),
       )
     })
@@ -442,6 +424,71 @@ export class RelayClient {
     }
     this.closeSocket()
     this.emitState('offline', 'stopped')
+  }
+
+  /**
+   * 断开并在 `delayMs` 之后重连一次（2026-10-11 晚加，给"自愈冷却窗口"用）。
+   *
+   * ⚠️ 为什么不能只"什么都不做"：中继拒绝 host token 时**不关连接**，而 `hello` 只在
+   * `open` 时发一次 ⇒ 一条被拒的 socket 会以"连接中"的样子永远挂着、再也不会有第二帧
+   * 进来。所以"现在不想重试"也必须**排一次**重连，只是在 `delayMs` 之后。
+   *
+   * 已经排着一次就**不重复排**（与 `scheduleReconnect` 同一条纪律）：否则每个
+   * `bad_token` 都排一发，等于把冷却窗口作废。
+   */
+  reconnectIn(delayMs: number, reason: string): void {
+    if (this.stopped) return
+    this.closeSocket()
+    if (this.reconnectTimer !== undefined) return
+    this.emitState('offline', reason)
+    this.reconnectTimer = this.options.clock.setTimeout(
+      () => {
+        this.reconnectTimer = undefined
+        this.connect()
+      },
+      Math.max(0, delayMs),
+    )
+  }
+
+  /**
+   * 换掉主机令牌并**立刻重连**（2026-10-11 晚加，给"认领自愈"用）。
+   *
+   * ## 为什么必须是"换 + 重连"，不能只换
+   *
+   * `hello` 帧**只在 `open` 那一刻发一次**（见 `connect()`），而中继拒绝一枚 host token
+   * 时是回一条 `error{bad_token}` 然后**继续挂着这条 socket**。所以本地把 token 改了，
+   * 这条已经在线的（但没通过鉴权的）连接也不会重新认一次 —— 它会一直"连接中"。
+   *
+   * ⇒ 关掉旧 socket 再连一次：新 socket 的 `open` 会用**新令牌**重发 `hello`。
+   * 另外把 `attempts` 归零：退避是给"网络不通"用的，不该让一次成功的令牌更换
+   * 还背着之前累积的指数退避（最坏要等 BACKOFF_MAX_MS 才用上新令牌）。
+   */
+  replaceToken(token: string): void {
+    this.options.token = token
+    if (this.reconnectTimer !== undefined) {
+      this.options.clock.clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = undefined
+    }
+    this.attempts = 0
+    if (this.stopped) return
+    // `connect()` 第一句就是 `closeSocket()`：旧监听器会先被摘干净，再见新连接。
+    this.connect()
+  }
+
+  /**
+   * 断开并按**正常退避**重连（2026-10-11 晚加，给"认领自愈失败"那条路用）。
+   *
+   * 与 `replaceToken` 的差别只有一处：**不动 `attempts`**，所以下次重连仍按指数退避，
+   * 不会变成"失败一次就立刻重连一次"的紧凑循环。
+   *
+   * 为什么需要它：中继拒绝 host token 时**不会关连接**，而 `hello` 只在 `open` 时发一次
+   * ⇒ 插件不自己重连的话，这台主机会以"连接中"的样子**永远挂着**（连 auth failed
+   * 日志都不会再有第二条）。
+   */
+  reconnectWithBackoff(problem: string): void {
+    if (this.stopped) return
+    this.closeSocket()
+    this.scheduleReconnect(problem)
   }
 
   /** 发布一张新的配对码（PSK 留在本地，中继只拿到 6 位码）。
@@ -727,9 +774,8 @@ export class RelayClient {
           ...(frame.message === undefined ? {} : { message: frame.message }),
         })
         // 交给策略层（2026-10-07）：此前这一帧只被记进日志，主机从不按 code 分支。
-        // `retryAfterMs` 用 `in` 收窄而不是直接取：主机钉的那一版 wire 里可能还没有
-        // 这个字段（加性的、可选的），中继也可能是更老的一版。这里要的是
-        // "有就用、没有就退回自己的下限"，所以对字段存在与否做一次显式判定。
+        // `retryAfterMs` 用 `in` 收窄而不是直接取：协议里它是**可选的**
+        // （不是每个错误码都知道该等多久），所以这里要的是"有就用、没有就退回自己的下限"。
         const hinted = 'retryAfterMs' in frame ? frame.retryAfterMs : undefined
         this.options.onRelayError?.(frame.code, typeof hinted === 'number' ? hinted : undefined)
         return

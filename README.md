@@ -194,7 +194,7 @@ curl -X POST -H 'x-drc-pair: 1' \
 pnpm install
 pnpm typecheck      # 两个编译面：宿主侧（NodeNext）与浏览器半（DOM lib）
 pnpm format:check   # ⚠️ 排在 test 之前，release workflow 也是这个顺序
-pnpm test           # 543 条判据
+pnpm test           # 676 条判据
 ```
 
 改完跑一遍 `node scripts/install-to-profile.mjs` + **重启 Harness** 再验。

@@ -37,6 +37,8 @@ const POSIX_ONLY = skipUnlessPosix()
 /** 一枚形状合法的 token（48 位小写十六进制，与中继 `randomBytes(24).toString('hex')` 同形）。 */
 const GOOD = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678abcdef01'
 const RELAY = 'wss://drc.provid.cc'
+/** 认领**必须**带 hostId（2026-10-11 晚起中继没有'未绑定槽位'那条路了）。 */
+const HOST_ID = 'host-test'
 
 function tempDir(): string {
   return mkdtempSync(path.join(tmpdir(), 'drc-claim-'))
@@ -44,11 +46,11 @@ function tempDir(): string {
 /** 一个只记账、不联网的 fetch。 */
 function fakeFetch(answer: { status?: number; ok?: boolean; body?: unknown; throw?: Error }): {
   fetch: FetchLike
-  calls: Array<{ url: string; method?: string; body?: string }>
+  calls: Array<{ url: string; method?: string; body?: string; headers?: Record<string, string> }>
 } {
-  const calls: Array<{ url: string; method?: string; body?: string }> = []
+  const calls: Array<{ url: string; method?: string; body?: string; headers?: Record<string, string> }> = []
   const fetchImpl: FetchLike = async (url, init) => {
-    calls.push({ url, method: init?.method, body: init?.body })
+    calls.push({ url, method: init?.method, body: init?.body, headers: init?.headers })
     if (answer.throw) throw answer.throw
     const status = answer.status ?? 200
     return {
@@ -78,7 +80,7 @@ test('认领地址：wss→https、ws→http，而且**整段路径被替换**�
 
 test('认领成功：POST 到那条地址，拿回一枚形状合法的 token', async () => {
   const { fetch, calls } = fakeFetch({ body: { token: GOOD, rotatedAt: '2026-10-11T00:00:00.000Z' } })
-  const outcome = await claimHostToken({ serverUrl: RELAY, fetchImpl: fetch })
+  const outcome = await claimHostToken({ serverUrl: RELAY, hostId: HOST_ID, fetchImpl: fetch })
   assert.deepEqual(outcome, { ok: true, token: GOOD })
   assert.equal(calls.length, 1, '只发一次')
   assert.equal(calls[0]!.url, 'https://drc.provid.cc/api/claim-token')
@@ -101,30 +103,39 @@ test('⚠️ 定长比较的陷阱：形状不对（长度/字符集）一律当
   ]
   for (const token of bad) {
     const { fetch } = fakeFetch({ body: { token } })
-    const outcome = await claimHostToken({ serverUrl: RELAY, fetchImpl: fetch })
+    const outcome = await claimHostToken({ serverUrl: RELAY, hostId: HOST_ID, fetchImpl: fetch })
     assert.equal(outcome.ok, false, `${JSON.stringify(token)} 不该被接受`)
     assert.equal(outcome.ok === false && outcome.reason, 'shape')
   }
   // 反证：形状对的那一枚必须被接受（否则上面每一条都是空断言）
   const { fetch } = fakeFetch({ body: { token: GOOD } })
-  assert.equal((await claimHostToken({ serverUrl: RELAY, fetchImpl: fetch })).ok, true)
+  assert.equal((await claimHostToken({ serverUrl: RELAY, hostId: HOST_ID, fetchImpl: fetch })).ok, true)
   assert.equal(CLAIMED_TOKEN_PATTERN.test(GOOD), true, '常量本身要认得这一枚')
 })
 
 test('失败的四档各说各话：地址不对 / 没有 fetch / 网络不通 / HTTP 非 200 —— 都不抛', async () => {
   // 地址不是 ws(s)：配置校验那边也会报 error，这里只回"认不了"（不抛）。
-  const badUrl = await claimHostToken({ serverUrl: 'https://drc.provid.cc', fetchImpl: fakeFetch({}).fetch })
+  const badUrl = await claimHostToken({
+    serverUrl: 'https://drc.provid.cc',
+    hostId: HOST_ID,
+    fetchImpl: fakeFetch({}).fetch,
+  })
   assert.equal(badUrl.ok === false && badUrl.reason, 'bad-url')
 
   const unreachable = await claimHostToken({
     serverUrl: RELAY,
+    hostId: HOST_ID,
     fetchImpl: fakeFetch({ throw: new Error('ECONNREFUSED') }).fetch,
   })
   assert.equal(unreachable.ok === false && unreachable.reason, 'unreachable')
 
   // 429 = 限频（正常运维信号）、404 = 老中继（没这条接口）、503 = 停机中：都归"这次没领到"
   for (const status of [429, 404, 503]) {
-    const outcome = await claimHostToken({ serverUrl: RELAY, fetchImpl: fakeFetch({ status, ok: false }).fetch })
+    const outcome = await claimHostToken({
+      serverUrl: RELAY,
+      hostId: HOST_ID,
+      fetchImpl: fakeFetch({ status, ok: false }).fetch,
+    })
     assert.equal(outcome.ok, false)
     assert.equal(outcome.ok === false && outcome.reason, 'http')
     assert.equal(outcome.ok === false && outcome.status, status, '状态码要带出来：排错时"哪一档"就靠它')
@@ -138,7 +149,7 @@ test('失败的四档各说各话：地址不对 / 没有 fetch / 网络不通 /
   const saved = globalThis.fetch
   try {
     delete (globalThis as { fetch?: unknown }).fetch
-    const noFetch = await claimHostToken({ serverUrl: RELAY })
+    const noFetch = await claimHostToken({ serverUrl: RELAY, hostId: HOST_ID })
     assert.equal(noFetch.ok === false && noFetch.reason, 'no-fetch')
   } finally {
     globalThis.fetch = saved
@@ -150,9 +161,12 @@ test('落盘：写出来的文件权限是 0600，内容能原样读回来', POS
   try {
     const file = resolveHostTokenFile(path.join(dir, 'status.json'))
     assert.equal(file, path.join(dir, 'host-token.json'), '落点必须是 status.json 同目录')
-    assert.equal(writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1 }), true)
+    assert.equal(
+      writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1, hostId: HOST_ID }),
+      true,
+    )
     assert.equal(statSync(file).mode & 0o777, 0o600, 'token 是凭据：权限位必须是 0600')
-    assert.equal(readStoredHostToken(file, RELAY), GOOD)
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), GOOD)
     // 排错面：source / serverUrl 要真的在文件里（不是靠文件名暗示）
     const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
     assert.equal(raw.source, 'claimed')
@@ -168,27 +182,38 @@ test('读盘的四档"不算数"：换中继 / 形状不对 / 坏了 / 没有 �
     const file = path.join(dir, 'host-token.json')
 
     // 没有这个文件（第一次装）是最常见的一档
-    assert.equal(readStoredHostToken(file, RELAY), undefined)
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), undefined)
 
     // 换中继：那枚 token 属于上一台，拿去连只有"被拒"或"把旧凭据送给陌生人"两种结果
-    writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1 })
-    assert.equal(readStoredHostToken(file, 'wss://other.example.com'), undefined, 'serverUrl 不同就不算数')
-    assert.equal(readStoredHostToken(file, RELAY), GOOD, '反证：地址相同的那一枚要认')
+    writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1, hostId: HOST_ID })
+    assert.equal(readStoredHostToken(file, 'wss://other.example.com', HOST_ID), undefined, 'serverUrl 不同就不算数')
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), GOOD, '反证：地址相同的那一枚要认')
 
-    // 形状不对（手改坏了 / 旧版本写的别的长度）
+    // 形状不对（手改坏了）：长度对但字符集不对 —— hostId 给对，单独钉字符集这一档
     writeFileSync(
       file,
-      JSON.stringify({ version: 1, token: 'A'.repeat(48), serverUrl: RELAY, source: 'claimed', savedAt: 1 }),
+      JSON.stringify({
+        version: 1,
+        token: 'A'.repeat(48),
+        serverUrl: RELAY,
+        source: 'claimed',
+        savedAt: 1,
+        hostId: HOST_ID,
+      }),
     )
-    assert.equal(readStoredHostToken(file, RELAY), undefined, '长度对但字符集不对同样不许用')
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), undefined, '长度对但字符集不对同样不许用')
+
+    // 缺 hostId（老格式）：**整份不可用**，不再有"没写身份就照旧用"那条退路
+    writeFileSync(file, JSON.stringify({ version: 1, token: GOOD, serverUrl: RELAY, source: 'claimed', savedAt: 1 }))
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), undefined, '缺 hostId 的文件不可用（没有老用户）')
 
     // 坏 JSON
     writeFileSync(file, '{ not json')
-    assert.equal(readStoredHostToken(file, RELAY), undefined)
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), undefined)
 
     // 形状不认识（版本升级）
     writeFileSync(file, JSON.stringify({ hello: 'world' }))
-    assert.equal(readStoredHostToken(file, RELAY), undefined)
+    assert.equal(readStoredHostToken(file, RELAY, HOST_ID), undefined)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -201,7 +226,10 @@ test('写盘失败只返回 false（目录不可写 / 磁盘满）：本次运�
     const blocker = path.join(dir, 'blocker')
     writeFileSync(blocker, 'x')
     const file = path.join(blocker, 'host-token.json')
-    assert.equal(writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1 }), false)
+    assert.equal(
+      writeStoredHostToken(file, { token: GOOD, serverUrl: RELAY, source: 'claimed', now: 1, hostId: HOST_ID }),
+      false,
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -209,7 +237,7 @@ test('写盘失败只返回 false（目录不可写 / 磁盘满）：本次运�
 
 // ── C 方案（按 hostId 一机一枚）在插件侧的三个落点（2026-10-11）──────────────
 
-test('认领请求带上 hostId —— 不带就落到"未绑定槽位"，那正是互相顶掉的形态', async () => {
+test('认领请求**必须**带 hostId；不知道身份时当场判失败，一个字节都不发', async () => {
   const { fetch, calls } = fakeFetch({
     body: { token: GOOD, hostId: 'drc-111122223333', rotatedAt: '2026-10-11T00:00:00Z' },
   })
@@ -218,11 +246,19 @@ test('认领请求带上 hostId —— 不带就落到"未绑定槽位"，那正
   assert.equal(calls.length, 1)
   const sent = JSON.parse(calls[0]?.body ?? '{}')
   assert.equal(sent.hostId, 'drc-111122223333', '请求体里必须有 hostId（中继据此把令牌绑到这一台）')
+  assert.equal(calls[0]?.headers?.['content-type'], 'application/json', '带体就要带 content-type')
 
-  // 反证的另一半：没给 hostId 时**不许**凭空编一个（那会让中继把令牌绑到错误的身份上）
+  /**
+   * 反证的另一半：**没有 hostId ⇒ 直接失败，不发请求**（2026-10-11 晚改）。
+   *
+   * 旧行为是"不带体发过去"，中继把它签进"未绑定槽位"，而那枚令牌对**任意** hostId
+   * 都算数 ⇒ 任何人都能冒充任何主机。现在中继会回 400，我们连请求都不发：
+   * 凭空编一个身份会让令牌绑到错误的槽位上，那台机器此后只会一直 `bad_token`。
+   */
   const bare = fakeFetch({ body: { token: GOOD, hostId: '' } })
-  await claimHostToken({ serverUrl: RELAY, fetchImpl: bare.fetch })
-  assert.equal(bare.calls[0]?.body, undefined, '不知道身份时不要带体：老客户端语义才是对的那一条')
+  const noId = await claimHostToken({ serverUrl: RELAY, fetchImpl: bare.fetch })
+  assert.deepEqual(noId, { ok: false, reason: 'no-host-id' })
+  assert.equal(bare.calls.length, 0, '没有身份就不该打那条无认证的接口')
 })
 
 test('落盘记下 hostId，且"文件里的身份不是本机"时当它不存在（否则永远 bad_token 且不自愈）', async () => {
@@ -236,27 +272,22 @@ test('落盘记下 hostId，且"文件里的身份不是本机"时当它不存�
     const raw = JSON.parse(readFileSync(file, 'utf8'))
     assert.equal(raw.hostId, 'host-A', 'hostId 要落盘（排障与"身份变了"的判定都靠它）')
     // ① 同一个身份：能读出来
-    assert.equal(readStoredHostToken(file, RELAY, undefined, 'host-A'), GOOD)
+    assert.equal(readStoredHostToken(file, RELAY, 'host-A'), GOOD)
     // ② 换了身份：当它不存在（调用方会因此重新认领）
-    assert.equal(
-      readStoredHostToken(file, RELAY, undefined, 'host-B'),
-      undefined,
-      '身份对不上还照样用 ⇒ 那台机器永久连不上',
-    )
-    // ③ 调用方不知道自己的身份（老调用路径）：照旧用，别把兼容路径一起砍掉
-    assert.equal(readStoredHostToken(file, RELAY), GOOD)
-    // ④ 老文件（没有 hostId 字段）与"不知道身份"一样照旧用
+    assert.equal(readStoredHostToken(file, RELAY, 'host-B'), undefined, '身份对不上还照样用 ⇒ 那台机器永久连不上')
+    /**
+     * ③ 缺 hostId 的文件（老格式）⇒ 不可用。
+     *
+     * 没有老用户，所以这条退路被删掉了：那份文件说不清"这枚令牌属于谁"，
+     * 而"照着用"正是"换了数据目录之后永久连不上"那条故障。
+     */
     const legacy = path.join(dir, 'legacy.json')
     writeFileSync(
       legacy,
       JSON.stringify({ version: 1, token: GOOD, serverUrl: RELAY, source: 'claimed', savedAt: 1 }),
       'utf8',
     )
-    assert.equal(
-      readStoredHostToken(legacy, RELAY, undefined, 'host-whatever'),
-      GOOD,
-      '老文件不写 hostId ⇒ 不许因此作废',
-    )
+    assert.equal(readStoredHostToken(legacy, RELAY, 'host-whatever'), undefined, '缺 hostId ⇒ 整份不可用')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -418,8 +418,19 @@ export function buildSettingsSection(root: Element, deps: PillDeps): () => void 
     const url = advUrlInput?.value.trim() ?? ''
     const token = advTokenInput?.value.trim() ?? ''
     const payload: Record<string, string> = {}
-    // 与当前生效值不同 ⇒ 提交；**空串是有意义的值**（= 删掉这一项、回落到下一层）。
-    if (!cfg || url !== (typeof cfg.serverUrl === 'string' ? cfg.serverUrl : '')) payload.serverUrl = url
+    /**
+     * 与当前生效值不同 ⇒ 提交；**空串是有意义的值**（= 删掉这一项、回落到下一层）。
+     *
+     * ⚠️ 但**还没读到当前值**（`cfg` 未定义：GET 还在路上、或它失败了）时，
+     * 空串**不算**一次改动 —— 那时输入框本来就是空的，把它当成"用户清空了地址"
+     * 会把盘上写过的自部署地址**静默删掉**（用户只是填了个口令就点了保存）。
+     * 这种"读不到"的场合只提交非空值：那是用户真的填进去的。
+     */
+    if (cfg) {
+      if (url !== (typeof cfg.serverUrl === 'string' ? cfg.serverUrl : '')) payload.serverUrl = url
+    } else if (url !== '') {
+      payload.serverUrl = url
+    }
     if (token !== '') payload.hostToken = token
     if (Object.keys(payload).length === 0) {
       setNote('没有改动', undefined)

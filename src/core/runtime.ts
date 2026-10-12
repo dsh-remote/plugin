@@ -59,7 +59,7 @@ import {
   toolEvent,
 } from '@dsh-remote/protocol/outbound'
 import type { EvHostInfo } from '@dsh-remote/protocol'
-import { effectiveCapabilities, imageAttachmentsSupported } from './capabilities.js'
+import { imageAttachmentsSupported } from './capabilities.js'
 import type {
   ApprovalDecision,
   ApprovalOutcomeValue,
@@ -680,8 +680,7 @@ export class HostRuntime {
           // 而 `parseCmdPayload` 会把不认识的键 strip 掉 —— 写出来的是一段
           // 永远读到 `undefined` 的代码。现在钉的是 2.0.14，字段在 schema 里，
           // 所以 `cmd.workspace` 拿得到值，接线成立（发版与钉的顺序见 HANDOFF §0.10.4）。
-          // 老手机不发这个字段 → 载体自己推断（配置 → 最近活动的会话 → 宿主默认），
-          // 行为与接线之前完全一致。
+          // 手机不知道落在哪时不带这个字段 → 载体自己推断（配置 → 最近活动的会话 → 宿主默认）。
           const made = await create.call(this.kernel, cmd.workspace ? { workspace: cmd.workspace } : undefined)
           if (!made.ok || !made.sessionId) {
             reply(false, { message: made.message ?? '新建会话失败' })
@@ -890,7 +889,7 @@ export class HostRuntime {
    * 四个读数各自对应一条降级路径，`hitRate` 是它们的比值：
    * - `hits`：带 `since` 且补到了东西；
    * - `misses`：带 `since` 但返回空页（游标之后真的没有新事件，也是合法的）；
-   * - `noCap`：手机**没带** `since`（老主机缺能力位 / 老手机）⇒ 走整页；
+   * - `noCap`：手机**没带** `since`（首屏、没有游标，或上一次差量被拒之后的重读）⇒ 走整页；
    * - `tooDeep`：`since` 落在保留窗口外，协议明确拒收，手机改拉历史（规范 §10.7 S4）。
    */
   private readonly resumeCount = { hits: 0, misses: 0, noCap: 0, tooDeep: 0 }
@@ -915,7 +914,7 @@ export class HostRuntime {
    * | 读数 | 说明 |
    * |---|---|
    * | `now` / `oldestSec` | 主机此刻还挂着几张、最久等了多久。`now > 0` ⇒ **主机手里有那张卡**，它该能被重放 |
-   * | `getPendingCalls` | 手机问过几次。`0` ⇒ **手机从来没来问**（没上线 / 没进会话页 / 老版本不认这条命令） |
+   * | `getPendingCalls` | 手机问过几次。`0` ⇒ **手机从来没来问**（没上线 / 没进会话页；重连后的正路是主机主动 `replayPending`） |
    * | `lastGetPendingReplayed` | **最近那一次**补拉重放了几帧。`0` ⇒ 它问的时候主机一帧都给不出 |
    * | `lastGetPendingPending` | 最近那一次补拉时主机手上有几张。**拿它和 `now` 比**，才分得出「问早了」与「真丢了」 |
    * | `lastGetPendingAgoSec` | 最近一次是多久之前。`now > 0` 而它很大 ⇒ 手机在那之后就没再问过 |
@@ -1044,13 +1043,10 @@ export class HostRuntime {
   }
 
   /**
-   * 本端**此刻**的能力、限额与自身信息（规范 §13.2，附录 D·GAP-5 的收口）。
+   * 本端**此刻**的限额与自身信息（规范 §13.2，附录 D·GAP-5 的收口）。
    *
    * ## 为什么它必须是"此刻"而不是"构建时"
    *
-   * - `caps` 走 `effectiveCapabilities(this.kernel)`：宿主这一代没有
-   *   `sessionQuery.readSession` 时，`drc.payload.resume` **不许**被报出去——
-   *   否则手机按"支持"表现，断线重连发 `since`，然后永远收不到差量页。
    * - `limits.maxFileAttachments` 看 `uploadDir`：没配落盘目录的主机**真的**不收
    *   文件附件（`cmd.send_prompt` 那条 `reply(false, …)` 就是证据），
    *   所以它必须报 0，而不是报协议上界的 4。
@@ -1062,7 +1058,6 @@ export class HostRuntime {
     const meta = (this.options.hostMeta ?? defaultHostMeta)()
     return hostInfo({
       host: { ...meta, carrier: this.kernel.carrier },
-      caps: effectiveCapabilities(this.kernel),
       limits: {
         /**
          * **图片上限跟着"这台内核此刻有没有图片通路"走**（2026-10-09 真机取证）。
@@ -1616,7 +1611,7 @@ export class HostRuntime {
      * **白名单**（F10）：手机逐字回传我们下发的 `options[].id`，合法的只有
      * `'approve'` / `'reject'`（v3 加了 `'approve-session'`）。
      * 原来写的是"不是 reject 就放行一次"——那是 fail-open：
-     * 未知词（`deny` / `decline` / `cancel`，或者旧版小程序回传的别的形状）会被当成
+     * 未知词（`deny` / `decline` / `cancel`，或者一个被改过的小程序回传的别的形状）会被当成
      * **允许**，一次误判就是替用户放行了一条工具调用。认不出的一律按拒绝。
      */
     const outcome: ApprovalDecision =
@@ -1668,22 +1663,16 @@ export class HostRuntime {
   }
 
   /**
-   * 让手机上那张已经作废的卡片**当场**收掉：先按 `requestId` 发一条精确帧，
-   * 再补一帧 `ev.run_state` 兜住"手机上装的是老版小程序"这一档。
+   * 让手机上那张已经作废的卡片**当场**收掉：按 `requestId` 发一条精确帧，
+   * 再补一帧 `ev.run_state` —— 两条各管一件事，不是"为兼容老手机"。
    *
-   * 为什么要两条而不是一条：`ev.permission_resolved` / `ev.question_resolved` 是按
-   * `requestId` 收单的（一次答完不会误收别的会话、别的请求那张卡），这是**正路**——
-   * mp 1.0.1 起就认这两帧（`pages/chat/chat.js` 的 `_onPermissionResolved` /
-   * `_onQuestionResolved`）。而 `ev.run_state` 是它从第一版就认的粗粒度信号
-   * （整会话两张卡一起收），发它只为兜住 **1.0.1 以前**的安装存量——那一档小程序
-   * 的分发是一串 `if (p.t === …)`，认不出来的 `t` 静默忽略。
-   * （`pages/chat/chat.js` 的 `_onRunState` 同时清 `pendingPermission` 与 `pendingQuestion`，
-   * 并停掉那条还在走的本地倒数）。所以两条都发：新版手机收到精确帧就精收一张，
-   * 老版手机靠 `run_state` 也能当场收卡，不用等用户重新上传小程序。
+   * - `ev.permission_resolved` / `ev.question_resolved`：按 `requestId` 收单，
+   *   精确收掉**这一张**（`chat.js` 的 `_onPermissionResolved` / `_onQuestionResolved`）。
+   * - `ev.run_state`：**这一回合此刻到底在不在跑**。内核不会为"审批被别人答掉了"
+   *   发状态跳变（这一回合自始至终是 running），所以这一帧只能由我们补发；
+   *   手机上的"思考中"跟着它走。
    *
-   * 内核**不会**为"审批/提问被别人答掉了"发状态跳变（这一回合自始至终是 running），
-   * 所以这一帧只能由我们补发；补的是**当前真相**而不是硬编码 `running`——
-   * 手机上那个"思考中"跟着这一帧走，发错方向会一直错到下一次真实跳变。
+   * 补的是**当前真相**而不是硬编码 `running`：发错方向会一直错到下一次真实跳变。
    * 读不到真相时退回缓存快照，再退 `idle`：宁可少一个转圈，不能凭空多一个转圈。
    */
   private voidStaleCard(requestId: string, item: PendingInteraction, reason: VoidReason): void {

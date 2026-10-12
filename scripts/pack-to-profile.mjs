@@ -49,7 +49,7 @@ import {
 } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -65,12 +65,21 @@ const PLUGIN = path.join(HERE, '..')
  *  3. 默认 `~/.dsh/profiles/desktop`。
  */
 function resolveProfile() {
-  const home = process.env.HOME ?? '~'
+  /**
+   * ⚠️ 用 `homedir()` 而不是 `process.env.HOME`（2026-10-11 复核）：Windows 上
+   * `HOME` 通常**不存在**，于是这里会拼出字面量 `~\.dsh\profiles\desktop`，
+   * `existsSync` 必然失败、脚本报 `profile not found: ~\.dsh\profiles\desktop`
+   * —— 一个照着改都不知道该改哪里的错。同一天加的 `restart-harness.mjs` /
+   * `host-doctor.mjs` 用的都是 `homedir()`，三处口径要对齐。
+   */
+  const home = homedir()
   const dir = process.env.DSH_PROFILE_DIR
-  if (dir && existsSync(dir)) return dir
+  // 宿主给了**解析后的绝对目录**就照它走（它比我们去猜 `~/.dsh/profiles/<名字>` 权威）：
+  // 不存在也要拿这个路径去报错，否则用户看不到宿主真正设的那个位置。
+  if (dir) return path.resolve(dir)
   const raw = process.env.DSH_PROFILE
   if (raw) {
-    if (existsSync(raw)) return raw
+    if (existsSync(raw)) return path.resolve(raw)
     const named = path.join(home, '.dsh', 'profiles', raw)
     if (existsSync(named)) return named
     return raw // 两种解释都不存在：把原值交回给下面那条 fail（报错要能照着改）
@@ -80,10 +89,9 @@ function resolveProfile() {
 const PROFILE = resolveProfile()
 /** 包的完整名 —— loader 解析模块用的就是它，必须与 package.json 的 name 一致。 */
 const BUNDLE_ID = '@dsh-remote/plugin'
-/** 旧装机方式留下的目录名（运行时 id），本机换装后它应当消失。 */
-const LEGACY_DIR = 'dsh-remote-control'
 /** tarball 的稳定落点：不能放在会被 `pnpm clean` 清掉的仓内目录。 */
-const TGZ_DIR = path.join(process.env.HOME ?? '~', '.dsh', 'plugins', 'dsh-remote')
+// ⚠️ `homedir()` 而不是 `process.env.HOME`：Windows 上 HOME 通常不存在（同 `resolveProfile`）。
+const TGZ_DIR = path.join(homedir(), '.dsh', 'plugins', 'dsh-remote')
 
 function fail(message) {
   process.stderr.write(`pack-to-profile: ${message}\n`)
@@ -140,6 +148,13 @@ const tgz = path.join(TGZ_DIR, `dsh-remote-plugin-${version}-${digest}.tgz`)
 if (tgz !== tgzRaw) {
   rmSync(tgz, { force: true })
   copyFileSync(tgzRaw, tgz)
+  /**
+   * ⚠️ 把 `npm pack` 直接吐出来的那个**没带哈希的** tarball 删掉（2026-10-11 复核）：
+   * 留着它每次运行都会在 `~/.dsh/plugins/dsh-remote/` 里堆一个 ——
+   * 一轮迭代下来就是十几个，清理时还得人工分辨哪个是现役的（2026-10-11 清掉过 13 个）。
+   * profile 的 `file:` 依赖只引用带哈希的那个名字，删掉这个不影响安装。
+   */
+  rmSync(tgzRaw, { force: true })
 }
 process.stdout.write(`   ${tgz}\n`)
 
@@ -154,7 +169,7 @@ profilePkg.dependencies[BUNDLE_ID] = `file:${tgz}`
 
 profilePkg.dsh = profilePkg.dsh || {}
 profilePkg.dsh.profile = profilePkg.dsh.profile || {}
-const list = (profilePkg.dsh.profile.bundles || []).filter((name) => name !== LEGACY_DIR)
+const list = profilePkg.dsh.profile.bundles || []
 if (!list.includes(BUNDLE_ID)) list.push(BUNDLE_ID)
 profilePkg.dsh.profile.bundles = list
 writeFileSync(profilePkgFile, JSON.stringify(profilePkg, null, 2) + '\n')
@@ -263,13 +278,6 @@ if (packedDigest !== installedDigest) {
   )
 }
 process.stdout.write(`   内容指纹核对通过：${installedDigest.slice(0, 12)}…\n`)
-
-// ── 5. 清掉旧装机方式留下的目录 ────────────────────────────────────────
-const legacy = path.join(PROFILE, 'node_modules', LEGACY_DIR)
-if (existsSync(legacy)) {
-  rmSync(legacy, { recursive: true, force: true })
-  process.stdout.write(`→ 已删除旧直拷目录 node_modules/${LEGACY_DIR}\n`)
-}
 
 const installedDir = path.join(PROFILE, 'node_modules', BUNDLE_ID)
 const installedFiles = existsSync(installedDir) ? readdirSync(installedDir).sort().join(', ') : '(缺失)'
