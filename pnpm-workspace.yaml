@@ -11,3 +11,20 @@
 # 由 `scripts/split-repos.mjs` 生成，不要手工改 —— 改了下次同步会被覆盖。
 allowBuilds:
   esbuild: true
+
+# ── 新发布版本 24 小时冷却（minimumReleaseAge）的**窄例外** ──────────────────
+#
+# ⚠️ 2026-10-12 部署 3.1.4 时三个平台的 CI 同时红在这里：
+#   [ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] @dsh-remote/protocol@3.1.4 was published
+#   at 2026-10-12T00:44:42Z, within the minimumReleaseAge cutoff
+#   （pnpm 在 `pnpm install --frozen-lockfile` 之前按 supply-chain 策略核一遍锁文件）
+#
+# 因果链：protocol 与 relay/plugin 是**同一次发版流程**里前后脚发出的
+# （必须先发 protocol，否则 relay 编译对着旧协议 ⇒ 另一片红）。而冷却策略的用途是
+# "别让刚发布的**第三方**代码直接进生产"——这里刚发布的正是**我们自己的包**，
+# 且是下游等着的那个版本。⇒ 只对**这一个版本**开例外，别的一律仍受冷却保护。
+#
+# 排除项必须写**确切版本号**（本脚本按 packages/protocol/package.json 现取），
+# 所以它天然随每次发版刷新，不会变成一条永远放开的死配置。
+minimumReleaseAgeExclude:
+  - '@dsh-remote/protocol@3.1.4'
