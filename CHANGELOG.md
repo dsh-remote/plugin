@@ -2,11 +2,29 @@
 
 ## 3.1.5
 
-> 四个包一起 bump 到 `3.1.5`。**本版代码无变化** —— 这一版是为了把小程序（`@dsh-remote/client`）
-> 的审核整改版发出去，而四个包的版本号按口径必须同一个号（`scripts/next-version.mjs --check`）。
-> 具体整改见 `packages/client/CHANGELOG.md` 的 3.1.5 一节。
->
-> ⇒ 若本轮只发小程序：**不需要**给本包打 tag / 发 npm（npm 上仍是 3.1.4）。
+> 四个包一起 bump 到 `3.1.5`。**主体是小程序的审核整改**（见
+> `packages/client/CHANGELOG.md` 的 3.1.5 一节），另含 2026-10-12 深度 review 的一批修复。
+
+### 深度 review 补丁（2026-10-12）
+
+- ⚠️ **自愈额度改成"按连续失败"计**（`src/index.ts`）：原来只增不减 ⇒ 一台机器跨天遇到
+  第二次 `bad_token`（间隔远超冷却）就会把 5 次用尽、**被永久放弃**，而自愈要应付的
+  恰恰是**会反复发生**的事（别人重建机器、令牌表裁剪、中继重部署）。现在一次 `hello-ok`
+  就清空窗口。
+  同时**拆成两个读数**：`diagnostics.hostToken.heals`（累计，只增不减，给运维看
+  "这台被顶过吗"）与 `healFailedInRow`（这一轮连续失败，同时是额度读数）。
+- ⚠️ **`hello-ok` 之后摘掉过期的 `hostToken` problem**：那几条 warn 说的是"这台主机
+  现在连不上"，而走到 `hello-ok` 就证明令牌此刻能用 —— 不摘的话，用户手工换 token 之后
+  一切正常，`status.json` 里却永久挂着一条假警报。
+- **去掉一处重复实现**：`runtime.ts` 里有个**没人调用**的 `pendingForSession()`，而
+  `cmd.get_pending` 那边内联复制了同一段筛选（注释还写着"必须逐字同判据"——两份实现
+  正是它警告的事）。现在两条重放路（`cmd.get_pending` / `replayPending`）共用
+  `pendingEntries()`。
+- `pill/routes.ts` 的 `pairPageHandler(deps)` 不读 `deps`：**保留参数**（路由表统一工厂
+  形状，判据按那个形状调用），但显式 `void deps` 并把理由写在注释里 —— 让"这个工厂
+  不碰宿主状态"在代码里看得见。
+
+> ⇒ npm 上仍是 3.1.4；这一版**要不要发**由下一次真发版时统一决定（小程序本身不发 npm）。
 
 ## 3.1.4
 

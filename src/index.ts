@@ -395,6 +395,11 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
    * ② **有额度、有冷却**：最多 `HEAL_MAX_ATTEMPTS` 次，两次之间至少隔 `HEAL_COOLDOWN_MS`，
    *    同一时刻只允许一次请求在路上 —— 否则"中继一直拒"就变成自造 DDoS
    *    （那条接口是**无认证**的，还带 4 秒/IP 的限频）。
+   *    ⚠️ 额度数的是**这一轮连续失败**（`healAttempts`），不是一生累计：一次
+   *    `hello-ok` 就把它清空（见 `onState` 的 online 分支）。被顶号是**会反复发生**的事
+   *    （别人重建机器、令牌表裁剪、中继重部署），用累计额度会把一台反复被顶的机器
+   *    在第五次之后**永久放弃**，而那期间并没有新故障。诊断要看的累计数另有一个
+   *    `healTotal`（`diagnostics.hostToken.heals`）—— 两个数服务两个读者。
    * ③ **任何一条路径上都不许留下一条挂死的 socket**：中继拒绝时不关连接，而 `hello`
    *    只在 `open` 时发一次 ⇒ "这次不重试"也必须**排一次**重连（`reconnectIn`，
    *    排在冷却窗口结束时），否则那台主机会以"连接中"的样子永远挂着 ——
@@ -404,7 +409,17 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   const HEAL_MAX_ATTEMPTS = 5
   const HEAL_COOLDOWN_MS = 60_000
   let healInFlight = false
+  /**
+   * `healAttempts` = **这一轮连续失败**的次数，只用于额度（`HEAL_MAX_ATTEMPTS`）；
+   * `healTotal` = 进程一生成功自愈过几次，只给诊断看。
+   *
+   * ⚠️ 为什么必须是两个数（2026-10-12 review 补）：额度按"连续失败"算才有意义
+   * （一次 `hello-ok` 就说明令牌能用了，之前的失败记录作废，见 `onState` 里那段）；
+   * 而诊断必须**只增不减** —— 拿一个会被归零的数当诊断，"这台机器自愈过吗"
+   * 就永远查不到，而那正是运维最需要的一格。
+   */
   let healAttempts = 0
+  let healTotal = 0
   let healBlockedUntil = 0
   let healReason = ''
   let warnedConfiguredToken = false
@@ -468,6 +483,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
       claimedToken = outcome.token
       claimedForUrl = config.serverUrl
       claimState = 'ok'
+      // 累计自愈次数（诊断用，只增不减；额度那边是 `healAttempts`，由 `online` 归零）
+      healTotal += 1
       writeStoredHostToken(
         hostTokenFile,
         { token: outcome.token, serverUrl: config.serverUrl, source: 'claimed', now: clock.now(), hostId },
@@ -711,6 +728,45 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
         // 而留着它会让"重连之后配对码一直不自动补"看起来像另一个 bug）。
         if (info.relay !== 'online') return
         pairRateLimitedUntil = 0
+        /**
+         * **自愈额度也在这里归零**（2026-10-12 review 补）。
+         *
+         * ## 为什么必须归零
+         *
+         * 自愈是"中继回 `bad_token` ⇒ 带自己的 hostId 重新认领"的兜底，而它要应付的
+         * 恰恰是**会反复发生**的事件（`drf-api` 那台机器重建一次、令牌表被裁剪一次、
+         * 有人重新部署一次中继）。如果额度是"进程级只增不减"，那么一台机器跨天遇到
+         * 两次 `bad_token`（间隔远超冷却）就会把 5 次用尽，然后被**永久放弃**：
+         * 自愈不再尝试、`problems` 一直挂着"用满 5 次"、主机再也不会自己回来 ——
+         * 而这一切距离上一次成功可能已经过去几天，期间没有任何新故障。
+         *
+         * ⇒ 语义改成"**连续失败**才计数"：一次 `online` 就把窗口清空
+         * （`hello-ok` 就是"这枚令牌现在能用"的证明）。这也让
+         * `diagnostics.hostToken.heals` 的含义变回"这一轮连续自愈了几次"，
+         * 而不是"进程一生自愈过几次"——后者对一个只会变大的数没用。
+         *
+         * ⚠️ 与 `healBlockedUntil` 的区别：那个是**冷却**，作用在"两次尝试之间"，
+         * 由认领结果设置；这里是**额度**，作用在"连续失败的次数"上。两者在
+         * 冷却期内不会同时起作用（online 之后也不需要冷却）。
+         */
+        healAttempts = 0
+        healBlockedUntil = 0
+        warnedHealExhausted = false
+        /**
+         * **并且把那几条 hostToken 的 problem 摘掉**（2026-10-12 review 补）。
+         *
+         * 额度用尽时 push 的那条 warn 说的是"这台主机**现在连不上**"。而走到这里
+         * 说明中继**刚刚接受了我们的令牌**（`hello-ok`）⇒ 那句话已经不成立了。
+         * 不摘的话会出现这个形状：用户手工换了一枚（或网络恢复）之后一切正常，
+         * 而 `status.json` 里永久挂着"连不上"——正是本文件反复处理过的"假警报并存"
+         * （见上面 `tokenWillArrive` 那段与 2026-10-03 的 `warn:pill` 事故）。
+         *
+         * ⚠️ 与自愈成功分支（`healHostToken` 里 `problems.splice` 那处）同一口径：**认领成功**与
+         * **握手成功**都是"令牌现在能用"的证明，两条路都该摘。
+         */
+        for (let index = problems.length - 1; index >= 0; index -= 1) {
+          if (problems[index]?.field === 'hostToken') problems.splice(index, 1)
+        }
         /**
          * **刚上线就 tick 一次**（2026-10-07 补）。
          *
@@ -1053,7 +1109,10 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
          * `claim` 的四个取值：`not-needed`（本来就有 token，没去认领）/ `pending`
          * （请求在路上）/ `ok` / `failed`（`reason` 说清是哪一档：unreachable / http / shape /
          * bad-url / no-fetch / no-host-id）。
-         * `heals` 是**自愈**用掉了几次（中继回 `bad_token` ⇒ 带自己的 hostId 重新认领），
+         * `heals` 是**进程一生成功自愈过几次**（只增不减：归零会让"自愈发生过"
+         * 这件事永远查不到，而它正是运维最需要的一格）；`healFailedInRow` 是
+         * **这一轮连续失败**了几次 —— 它同时是额度（满 `HEAL_MAX_ATTEMPTS` 次停手）
+         * 的读数，所以会在下一次 `hello-ok` 之后归零。
          * `healReason` 是最近一次自愈失败的原因（空 = 没失败过）。
          * **绝不含 token 本身**，也绝不含它的任何片段。
          */
@@ -1063,7 +1122,8 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
           claimReason: claimState === 'failed' ? claimReason : '',
           claimStatus: claimState === 'failed' ? claimStatus : 0,
           file: hostTokenFile ? path.basename(hostTokenFile) : '',
-          heals: healAttempts,
+          heals: healTotal,
+          healFailedInRow: healAttempts,
           healReason,
         },
       },

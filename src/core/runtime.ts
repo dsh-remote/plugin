@@ -772,8 +772,9 @@ export class HostRuntime {
           // 主机侧收不到任何信号，只能由手机拉。
           // 没有挂起时只回 ok:true 的回执：回空数组是"没有"，与"没读到"必须分得清。
           let replayed = 0
-          for (const [id, item] of this.pending) {
-            if (cmd.sessionId !== undefined && item.sessionId !== cmd.sessionId) continue
+          // 筛选口径与 `replayPending` 共用同一处实现（见 `pendingEntries`）——
+          // 原来这里是内联复制的一份，两处一旦漂移，"帧丢了"的假结论就有了。
+          for (const [id, item] of this.pendingEntries(cmd.sessionId)) {
             const frame = this.buildPendingFrame(id, item)
             if (!frame) continue
             this.replyTo(conversationId, frame)
@@ -963,17 +964,21 @@ export class HostRuntime {
    * "重放了几帧"才是能定性的一格（`replayed=0` 与 `replayed>0` 是两条完全不同的排查方向）。
    */
   /**
-   * 此刻挂着的、**属于这条会话**的那些（`sessionId` 缺省 = 全部）。
+   * 此刻挂着的、**属于这条会话**的那些（`sessionId` 缺省 = 全部），带 requestId。
    *
-   * ⚠️ 必须与 `cmd.get_pending` 的重放循环**逐字同判据**：
-   * 那两个数是同一个分诊表上的分子与分母，口径一旦不同就得出"帧丢了"的假结论
+   * ⚠️ **两条重放路必须共用它**（`cmd.get_pending` 与 `replayPending`）：
+   * 那两个数是同一个分诊表上的分子与分母，筛选口径一旦不同就得出"帧丢了"的假结论
    * （2026-10-09 深度 review 的 A2）。
+   *
+   * 2026-10-12 review 修：这里原来是一个**没人调用**的 `pendingForSession()`
+   * （返回 `PendingInteraction[]`），而 `cmd.get_pending` 那边**内联复制**了同一段筛选
+   * —— 注释说"必须逐字同判据"，实现却是两份。现在两处都走这一份。
    */
-  private pendingForSession(sessionId: string | undefined): PendingInteraction[] {
-    const out: PendingInteraction[] = []
-    for (const item of this.pending.values()) {
+  private pendingEntries(sessionId: string | undefined): Array<[string, PendingInteraction]> {
+    const out: Array<[string, PendingInteraction]> = []
+    for (const [id, item] of this.pending) {
       if (sessionId !== undefined && item.sessionId !== sessionId) continue
-      out.push(item)
+      out.push([id, item])
     }
     return out
   }
@@ -1718,7 +1723,8 @@ export class HostRuntime {
   replayPending(conversationId: string): number {
     if (!this.transport.hasClient(conversationId)) return 0
     let replayed = 0
-    for (const [id, item] of this.pending) {
+    // 同上：筛选口径走 `pendingEntries`（这里 `sessionId` 缺省 ⇒ 全部会话都补）
+    for (const [id, item] of this.pendingEntries(undefined)) {
       try {
         // 重配对时通道换了：旧 conversationId 已经作废，后续的结算作废帧要发到新通道。
         item.conversationId = conversationId

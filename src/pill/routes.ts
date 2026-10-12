@@ -456,7 +456,14 @@ export function unpairHandler(deps: PillRouteDeps): (request: IncomingMessage, r
  * ⚠️ 页面里**不含 psk、也不含那条 qr URI**：码只在服务端渲染成像素之后才离开宿主
  *   （与图片路由同一条纪律，判据见 routes 的测试）。这里拿到的只有 token 与寿命。
  */
+/**
+ * ⚠️ `deps` **刻意用不上**：这一页只读 `request.url` 里的 token 与寿命，不碰任何宿主状态。
+ * 参数保留是为了与路由表里其它 handler 的工厂形状一致（`pairPageHandler(deps)`），
+ * 判据也按那个形状调用它 —— 所以它虽然没被读，也**不是**死参数。
+ */
 export function pairPageHandler(deps: PillRouteDeps) {
+  // 显式丢弃：让"这个工厂不读宿主状态"这件事在代码里看得见（而不是靠读签名猜）
+  void deps
   return (request: IncomingMessage, response: ServerResponse): void => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       json(response, 405, { error: 'method not allowed' })

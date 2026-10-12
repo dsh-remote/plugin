@@ -51,7 +51,7 @@ export interface Conversation {
  * 一本有界的密钥簿。
  *
  * 为什么必须有界（复核🟡 8）：D3 之后配对通道跨断连长存，而**中继侧的空闲 TTL 是 7 天**
- * （`apps/server/src/config.ts` 的 `DRC_CONV_IDLE_TTL_MS`）。也就是说"中继先把它忘掉"
+ * （`packages/relay/src/config.ts` 的 `DRC_CONV_IDLE_TTL_MS`）。也就是说"中继先把它忘掉"
  * 这件事几乎不会发生，长期跑的主机会把每一条曾经配对过的通道连同一份 PSK 永远留在内存里，
  * 并且每次广播都还对它们逐个密封一遍（白做功且随天数线性增长）。
  * 剪枝只由 host 侧负责，且必须**同时通知中继与上层**（见 `RelayClient.pruneConversations`），
