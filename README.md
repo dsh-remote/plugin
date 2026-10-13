@@ -16,7 +16,7 @@ dsh plugin --profile web add @dsh-remote/plugin
 HMR 只热更 `cordis.patch.yml` 的配置，不会重新 import dist；浏览器面还要刷新页面
 才拉得到新的 `client.cjs`。不重启的表现是"改了的代码没生效"。
 
-配一次中继与主机 token 见下面的[教程](#教程)。从源码构建（开发者）见[第 2 步](#2-装插件)。
+从源码构建（开发者）见[第 2 步](#2-装插件)。
 
 ---
 
@@ -55,7 +55,7 @@ HMR 只热更 `cordis.patch.yml` 的配置，不会重新 import dist；浏览�
 - 一台**中继**（生产实例已提供；自托管见
   [`dsh-remote/relay` 的 SELF-HOSTING](https://github.com/dsh-remote/relay/blob/main/docs/SELF-HOSTING.md)）。
 - 一个**主机 token**：中继与插件必须**逐字一致**（`openssl rand -hex 32` 生成）。
-  把它放进中继的 `DRC_HOST_TOKEN`，插件侧只给**变量名**（见第 3 步）。
+  把它放进中继的 `DRC_HOST_TOKEN`，插件侧只给**变量名**。
 
 ### 2. 装插件
 
@@ -83,64 +83,12 @@ node scripts/install-to-profile.mjs
 > 而 `dsh plugin add` 装的是 npm 包。同一个 profile 里先后用过两条路，表现是
 > "文件都在、插件不加载"——三个名字（包名 / `bundles` 条目 / `insert.name`）必须一致。
 
-### 3. 配一次（2026-10-11 起：**通常什么都不用配**）
-
-默认中继是官方 `wss://drc.provid.cc`，口令（host token）由插件启动时**自动向中继认领**
-并落进 `~/.dsh/dsh-remote-control/host-token.json`（0600）。装完重启 Harness 就能用。
-
-要改的只有"不想用官方中继"或"想用自己的口令"这两件事，**两条路都行**：
-
-- **设置页**：宿主设置 →「远程控制」→ 最下面「进阶：自部署 / 自定义」那一栏，填中继地址 / 口令。
-  它落在 `~/.dsh/dsh-remote-control/user-config.json`（0600），**重启 Harness 生效**。
-- **profile 的 patch**（下面这段）—— 手写在这里的值压过设置页那一栏。
-
-插件在 profile 里注册为一个 bundle。在 `~/.dsh/profiles/desktop/cordis.patch.yml`
-（**顶层是一个数组**，没有 `plugins:` 这一层）里补上配置：
-
-```yaml
-- id: dsh-remote-control # 条目 id：稳定标识，路由前缀与数据目录都跟着它
-  name: '@dsh-remote/plugin' # ⚠️ 这是**包名**，不是上面的 id —— 两者不是一回事
-  config:
-    enabled: true
-    hostTokenEnv: DRC_HOST_TOKEN # 从环境变量读，别把 token 写进这个文件
-    hostLabel: my-mac # 会显示在小程序顶部
-    listingRefreshSec: 15
-    keepAwake:
-      enabled: true
-      idleReleaseSec: 300
-      keepDisplay: false
-```
-
-> `serverUrl` **刻意不写**：它有一个默认值（官方中继），而默认值只有**一处**事实源
-> （`src/shell/config.ts` 的 `DEFAULT_CONFIG`）。自部署时把它写成 `wss://你的域名`
-> 即可 —— 写在这里的值压过设置页那一栏。
-
-⚠️ **认领那一步失败不会让插件起不来**：它照常起载具与配对入口，只在 `status.json` 里留一条
-`warn:hostToken` 与 `diagnostics.hostToken.*`（来源 / 认领结果 / 失败原因）。
-这时去设置页「进阶」那一栏自己填一枚中继的 `DRC_HOST_TOKEN` 即可。
-
-⚠️ **三个容易抄错的地方**（2026-10-11 实测这段文档与真实配置四处不符，已订正）：
-
-1. **`name` 不是 `dsh-remote-control`**。拆成四仓之后包名是 `@dsh-remote/plugin`；
-   保持稳定的只有**路由前缀、数据目录、patch 条目 id**。
-   ⚠️ 而 `README` 上方那句"三个名字（包名 / `bundles` 条目 / `insert.name`）必须一致"
-   说的就是这件事 —— 抄错的话表现是"文件都在、插件不加载"。
-2. **没有 `plugins:` 这一层** —— patch 文件顶层就是数组。
-3. **没有 `approvalTimeoutSec`** —— 它连同 `questionTimeoutSec` 一起在 2026-10-11 删除
-   （期限改成跟随弹窗自身生命周期，见 `docs/RELEASE.md`）。
-
-重启 Harness 后，**状态栏会出现一颗 pill**：未配对时点开**直接就是二维码页**。
-用「黑鲸远控」扫它 → 配对完成。配对码**一次性**，服务端权威寿命默认 120 秒。
-
-> 配对入口**只有那颗 pill**。`/drc` 命令与右栏自动弹码已在 2026-10-03 整条删除——
-> 照着旧文档去找它们会扑空。
-
-### 4. 用
+### 3. 用
 
 小程序里：会话列表点开会话 → 输入框下发指令 → 流式输出实时回显 → 主机要审批 / 提问时手机上直接答。
 任务跑完前主机保持唤醒（防休眠由插件发命令，可配空闲多久释放）。
 
-### 5. 排错
+### 4. 排错
 
 **第一入口永远是状态快照**：
 
