@@ -1167,3 +1167,104 @@ test('反向判据：中继没点名时给 undefined（而不是空串或猜一�
   assert.equal(h.pairFails.length, 1)
   assert.equal(h.pairFails[0]?.pairingToken, undefined, '缺省必须是 undefined，语义是"中继没告诉我们"')
 })
+
+// ── 批量帧的解密失败计数：一帧记一次（与 mp 侧同一条契约）──────────────
+
+/**
+ * 这一组与 `core/client.js` 的 enc-batch 分支是**同一条契约的两端**。
+ * 那边（mp）修的时候写明了口径：
+ *
+ * - 有形状合法却解不开的、且**一条都没解开** ⇒ 整帧记**一次**（不论坏了几条）；
+ * - 混合帧（至少一条解开了）⇒ 不计 —— 密钥被证明是对的，坏项只是损坏；
+ * - 全是形状不对的（连 base64 都不是）⇒ 一次都不记（中继随手能造，真密钥不匹配
+ *   只在中继真的换密钥时出现）。
+ *
+ * 主机侧原来**逐项记**：一条含 2 个坏项的批量帧当场把配对作废（`count >= 2`），
+ * 手机被迫重新扫码 —— 而单帧的"两次机会"在批量帧下等于没有。
+ */
+function sealedItem(key: Uint8Array, payload: unknown): { ciphertext: string } {
+  return { ciphertext: seal(key, payload).ciphertext }
+}
+
+test('批量帧"一帧记一次"：两个坏项的一帧**不许**作废配对（旧行为一帧就烧光两次机会）', async () => {
+  const { client, slots, feed, joined, gone, commands } = harness()
+  const slot = slots.create(120_000)
+  client.publishPairing(slot)
+  feed({ t: 'peer-joined', sessionId: 'c_cap111222333', clientId: 'k_mp', pairingToken: slot.token })
+  assert.equal(joined.length, 1, '夹具自检：会话要先建起来')
+  const conversation = client.conversations.get('c_cap111222333')
+  assert.ok(conversation !== undefined)
+  const phone = phoneKeys(conversation.psk, 'c_cap111222333')
+  const wrong = phoneKeys('AgAAAAAAAAAAAAAAAAAAAA==', 'c_cap111222333') // 合法形状（16 字节）但不是真 PSK
+
+  // 一条批量帧、两个都是"形状合法却解不开"的项（MAC 不过 = 密钥不匹配的形状）
+  feed({
+    t: 'enc-batch',
+    sessionId: 'c_cap111222333',
+    items: [
+      sealedItem(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_bad_1' }),
+      sealedItem(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_bad_2' }),
+    ],
+  })
+  assert.equal(gone.length, 0, '两个坏项的一帧就把配对作废了 —— 逐项计数还在（旧行为）')
+  assert.equal(client.conversationCount, 1, '会话被作废 ⇒ 手机必须重新扫码')
+
+  // 配对还活着：同一条通道上随后来的好帧要照常送达
+  feed({
+    t: 'enc',
+    sessionId: 'c_cap111222333',
+    ciphertext: seal(phone.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_good' }).ciphertext,
+  })
+  assert.equal(commands.length, 1, '配对被误伤后好帧也进不来了')
+})
+
+test('批量帧：连续两帧全坏 ⇒ 照常作废（"两次机会"的语义没有被这次修复削掉）', async () => {
+  const { client, slots, feed, gone } = harness()
+  const slot = slots.create(120_000)
+  client.publishPairing(slot)
+  feed({ t: 'peer-joined', sessionId: 'c_cap111222333', clientId: 'k_mp', pairingToken: slot.token })
+  const conversation = client.conversations.get('c_cap111222333')
+  assert.ok(conversation !== undefined)
+  const wrong = phoneKeys('AgAAAAAAAAAAAAAAAAAAAA==', 'c_cap111222333') // 合法形状（16 字节）但不是真 PSK
+  const badBatch = {
+    t: 'enc-batch',
+    sessionId: 'c_cap111222333',
+    items: [
+      sealedItem(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'b1' }),
+      sealedItem(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'b2' }),
+    ],
+  }
+  feed(badBatch)
+  assert.equal(gone.length, 0, '第一帧就该作废 ⇒ "两次机会"变成了零次')
+  feed(badBatch)
+  assert.equal(gone.length, 1, '连续两帧全坏必须作废（这条保证不许被"一帧记一次"削掉）')
+})
+
+test('混合帧（一条解开一条没解开）不计失败，且好项照常送达', async () => {
+  const { client, slots, feed, commands, gone } = harness()
+  const slot = slots.create(120_000)
+  client.publishPairing(slot)
+  feed({ t: 'peer-joined', sessionId: 'c_cap111222333', clientId: 'k_mp', pairingToken: slot.token })
+  const conversation = client.conversations.get('c_cap111222333')
+  assert.ok(conversation !== undefined)
+  const phone = phoneKeys(conversation.psk, 'c_cap111222333')
+  const wrong = phoneKeys('AgAAAAAAAAAAAAAAAAAAAA==', 'c_cap111222333') // 合法形状（16 字节）但不是真 PSK
+  feed({
+    t: 'enc-batch',
+    sessionId: 'c_cap111222333',
+    items: [
+      sealedItem(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_bad' }),
+      sealedItem(phone.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_good' }),
+    ],
+  })
+  assert.equal(commands.length, 1, '好项没能送达')
+  assert.equal(commands[0]?.cmd.cmdId, 'cmd_good', '送达的是错的那条')
+  assert.equal(gone.length, 0, '混合帧不该计失败：密钥被证明是对的')
+  // 再来一条单帧全坏也只是第一次 strike（混合帧没有预先烧掉一次机会）
+  feed({
+    t: 'enc',
+    sessionId: 'c_cap111222333',
+    ciphertext: seal(wrong.kC2H, { t: PAYLOAD_TYPES.cmdListSessions, cmdId: 'cmd_bad2' }),
+  })
+  assert.equal(gone.length, 0, '混合帧预先烧掉了那次机会 ⇒ 单帧坏就作废了（两次机会变成一次）')
+})

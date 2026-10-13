@@ -51,10 +51,10 @@
  * 拿它去连新中继只有两种结果：被拒（白试一次），或者更糟——把旧中继的凭据
  * 送给了一台陌生的服务器。⇒ 只在 `serverUrl` 逐字相同时才认这枚 token。
  */
-import { mkdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { writeSecure } from '../platform/secure-file.js'
+import { ensureSecureDir, writeSecure } from '../platform/secure-file.js'
 import { dataDir } from '../platform/paths.js'
 
 /** 认领接口的路径（中继侧 `server.ts` 里同一个字面量）。 */
@@ -254,7 +254,7 @@ export function writeStoredHostToken(
     hostId: entry.hostId,
   }
   try {
-    mkdirSync(path.dirname(file), { recursive: true })
+    ensureSecureDir(path.dirname(file))
     writeSecure(file, JSON.stringify(body, null, 2) + '\n')
     return true
   } catch (error) {

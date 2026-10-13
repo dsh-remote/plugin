@@ -28,13 +28,31 @@
  * 所以这里的出口是：**显式 warn 一次**，让运维知道"这台机器上没有 0600 这回事，
  * 请改用 NTFS ACL 或换 POSIX 平台"——而不是静默地把 `mode: 0o600` 当成已生效。
  */
-import { chmodSync, closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
 import type { Platform } from './paths.js'
 import { currentPlatform } from './paths.js'
 
 /** 凭据文件的权限位。POSIX 上是"仅属主可读写"。 */
 export const SECURE_MODE = 0o600
+
+/**
+ * **敏感目录**的权限位（2026-10-13 补）：仅属主可读写**并可列出**。
+ *
+ * 文件是 0600 就够了，目录还差一条"别人不能列"——目录里躺着的文件名本身
+ * 就是信息（会话 id、用户上传的文件名）。见 {@link ensureSecureDir}。
+ */
+export const SECURE_DIR_MODE = 0o700
 
 /** 一次性的平台告警闸：同一进程里同类告警只发一次（否则每 5 秒刷屏）。 */
 const warned = new Set<string>()
@@ -187,6 +205,69 @@ function writeSecureInner(
     } catch {
       // Windows 上目录不能这样 fsync —— 静默跳过（加固，不是正确性）
     }
+  }
+}
+
+/**
+ * **敏感目录**的创建与收紧（2026-10-13 第六轮 review 补）。
+ *
+ * ## 为什么文件加固了而目录没有
+ *
+ * 落盘端口把**文件**收成 0600（`writeSecure` 的五步：临时名 → 显式 chmod → fsync → rename → fsync 父目录），
+ * 而三处**目录**都是 `mkdirSync(dir, { recursive: true })` —— 不带 `mode` ⇒ 用进程 umask，
+ * 典型是 **0755**。后果：
+ *
+ * - 别的本地用户能**列出**这些目录：`~/.dsh/dsh-remote-control/`（会话 id、附件文件名）、
+ *   配对密钥簿目录（会话 id）、附件目录（用户上传的文件名，往往本身就说明了内容）。
+ *   文件**内容**仍读不到（0600），泄露的是**名字**。
+ * - umask 宽松时（systemd 默认 `UMask=0022`，但容器与自建服务常见 `0000`）目录会变成 **0777**：
+ *   别的本地用户能在里面**删/替换**文件。而 `conversations-<hostId>.json` 里是**每个会话的
+ *   PSK**，附件路径则被写进 prompt 正文交给 Agent 读 ⇒ 那是"换内容"的路径，不只是"看得见"。
+ *
+ * ## 与文档的关系（这正是它算缺陷而不算"顺手加固"的原因）
+ *
+ * README 的「设计上的三条硬线」第 2 条写着：凭据落盘一律 0600，`status.json`、配对密钥簿、
+ * 宿主身份文件、**附件目录**都走同一个落盘端口。前三项与附件的**文件**确实走了，
+ * **目录本身没走** ⇒ 那句话当时是不成立的。
+ *
+ * ## 为什么必须显式 `chmod`（而不是只给 `mode`）
+ *
+ * 与 `writeSecure` 第 2/3 条同一条理由：`mode` **只在创建那一刻生效**，而 `recursive: true`
+ * 遇到**已存在**的目录会直接返回 ⇒ 一条 0755 的老目录永远收不紧。所以两步都要：
+ * `mkdir({ mode })` + `chmodSync`。
+ *
+ * win32 上 `chmod` 只切只读位、目录权限语义不存在（见文件头），因此那里**跳过 chmod**，
+ * 不假装生效、也不为此发警告（目录权限在 NTFS 上由 ACL 决定，不是本端口该管的事）。
+ */
+export function ensureSecureDir(dir: string, platform: Platform = currentPlatform()): void {
+  mkdirSync(dir, { recursive: true, mode: SECURE_DIR_MODE })
+  if (!chmodEffective(platform)) return
+  /**
+   * ⚠️ **只收窄，不改属主已经收紧过的目录**（2026-10-13，`pair-store.test.ts` 抓到的）。
+   *
+   * 判据里有一条"目录是只读（0500）时 save 必须优雅失败而不是抛"，而第一版这里
+   * 无条件 `chmod 0700` ⇒ 把运维刻意设的只读**改回可写** ⇒ 那条判据红了，
+   * 而它红得有道理：**插件不该改一个自己没有设过的权限**（共享目录、按组授权的部署都会被它破坏）。
+   *
+   * ⇒ 规则收成：**组/他人两位上还有 1 才收**（0755 / 0777 → 0700），
+   *   已经只属主的（0700、以及运维设的 0500）**一律不碰**。
+   */
+  let mode: number
+  try {
+    mode = statSync(dir).mode & 0o777
+  } catch {
+    return // 刚建出来又读不到？读不到就交给真正写它的那次报错，不在这里猜
+  }
+  if ((mode & 0o077) === 0) return
+  try {
+    chmodSync(dir, SECURE_DIR_MODE)
+  } catch (error) {
+    // 收不紧就照实说，但不抛：加固失败不该让整个插件起不来（那比目录宽一点更糟）。
+    warnOnce(
+      'secure-dir-mode',
+      `SecureFilePort：目录 ${dir} 收不紧到 0700（${String((error as Error)?.message ?? error).slice(0, 80)}）。` +
+        '它仍然只有属主能写文件，但**别的本地用户能列出里面的文件名**。',
+    )
   }
 }
 

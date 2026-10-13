@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES, MAX_FILE_ATTACHMENTS } from '@dsh-remote/protocol/limits'
-import { safeFileName, writeSecure } from '../platform/secure-file.js'
+import { ensureSecureDir, safeFileName, writeSecure } from '../platform/secure-file.js'
 
 /** 本仓沿用的旧名 = 协议层的 `MAX_ATTACHMENT_TOTAL_BYTES`（见下面那段注释）。 */
 const MAX_ATTACH_TOTAL_BYTES = MAX_ATTACHMENT_TOTAL_BYTES
@@ -164,7 +164,10 @@ export function saveFileAttachments(options: {
   const sessionDir = path.join(options.dir, safeSegment(options.sessionId, 'session'))
   const written: SavedFile[] = []
   try {
-    fs.mkdirSync(sessionDir, { recursive: true })
+    // 目录也走凭据级端口（0700）：README 硬线②写着"附件目录"也在那个 0600 世界里，
+    // 而这里原来是 `mkdirSync(dir, {recursive:true})` ⇒ 典型 umask 下是 0755，
+    // 别的本地用户能列出用户上传的文件名。见 secure-file.ts 的 ensureSecureDir。
+    ensureSecureDir(sessionDir)
     for (const [i, one] of decoded.entries()) {
       // 空名字兜底成按序号的通用名：手机那头可能给一个只有扩展名的文件，
       // 收敛之后就什么都不剩了。

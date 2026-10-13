@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   chmodEffective,
+  ensureSecureDir,
   resetSecureFileWarnings,
   safeFileName,
   secureFileWarnCount,
@@ -29,6 +30,9 @@ import {
   writeSecure,
 } from '../src/platform/secure-file.js'
 import { skipUnlessPosix } from './test-platform.js'
+import { saveFileAttachments } from '../src/shell/uploads.js'
+import { PairStore } from '../src/shell/pair-store.js'
+import { writeStoredHostToken } from '../src/shell/claim-token.js'
 
 const POSIX_ONLY = { skip: process.platform === 'win32' ? 'win32 没有 POSIX 权限位：chmod 只切只读位' : false }
 function tempDir(): string {
@@ -171,4 +175,143 @@ test('反向判据：把保留名检查去掉，上面那条会立刻红', () =>
   const bare = (n: string) => n.replace(/[^A-Za-z0-9._-]/g, '-')
   assert.equal(bare('CON'), 'CON', '没有保留名规则时它原样通过 ⇒ 判据确实抓得住这个洞')
   assert.notEqual(safeFileName('CON'), 'CON')
+})
+
+/**
+ * **目录**也走凭据级端口（2026-10-13 第六轮 review 补的一条真缺陷）。
+ *
+ * ## 那条缺陷
+ *
+ * 落盘端口把**文件**收成 0600，而三处**敏感目录**都是 `mkdirSync(dir, { recursive: true })`
+ * ——不带 `mode` ⇒ 用进程 umask，典型 **0755**：
+ * - `~/.dsh/dsh-remote-control/`（会话 id、附件文件名）
+ * - 配对密钥簿目录（里面是**每个会话的 PSK**）
+ * - 附件目录（用户上传的文件名，本身就说明了内容）
+ *
+ * 文件内容仍读不到（0600），泄露的是**文件名**；而 umask 宽松时（容器 / 自建服务常见
+ * `UMask=0000`）目录会变 0777 ⇒ 别的本地用户能在里面**删/替换**文件。
+ *
+ * 而 README 的「设计上的三条硬线」第 2 条写着这些**都在**那个 0600 世界里 ⇒ 那句话当时不成立。
+ *
+ * ## 两条容易写漏的
+ *
+ * ① `mode` **只在创建那一刻生效**，而 `recursive: true` 遇到已存在的目录直接返回
+ *    ⇒ 一条 0755 的**老**目录永远收不紧。必须 `mkdir({mode})` **再** `chmod`（下面第二条判据钉它）。
+ * ② win32 上 `chmod` 只切只读位、目录权限语义不存在 ⇒ 那里跳过 chmod，
+ *    **不假装生效**（与文件那条 warn 的纪律同源，但目录权限归 ACL 管，不发警告）。
+ */
+test('POSIX：ensureSecureDir 建出来的目录是 0700', POSIX_ONLY, () => {
+  const root = tempDir()
+  try {
+    const dir = path.join(root, 'nested', 'deeper')
+    ensureSecureDir(dir)
+    assert.equal(
+      statSync(dir).mode & 0o777,
+      0o700,
+      `目录权限应是 0700，实得 ${(statSync(dir).mode & 0o777).toString(8)}`,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('POSIX：已存在的 0755 老目录会被**收紧**（"mode 只在创建那一刻生效"那个陷阱）', POSIX_ONLY, () => {
+  const root = tempDir()
+  try {
+    const dir = path.join(root, 'legacy')
+    mkdirSync(dir, { recursive: true })
+    chmodSync(dir, 0o755)
+    assert.equal(statSync(dir).mode & 0o777, 0o755, '夹具自检：先造成一个 0755 的目录')
+    ensureSecureDir(dir)
+    assert.equal(
+      statSync(dir).mode & 0o777,
+      0o700,
+      '老目录没收紧 —— 只 mkdir({mode}) 是不够的（已存在的目录不会改权限）',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('POSIX：三个敏感目录的创建点都走了这个端口（父目录 0700，而不只是文件 0600）', POSIX_ONLY, () => {
+  // ① 附件目录（README 硬线②点名的"附件目录"）
+  const uploadsRoot = tempDir()
+  try {
+    const saved = saveFileAttachments({
+      files: [{ name: 'report.pdf', data: Buffer.from('hello').toString('base64') }],
+      dir: uploadsRoot,
+      sessionId: 'ses_abc',
+    })
+    assert.equal(saved.ok, true, `夹具自检：附件应当落盘成功（${saved.ok ? '' : saved.message}）`)
+    if (saved.ok) {
+      assert.equal(
+        statSync(saved.dir).mode & 0o777,
+        0o700,
+        `附件目录权限应是 0700，实得 ${(statSync(saved.dir).mode & 0o777).toString(8)} —— 别人能列出用户上传的文件名`,
+      )
+      assert.equal(statSync(saved.saved[0]!.path).mode & 0o777, 0o600, '夹具自检：文件本身仍是 0600')
+    }
+  } finally {
+    rmSync(uploadsRoot, { recursive: true, force: true })
+  }
+
+  // ② 配对密钥簿目录（里面是每个会话的 PSK）
+  const psRoot = tempDir()
+  try {
+    const store = new PairStore({ file: path.join(psRoot, 'conversations-h.json'), hostId: 'drc-test' })
+    store.save(
+      [{ id: 'c_persist_aaaa', psk: 'AgAAAAAAAAAAAAAAAAAAAA==', seqHost: 3, createdAt: 1, lastActivityAt: 2 }],
+      1_700_000_000_000,
+    )
+    assert.equal(
+      statSync(psRoot).mode & 0o777,
+      0o700,
+      `密钥簿目录权限应是 0700，实得 ${(statSync(psRoot).mode & 0o777).toString(8)} —— 别人能列出会话 id`,
+    )
+  } finally {
+    rmSync(psRoot, { recursive: true, force: true })
+  }
+
+  // ③ host-token 所在目录（凭据本身）
+  const tokenRoot = tempDir()
+  try {
+    const file = path.join(tokenRoot, 'nested', 'host-token.json')
+    assert.equal(
+      writeStoredHostToken(file, {
+        token: 'a'.repeat(48),
+        serverUrl: 'wss://x.invalid',
+        source: 'claimed',
+        now: 1,
+        hostId: 'drc-1',
+      }),
+      true,
+      '夹具自检：令牌应当写成功',
+    )
+    assert.equal(
+      statSync(path.dirname(file)).mode & 0o777,
+      0o700,
+      `令牌目录权限应是 0700，实得 ${(statSync(path.dirname(file)).mode & 0o777).toString(8)}`,
+    )
+  } finally {
+    rmSync(tokenRoot, { recursive: true, force: true })
+  }
+})
+
+test('POSIX：属主已收紧过的目录**不许被改动**（0500 只读要仍然是只读）', POSIX_ONLY, () => {
+  const root = tempDir()
+  try {
+    const dir = path.join(root, 'readonly')
+    mkdirSync(dir, { recursive: true })
+    chmodSync(dir, 0o500)
+    ensureSecureDir(dir)
+    assert.equal(
+      statSync(dir).mode & 0o777,
+      0o500,
+      '插件把运维刻意设的只读目录改成了可写 —— 它不该改一个自己没有设过的权限' +
+        '（这条是 pair-store 那条"只读目录要优雅失败"的判据抓出来的）',
+    )
+  } finally {
+    chmodSync(root, 0o700)
+    rmSync(root, { recursive: true, force: true })
+  }
 })

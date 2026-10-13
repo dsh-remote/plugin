@@ -821,12 +821,16 @@ export class RelayClient {
     if (rejoined && frame.clientId) this.options.onClientRejoined?.(frame.sessionId, frame.clientId)
     const records = frame.items ?? (frame.ciphertext === undefined ? [] : [{ ciphertext: frame.ciphertext }])
     let decryptedAny = false
+    let undecryptableInFrame = 0
     for (const record of records) {
       if (!base64Text.safeParse(record.ciphertext).success) continue
       const decrypted = open<unknown>(conversation.kC2H, { ciphertext: record.ciphertext })
       if (!decrypted) {
-        // 解不开 = 这端已经没有对应密钥，交给"两次就作废"那条出口。
-        this.noteUndecryptable(frame.sessionId)
+        // ⚠️ **一帧记一次，不逐项记**（2026-10-13 review，与 mp 侧同一条契约）。
+        // 这里只做标记，循环之后统一记一次 —— 批量帧下逐项各记一次的话，
+        // **一条**含两个坏项的帧就能把"两次机会"烧光、直接作废配对，
+        // 而手机侧（`core/client.js` 的 enc-batch 分支）修的正是同一个病。
+        undecryptableInFrame += 1
         continue
       }
       /**
@@ -855,6 +859,26 @@ export class RelayClient {
       this.options.onCommand(frame.sessionId, cmd, (frame as { clientId?: string }).clientId)
     }
     // 有实际收发就不算"闲置"：剪枝看的是最后活动时刻，不是创建时刻。
+    /**
+     * 与 mp 侧同一条契约（`core/client.js` 的 enc-batch 分支，那里有完整取证）：
+     *
+     * - **有形状合法却解不开的、且一条都没解开** ⇒ 这帧真的坏了，记**一次**
+     *   （不论坏了几条——一条批量帧不该比一条单帧更"坏"）；
+     * - **混合帧**（至少一条 MAC 过了）⇒ **不计**：密钥被证明是对的，
+     *   坏项只是损坏，不是密钥不匹配（mp 侧：`tried > 0 && !opened` 才记）。
+     * - 全是形状不对的（base64 都不是）⇒ 上面循环里已经 skip，一次都不记。
+     *
+     * 旧行为是逐项记：一条含 2 个坏项的批量帧当场作废配对，手机被迫重扫。
+     */
+    if (undecryptableInFrame > 0) {
+      this.options.log('inbound frame had undecryptable items', {
+        conversationId: frame.sessionId,
+        undecryptable: undecryptableInFrame,
+        total: records.length,
+        counted: !decryptedAny,
+      })
+    }
+    if (undecryptableInFrame > 0 && !decryptedAny) this.noteUndecryptable(frame.sessionId)
     if (decryptedAny) {
       conversation.lastActivityAt = this.options.clock.now()
       this.options.onBookActivity?.()

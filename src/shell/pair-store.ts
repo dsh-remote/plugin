@@ -25,11 +25,11 @@
  * 3. **读不到 / 写不进 / 形状不认识，一律降级成"没有会话"，绝不抛**。插件起不来比丢配对更糟
  *    （`index.ts` 的红线：apply() 不许向外抛）。
  */
-import { mkdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { z } from 'zod'
-import { writeSecure } from '../platform/secure-file.js'
+import { ensureSecureDir, writeSecure } from '../platform/secure-file.js'
 
 /** 一条可持久化的会话记录。**刻意不含 `clientIds`**：成员表是"此刻谁连着"的瞬时态，
  *  进程重启后那一刻一定是空的（没人连着主机）。落盘它会让主机一启动就以为"有人在听"，
@@ -157,7 +157,9 @@ export class PairStore {
     if (!file) return false
     const body = JSON.stringify({ version: 1, hostId, savedAt: now, conversations }) + '\n'
     try {
-      mkdirSync(path.dirname(file), { recursive: true })
+      // 0700：这个目录里是**每个会话的 PSK**。文件本身 0600，但目录 0755 时
+      // 别的本地用户能列出会话 id（见 secure-file.ts 的 ensureSecureDir）。
+      ensureSecureDir(path.dirname(file))
       // 落盘模式收在 `platform/secure-file.ts`（A2）。这个目录里同时住着全部会话的
       // **PSK**——它是整台主机最敏感的一个文件。
       writeSecure(file, body)
