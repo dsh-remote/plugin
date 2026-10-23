@@ -1,0 +1,1080 @@
+/**
+ * 设置页里的「远程控制」分区（2026-08-09 新增）。
+ *
+ * ## 为什么要有这一页
+ *
+ * pairing 的入口原来是那颗 pill，而它挂在 `conversation.composer.dock` 上——宿主那条渲染
+ * 条件是 `sessionId !== void 0`（`app.asar` 原文：`variant === "composer" && input !==
+ * void 0 && sessionId !== void 0 ? renderSlot("conversation.composer.dock", {}) : null`）。
+ * ⇒ **新会话那一屏不渲染这个槽位**，从零开始的人（web profile 尤其明显：打开浏览器、
+ * 一个会话都没有）找不到任何出码入口。
+ *
+ * `settings.section` 是 root 作用域：**不需要会话**，两端（桌面 App 与 web profile）都渲染它
+ * （2026-10-09 运行时实拉两端的模块核对过）。所以这一页是配对入口的正门；pill 仍在，
+ * 它是"正在会话里、顺手要配对"的那条近路。
+ *
+ * ## 形状上的三条决定，都有据
+ *
+ * 1. **内容全部走 `pill.ts` 已经导出的那几个函数**（`panelViewFor` 判成败、`pillLabel`
+ *    出抬头那句、`secondsText` 出倒计时）。
+ *    ⚠️ 2026-10-11：`relayRow`/`versionRow`/`waitingRow` 随页脚一起删除 —— 它们只服务于那三行。
+ *    这里**一行决策逻辑都不重写**：同一件事在两个地方各判一次，迟早会在一个地方改、
+ *    另一个地方不改（本仓 F2 那条纪律就是从这类事故里长出来的）。
+ * 2. **React 只给一个挂载点**（`<div ref>`），DOM 命令式地建——与 pill 同一套做法，
+ *    这样"码过期要换一张""退出配对之后要重画"这种时序都能写成可测的分支。
+ * 3. **任何一步抛出都只留一行日志**，绝不把异常抛进宿主：宿主的槽位渲染器遇到抛出的组件
+ *    会把这一条**整块清空**（`slot entry crashed in '<slot>'`），那比少一页难查得多。
+ *
+ * ## 2026-10-09 的重排（用户："排版还是比较乱……大空间放小内容"）
+ *
+ * 两件事一起修：
+ *
+ * 1. **那段 CSS 从来就没生效过。** `pill.ts` 的 `.drc-sec*` 整段把 `hostVar(...)`
+ *    写成了**字面文本**（少一对美元花括号），浏览器一条声明都不认——卡片没有边框、
+ *    没有底色、没有圆角，标题与按钮全无色。结构与类名都对，屏幕上是一列裸文本。
+ *    ⇒ 换成插值，并补一条判据（`e2e/design-tokens.test.mjs`）钉死这个形状。
+ * 2. **一列改成两栏。** 原来每一块都占满 720px 而内容只有 200px 宽。
+ *
+ * ## 3.2 的定形（用户截图三条标注之后）
+ *
+ * **整页只有一张码**——`pairing.png`（小程序码）。设置页收成两栏并排、等高：
+ * 左栏「配对」那张卡（码 + 6 位数字 + 没配好时的「允许」），右栏「进阶」。两栏各半。
+ * 原来右栏那张「手机端」静态入口码整块删掉（3.2 删了 `/miniprogram.jpg` 与
+ * `/pair` 两条路由）：屏幕上只能有一种码，扫了必须真的能配上这台主机。
+ */
+import {
+  createMpCodeImage,
+  ensureStyle,
+  mpCodeLoadingBox,
+  NEW_ROUTE,
+  STATUS_ROUTE,
+  UNPAIR_ROUTE,
+  panelViewFor,
+  pairingCount,
+  pillLabel,
+  relayStateRow,
+  secondsText,
+  warnSection,
+  type CreateElement,
+  type PanelView,
+  type PillDeps,
+} from './pill.js'
+import { resolveHostUrl } from './host-url.js'
+
+/** 槽位名：root 作用域，设置页左侧导航的一项 + 右侧分区（两端都渲染）。 */
+const SETTINGS_SLOT = 'settings.section'
+/** 条目 id 必须唯一：宿主按它做 `only: active` 的路由与导航高亮。 */
+const SETTINGS_ID = 'dsh-remote-control'
+/** 排在宿主自带分区之后。数字本身不重要，重要的是**稳定**：变一次用户就找不到它了。 */
+const SETTINGS_ORDER = 30
+/**
+ * 导航上那一行字。
+ *
+ * ⚠️ 宿主自己的分区走 `label: () => ctx.locale.bind(ns)('nav')`（见
+ * `dsh-client-ui-agent-preset` 的注册原文）。我们这一半是**纯 JS、没有 locale 命名空间**
+ * （`ctx.locale.register` 要同时给 zh/en 两份词典，属于另一件事），所以这里先给字面量，
+ * 由 `e2e/plugin-settings-section` 钉住"它非空且不是英文键名"。
+ */
+const SETTINGS_LABEL = '远程控制'
+
+/**
+ * 设置页「进阶」那一栏的读写路由（GET 读 / POST 写）。
+ *
+ * ⚠️ **逐字等于宿主侧 `pill/config-routes.ts` 的 `PLUGIN_CONFIG_ROUTE`**，而这里刻意
+ * **不从那个模块 import**：它是 Node 侧的（import 了 `node:http` 与 `hostIsLoopback`），
+ * 打进浏览器产物会把整条宿主路由链拖进去。两边一致这件事由
+ * `client-bundle.test.ts` 的那条反证判据守着（它把产物里的 `/plugins/*` 字面量全列出来比）。
+ */
+export const CONFIG_ROUTE = '/plugins/dsh-remote-control/config'
+
+/**
+ * 「进阶」那一栏**自带**的一张小样式表。
+ *
+ * 为什么不并进 `pill.ts` 那张：`pill.ts` 是**只读**的（用户裁决：那颗 pill 只负责
+ * 自动注册与展示，不参与配置），而这一栏是 2026-10-11 新加的。两张表各自按
+ * `data-plugin-css` 对齐内容，互不覆盖。
+ *
+ * ⚠️ 两处形态纪律照 `pill.ts` 那张表：**不许出现反引号**（模板会当场截断），
+ * 颜色一律走宿主变量（`hostVar`）而不是裸色号。
+ */
+const ADV_STYLE_ID = 'dsh-remote-control/settings.css'
+/** 宿主变量的取值形态：以 `--dsw-alias-*` 为名、带回退值。与 `pill.ts` 的 `hostVar` 同一形状。 */
+const hostVar = (name: string, fallback: string): string => `var(--dsw-alias-${name}, ${fallback})`
+const ADV_CSS = `
+.drc-adv-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 12px;
+  align-items: center; }
+.drc-adv-label { font-size: 13px; line-height: 20px; color: ${hostVar('label-secondary', '#6b7280')}; }
+.drc-adv-input { appearance: none; box-sizing: border-box; width: 100%; min-width: 0; font: inherit;
+  font-size: 13px; line-height: 20px; padding: 4px 8px; border-radius: 8px;
+  border: 1px solid ${hostVar('border-l2', 'rgba(128,128,128,.35)')};
+  background: ${hostVar('bg-layer-3', 'transparent')};
+  color: ${hostVar('label-primary', 'inherit')}; }
+.drc-adv-input:focus-visible { outline: 2px solid ${hostVar('brand-primary', '#4d6bfe')}; outline-offset: 1px; }
+.drc-adv-note { margin: 0; font-size: 12px; line-height: 1.6; color: ${hostVar('label-tertiary', '#8a8f98')}; }
+.drc-adv-note[data-kind="failed"] { color: ${hostVar('state-error-primary', '#d92d20')}; }
+.drc-adv-note[data-kind="ok"] { color: ${hostVar('label-secondary', '#6b7280')}; }
+/* 确认码那一块（2026-10-21）：数字要大到"扫之前先看见"，与倒计时同一档强调色。 */
+.drc-sec-sas { margin: 0; font-size: 28px; line-height: 36px; font-weight: 600;
+  letter-spacing: 4px; font-variant-numeric: tabular-nums;
+  color: ${hostVar('label-primary', 'inherit')}; }
+.drc-sec-sasnote { margin: 0 0 8px; font-size: 12px; line-height: 18px;
+  color: ${hostVar('label-secondary', '#6b7280')}; }
+.drc-sec-fold { margin-top: 10px; }
+.drc-sec-fold > summary { cursor: pointer; font-size: 12px; line-height: 18px;
+  color: ${hostVar('label-tertiary', '#8a8f98')}; }
+.drc-sec-foldimg { display: block; width: 148px; height: 148px; margin: 8px 0 0; }
+/*
+ * 两列容器（2026-10-22）。
+ *
+ * 为什么有它：状态轮询每 2 秒重画一次，而"进阶"那张卡里有两个 <input>。
+ * 原来那张卡住在每次重建的 grid 里 ⇒ 每 2 秒被摘出 DOM 再插回去 ⇒ **焦点必然丢**。
+ * ⇒ 把它挪进**常驻**的右列，这一列一次都不重画。
+ *
+ * ⚠️ "两卡等高"（用户明确要的，2026-10-21）原来是 grid 的 align-items:stretch 给的；
+ * 拆出列容器后由这里的 flex 接管 —— 视觉不变。
+ */
+.drc-sec-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.drc-sec-col > .drc-sec-card { flex: 1 1 auto; }
+`
+
+/** 注入「进阶」那张小样式表（幂等：已插过就按内容对齐；与 `ensureStyle` 同一套做法）。 */
+function ensureAdvancedStyle(doc: Document): void {
+  try {
+    const existing = doc.querySelector(`style[data-plugin-css="${ADV_STYLE_ID}"]`)
+    // ⚠️ 还要求属性**逐字对上**：夹具（`FakeDocument.querySelector`）对任何含
+    // `data-plugin-css` 的选择器都会返回那份预置的旧表 —— 不校验属性的话，这里会把
+    // pill 那张表的内容改写成这一张（真 DOM 上不会，但判据会因此变成碰运气）。
+    if (existing && existing.getAttribute('data-plugin-css') === ADV_STYLE_ID) {
+      existing.setAttribute('data-plugin', SETTINGS_ID)
+      if (existing.textContent !== ADV_CSS) existing.textContent = ADV_CSS
+      return
+    }
+    const element = doc.createElement('style')
+    element.setAttribute('data-plugin-css', ADV_STYLE_ID)
+    element.setAttribute('data-plugin', SETTINGS_ID)
+    element.textContent = ADV_CSS
+    doc.head.appendChild(element)
+  } catch (error) {
+    warnSection('进阶那一栏的样式注入失败（表单仍可用，只是没排版）', error)
+  }
+}
+
+/** `GET /config` 的回答（宿主侧 `EffectivePluginConfig` 的同形）。**不含 token 真值。** */
+interface ConfigAnswer {
+  serverUrl?: unknown
+  defaultServerUrl?: unknown
+  serverUrlSource?: unknown
+  hostTokenSet?: unknown
+  hostTokenShape?: unknown
+  hostTokenSource?: unknown
+  userConfigFile?: unknown
+}
+
+/** 来源的中文说法。认不出的来源一律照原样印出来（比"未知"更有用于排错）。 */
+const SOURCE_TEXT: Record<string, string> = {
+  env: '环境变量',
+  patch: '配置文件（patch）',
+  user: '本页',
+  claimed: '机器自动认领',
+  default: '官方默认',
+  none: '未设置',
+}
+const sourceText = (value: unknown): string => {
+  const key = typeof value === 'string' ? value : ''
+  return SOURCE_TEXT[key] ?? (key === '' ? '未知' : key)
+}
+
+/** 发码/退出配对这两条写路由的 CSRF 判据（宿主侧 `routes.ts` 同一个头）。 */
+const MARKER: Record<string, string> = { 'x-drc-pair': '1' }
+
+interface LooseAnswer {
+  [key: string]: unknown
+}
+
+/** 直接借用那两个函数的入参类型：它们的形状就是"宿主会回什么"的唯一真源。 */
+type NewAnswerShape = Parameters<typeof panelViewFor>[0]
+type StatusShape = Parameters<typeof pillLabel>[0]
+
+/**
+ * 在 `root` 里建出这一页，返回卸载函数。
+ *
+ * 版式是**抬头 + 两栏卡片**：左栏是这台主机（配对卡 + 连接读数），右栏是手机端
+ * （静态的小程序码 + 「怎么用」那一段文档）。窄屏由 CSS 折成一列。
+ * 与 pill 面板同一套类名与配色变量，所以外观随宿主主题走，不会自己长成另一个样子。
+ * 详细的形状与"两张码各自是什么"见下面 `paint` 的注释。
+ */
+function buildSettingsSection(root: Element, deps: PillDeps): () => void {
+  const doc = root.ownerDocument
+  // 自己注入样式：没有会话时 pill 不会挂上，没有人替我们插这张表（见 `ensureStyle` 的注释）。
+  ensureStyle(doc)
+  // 「进阶」那一栏自带的那张小表（与 pill 那张分开，见 `ensureAdvancedStyle` 的注释）。
+  ensureAdvancedStyle(doc)
+  const box = doc.createElement('div')
+  box.className = 'drc-sec'
+  root.appendChild(box)
+
+  /**
+   * ── 常驻骨架（2026-10-22）────────────────────────────────────────────
+   *
+   * ## 为什么要有它
+   * 状态轮询每 2 秒 `paint()` 一次，而 `paint()` 原来做的是
+   * `box.replaceChildren(...children)` —— **整棵子树换掉**。
+   *
+   * 「进阶」那张卡（`advancedCard`）虽然**只建一次**，却被塞进每次重建的 `grid` 里
+   * ⇒ **每 2 秒它被摘出 DOM 再插回去**
+   * ⇒ 里面那两个 `<input>`（中继地址 / 主机口令）的**焦点必然丢**
+   * ⇒ 用户在填表单时，键盘每 2 秒合一次（真机报："输入框一直被页面刷新，焦点一直丢失"）。
+   *
+   * ## 拆法：把"每次都变的"与"带输入框的"分成两棵树
+   * ```
+   * box            ← 常驻，永不换
+   *  ├ topHost     ← 常驻容器，**内部**每次重画（抬头 + 状态条）
+   *  └ grid        ← 常驻
+   *     ├ leftCol  ← 常驻容器，**内部**每次重画（配对那张卡）
+   *     └ rightCol ← 常驻容器，装 advancedCard，**永不重画**
+   * ```
+   * ⇒ 只有 `topHost` / `leftCol` 的**内部**被换
+   * ⇒ 带 input 的那棵树**一个节点都不动** ⇒ 焦点与已输入的内容都保住。
+   *
+   * ⚠️ "两卡等高"原来靠 grid 的 `align-items: stretch`（用户明确要的），
+   * 拆了列容器就由 `.drc-sec-col` 的 flex 接管（见 ADV_CSS）。
+   */
+  const topHost = doc.createElement('div')
+  const grid = doc.createElement('div')
+  grid.className = 'drc-sec-grid'
+  grid.setAttribute('data-two', '1')
+  const leftCol = doc.createElement('div')
+  leftCol.className = 'drc-sec-col'
+  const rightCol = doc.createElement('div')
+  rightCol.className = 'drc-sec-col'
+  grid.appendChild(leftCol)
+  grid.appendChild(rightCol)
+  box.appendChild(topHost)
+  box.appendChild(grid)
+
+  let disposed = false
+  let statusTimer: ReturnType<typeof setInterval> | undefined
+  let countTimer: ReturnType<typeof setInterval> | undefined
+  /** 这张码的墙钟到期时刻（`Date.now()` 口径）。倒计时按它重算，不按节拍递减。 */
+  let expiresAt = 0
+  let status: StatusShape | undefined
+  let view: PanelView = { kind: 'loading' }
+  let expiresInMs = 0
+  /**
+   * 倒计时那一行的引用。**存引用而不是 `querySelector` 找回来**：每次重画都是新节点，
+   * 查回来的可能已经不在树上了；而假 DOM 夹具（`FakeElement`）也没有 `querySelector`。
+   * 与 `pill.ts` 的 `countNode` 同一个理由。
+   */
+  let countNode: HTMLElement | undefined
+  /** 已经发过码没有：决定动作那一排给"刷新"还是"退出配对"。 */
+  let paired = false
+  /**
+   * 挂着的配对授权（小程序码路线，2026-10-21）：手机扫了码、主机还没放行。
+   * 与 pill 同一个字段、同一套断言（"有就显示 6 位 + 允许"），两条路不许分叉。
+   */
+  let lastApproval: { sas: string; remainSec: number } | null = null
+  /**
+   * ── 「进阶」那一栏（自部署地址 / token，2026-10-11 加）────────────────────
+   *
+   * 目标形态是「装完就能用」：默认走官方中继、token 自动认领。这一栏留给**自部署与
+   * 自定义**的人——它必须留着：默认改成官方之后**自部署用户会连错**
+   * （用户裁决：自定义项不是可选项）。
+   *
+   * ⚠️ 这张卡**只建一次**（`advancedCard`），不跟着 `paint()` 重建：
+   * 状态轮询每 2 秒 `paint()` 一次，重建会把用户正在输入的内容抹掉。
+   */
+  let cfg: ConfigAnswer | undefined
+  let advancedCard: HTMLElement | undefined
+  let advUrlInput: HTMLInputElement | undefined
+  let advTokenInput: HTMLInputElement | undefined
+  let advHint: HTMLElement | undefined
+  let advNote: HTMLElement | undefined
+
+  /**
+   * 小程序码那张图的加载态（`loading` / `ready` / `failed`）——**与 pill 同一份实现**
+   * （见 `pill.ts` 的 `createMpCodeImage`）：同一张图、同一段等待、同一句话，
+   * 两处各判一次迟早一处改了另一处没改。
+   *
+   * 状态一变就重画：图到了要把占位收掉，取不到要把「正在转」换成一句人话。
+   * ⚠️ 这个回调是**浏览器**在 `load` / `error` 事件里调的，它可能在我们没在等的时候来
+   * ⇒ 重画必须自己站得住（`disposed` 之后不许再动屏）。
+   */
+  const mpCode = createMpCodeImage(doc, () => {
+    if (!disposed) paint()
+  })
+
+  const fail = (message: string, error?: unknown): void => {
+    warnSection(message, error)
+    deps.warn?.(message)
+  }
+
+  const text = (tag: string, className: string, content?: string): HTMLElement => {
+    const node = doc.createElement(tag)
+    node.className = className
+    if (content !== undefined) node.textContent = content
+    return node
+  }
+
+  /** 每条请求的超时信号；老环境拿不到就不带，不让这里抛出去。 */
+  const signal = (): AbortSignal | undefined => {
+    try {
+      const timeouts = (globalThis as { AbortSignal?: { timeout?: (ms: number) => AbortSignal } }).AbortSignal
+      return typeof timeouts?.timeout === 'function' ? timeouts.timeout(8000) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  const call = async (
+    input: string,
+    init: Record<string, unknown>,
+  ): Promise<{ ok: boolean; status: number; body: LooseAnswer }> => {
+    try {
+      const response = (await deps.fetchImpl(input, { ...init, signal: signal() })) as
+        { ok?: boolean; status?: number; json?: () => Promise<unknown> } | undefined
+      const statusCode = typeof response?.status === 'number' ? response.status : 0
+      let body: LooseAnswer = {}
+      try {
+        const parsed = await response?.json?.()
+        if (parsed && typeof parsed === 'object') body = parsed as LooseAnswer
+      } catch {
+        /* 没有 body 也是合法回答（204）：交给 panelViewFor 判 */
+      }
+      return { ok: response?.ok === true, status: statusCode, body }
+    } catch (error) {
+      fail('请求失败', error)
+      return { ok: false, status: 0, body: {} }
+    }
+  }
+
+  /** 取状态：只读，用于抬头那句与三行事实。 */
+  const loadStatus = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(`${STATUS_ROUTE}?t=${Date.now()}`, { method: 'GET' })
+    if (disposed) return
+    if (answer.ok && answer.body && typeof answer.body === 'object') {
+      status = answer.body as StatusShape
+      paired = pairingCount(status) > 0
+      /**
+       * 那 6 位确认码（2026-10-21）：**两个来源，谁先有值用谁**。
+       *  · `pairApproval` —— **还挂着**的申请（还没放行）。
+       *  · `lastPairApproval` —— **最近放行**的那一次（主机改自动放行之后，
+       *    放行是"取走即焚"，前者立刻变 null；但那 6 位数字还要留给用户对照一会儿：
+       *    手机上弹窗一串、主机屏幕上一串，两处一致才说明中间没人换公钥）。
+       *
+       * 形状判据与 pill 那条一致——只认 `sas` 是字符串，别的（缺字段 / null）一律当"没有"。
+       */
+      const readApproval = (raw: unknown): { sas: string; remainSec: number } | null =>
+        raw && typeof raw === 'object' && typeof (raw as { sas?: unknown }).sas === 'string'
+          ? {
+              sas: (raw as { sas: string }).sas,
+              remainSec:
+                typeof (raw as { remainSec?: unknown }).remainSec === 'number'
+                  ? (raw as { remainSec: number }).remainSec
+                  : 0,
+            }
+          : null
+      const body = answer.body as {
+        pairApproval?: { sas?: unknown; remainSec?: unknown } | null
+        lastPairApproval?: { sas?: unknown; remainSec?: unknown } | null
+      }
+      lastApproval = readApproval(body.pairApproval) ?? readApproval(body.lastPairApproval)
+      paint()
+    }
+  }
+  const mint = async (): Promise<void> => {
+    if (disposed) return
+    view = { kind: 'loading' }
+    /**
+     * 重发码之前把**上一张失败的那张**丢掉（成功的那张留着）。
+     * 与 pill 同一条理由：发码是幂等的，重试拿回的是同一个 src，
+     * 而那个 src 刚才失败过 ⇒ 不丢掉就只是把同一张失败的图再摆一次。
+     */
+    mpCode.invalidate()
+    paint()
+    const answer = await call(NEW_ROUTE, { method: 'POST', headers: MARKER })
+    if (disposed) return
+    view = panelViewFor(answer.body as NewAnswerShape, answer.status)
+    expiresInMs = view.kind === 'qr' ? view.expiresInMs : 0
+    // 墙钟口径（2026-10-23）：原来倒计时是"每拍减 1000"，后台冻结一拍就漂
+    //（pill 的 `syncCountdown` 注释钉过同款缺陷）——显示"还有 2 分钟"而码其实已过期，
+    // 用户照着扫就是扫一张不作数的图。
+    expiresAt = Date.now() + expiresInMs
+    paint()
+    startCountdown()
+  }
+
+  /** 退出配对：作废全部配对通道，然后回到"未配对 + 一张新码"。 */
+  const unpair = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(UNPAIR_ROUTE, { method: 'POST', headers: MARKER })
+    if (disposed) return
+    if (!answer.ok) {
+      view = { kind: 'failed', detail: `HTTP ${answer.status}` }
+      paint()
+      return
+    }
+    paired = false
+    await loadStatus()
+    if (!disposed) await mint()
+  }
+
+  const startCountdown = (): void => {
+    if (countTimer !== undefined) clearInterval(countTimer)
+    if (view.kind !== 'qr' || expiresInMs <= 0) {
+      countTimer = undefined
+      return
+    }
+    countTimer = setInterval(() => {
+      // 墙钟重算（同 pill 的 `syncCountdown`）：单拍走飞（后台冻结）也自愈——
+      // 下一拍按墙钟一次补回全部欠账，绝不出现"屏上还有时间、码已经死了"。
+      expiresInMs = Math.max(0, expiresAt - Date.now())
+      if (expiresInMs <= 0) {
+        expiresInMs = 0
+        // **先停表再补码**：不自清的话下一拍又会 `<= 0` 又 `mint()`（每秒一发）。
+        // `mint()` 落地后 `startCountdown()` 自己会另起一拍。
+        if (countTimer !== undefined) {
+          clearInterval(countTimer)
+          countTimer = undefined
+        }
+        // 过期就自己换一张：留在废码上比没有码更糟（用户会一直扫一张不作数的图）。
+        void mint()
+        return
+      }
+      if (countNode) {
+        countNode.textContent = `${secondsText(expiresInMs)}后过期`
+        if (expiresInMs <= 30_000) countNode.setAttribute('data-kind', 'urgent')
+      }
+    }, 1000)
+  }
+
+  /**
+   * 一张卡片：标题 + 任意内容。四张卡的边框/底色/圆角/内边距全走同一套类。
+   *
+   * `trailing` 放进**标题行右端**（2026-10-09 用户定的：动作放卡片右上角比放底部好看）。
+   * ⚠️ 标题行是 `.drc-sec-headrow` 而不是标题自己：动作与标题必须同一行，
+   * 而 `.drc-sec-actions` 的 `margin-left:auto` 靠的是 flex 行上下文。
+   * 传了 `trailing` 的那张卡标题会带这个类——判据（`client-bundle.test.ts`）按 className
+   * 精确匹配，所以**不要**再给标题叠加第二个类名。
+   */
+  const card = (heading: string, trailing?: HTMLElement): HTMLElement => {
+    const node = doc.createElement('section')
+    node.className = 'drc-sec-card'
+    const title = text('h3', 'drc-sec-heading', heading)
+    if (!trailing) {
+      node.appendChild(title)
+      return node
+    }
+    // ⚠️ 标题与动作必须**同在一个 flex 行**里（.drc-sec-headrow），动作才能靠
+    // margin-left:auto 贴到右端。第一版把 `.drc-sec-headrow` 直接当标题的类名用，
+    // 于是 flex 行挂在 h3 自己身上、动作成了它的兄弟 —— 那一行根本没形成，
+    // 动作仍旧掉到卡片底部。判据见 client-bundle.test.ts「动作在卡片右上角」那条。
+    const row = doc.createElement('div')
+    row.className = 'drc-sec-headrow'
+    row.appendChild(title)
+    trailing.className = 'drc-sec-actions'
+    row.appendChild(trailing)
+    node.appendChild(row)
+    return node
+  }
+
+  /** 按钮：`kind: 'primary'` 是填色的主动作，其余是次级。 */
+  const button = (label: string, onClick: () => void, kind?: 'primary'): HTMLElement => {
+    const node = doc.createElement('button')
+    node.type = 'button'
+    node.className = 'drc-sec-btn'
+    if (kind) node.setAttribute('data-kind', kind)
+    node.textContent = label
+    node.addEventListener('click', onClick)
+    return node
+  }
+
+  // ── 进阶那一栏（自部署地址 / token）──────────────────────────────────
+
+  /** 状态行：最近一次动作的结果（保存失败那句话就是唯一的现场）。 */
+  const setNote = (message: string, kind?: 'ok' | 'failed'): void => {
+    if (!advNote) return
+    advNote.textContent = message
+    /**
+     * ⚠️ 不用 `removeAttribute`：本仓的假 DOM 夹具（`client-bundle.test.ts` 的 FakeElement）
+     * 没有那个方法，写了会在判据里抛错。空串属性足以表达"没有 kind"——
+     * CSS 里那两条选择器都带具体取值（`[data-kind="failed"]`）。
+     */
+    advNote.setAttribute('data-kind', kind ?? '')
+  }
+
+  /** 把 `GET /config` 的回答铺到表单上（**不重建那张卡**，否则输入内容会被抹掉）。 */
+  const showConfig = (answer: ConfigAnswer): void => {
+    cfg = answer
+    if (advUrlInput) advUrlInput.value = typeof answer.serverUrl === 'string' ? answer.serverUrl : ''
+    if (advTokenInput) {
+      advTokenInput.value = ''
+      advTokenInput.setAttribute(
+        'placeholder',
+        answer.hostTokenSet === true ? '已设置，留空不改动' : '未设置（官方中继会自动认领）',
+      )
+    }
+    if (advHint) {
+      const locked = answer.serverUrlSource === 'env' || answer.serverUrlSource === 'patch'
+      const shape =
+        typeof answer.hostTokenShape === 'string' && answer.hostTokenShape !== '' ? `（${answer.hostTokenShape}）` : ''
+      advHint.textContent =
+        `中继地址：${sourceText(answer.serverUrlSource)}　口令：${sourceText(answer.hostTokenSource)}${shape}` +
+        (locked ? '。当前地址由 patch / 环境变量决定，在这一页保存会被它们盖住' : '')
+    }
+  }
+
+  /** 读一次当前配置。读不到**不重画整页**：那一栏就地说明白，配对那条路一个字不受影响。 */
+  const loadConfig = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, { method: 'GET' })
+    if (disposed) return
+    if (answer.ok && answer.body && typeof answer.body.serverUrl === 'string') {
+      showConfig(answer.body as ConfigAnswer)
+      return
+    }
+    // 老版宿主没有这一条路由（404）：这一栏就是"用不了"，说清楚而不是留一个空表单。
+    setNote(`读不到当前配置（HTTP ${answer.status}）——这一版宿主没有 /config 路由`, 'failed')
+  }
+
+  /**
+   * 保存。**只提交改动过的那一项**：口令输入框默认是空的（占位符说明"已设置"），
+   * 无条件提交就等于每保存一次都把口令清空一次 —— 那是最容易犯、后果最重的一种。
+   */
+  const submitAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const url = advUrlInput?.value.trim() ?? ''
+    const token = advTokenInput?.value.trim() ?? ''
+    const payload: Record<string, string> = {}
+    /**
+     * 与当前生效值不同 ⇒ 提交；**空串是有意义的值**（= 删掉这一项、回落到下一层）。
+     *
+     * ⚠️ 但**还没读到当前值**（`cfg` 未定义：GET 还在路上、或它失败了）时，
+     * 空串**不算**一次改动 —— 那时输入框本来就是空的，把它当成"用户清空了地址"
+     * 会把盘上写过的自部署地址**静默删掉**（用户只是填了个口令就点了保存）。
+     * 这种"读不到"的场合只提交非空值：那是用户真的填进去的。
+     */
+    if (cfg) {
+      if (url !== (typeof cfg.serverUrl === 'string' ? cfg.serverUrl : '')) payload.serverUrl = url
+    } else if (url !== '') {
+      payload.serverUrl = url
+    }
+    if (token !== '') payload.hostToken = token
+    if (Object.keys(payload).length === 0) {
+      setNote('没有改动', undefined)
+      return
+    }
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      const detail = String(answer.body.detail ?? answer.body.error ?? `HTTP ${answer.status}`)
+      setNote(`保存失败：${detail}`, 'failed')
+      return
+    }
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已保存。中继地址与口令在**下次启动**时生效（重启 Harness）。', 'ok')
+  }
+
+  /** 只清口令（地址不动）。走"空串 = 删掉这一项"那条语义，宿主侧不用另开一条接口。 */
+  const clearTokenAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify({ hostToken: '' }),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      setNote(`清除失败：HTTP ${answer.status}`, 'failed')
+      return
+    }
+    if (advTokenInput) advTokenInput.value = ''
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已清除自定义口令。重启 Harness 后这台主机会回到环境变量 / 配置文件 / 自动认领那一枚。', 'ok')
+  }
+
+  /** 恢复默认：把这一页写的两项都删掉（自部署用户改回官方中继、或清掉自己填的口令）。 */
+  const resetAdvanced = async (): Promise<void> => {
+    if (disposed) return
+    const answer = await call(CONFIG_ROUTE, {
+      method: 'POST',
+      headers: { ...MARKER, 'content-type': 'application/json' },
+      body: JSON.stringify({ serverUrl: '', hostToken: '' }),
+    })
+    if (disposed) return
+    if (!answer.ok) {
+      setNote(`恢复失败：HTTP ${answer.status}`, 'failed')
+      return
+    }
+    if (answer.body.config && typeof answer.body.config === 'object') showConfig(answer.body.config as ConfigAnswer)
+    setNote('已恢复默认（这一页写的自定义项都删掉了）。重启 Harness 后生效。', 'ok')
+  }
+
+  /**
+   * 建这一栏的 DOM。**只调用一次**（`paint()` 里懒建之后复用同一个节点）。
+   *
+   * 它刻意长得像"另一张卡"而不是并进配对卡：这一栏是**给进阶玩家的**，
+   * 摆在配对卡里会让"我该不该动它"变成每个用户都要回答的问题。
+   */
+  const buildAdvanced = (): HTMLElement => {
+    const section = card('进阶：自部署 / 自定义')
+    section.setAttribute('data-role', 'advanced')
+    section.appendChild(
+      text(
+        'p',
+        'drc-sec-note',
+        '默认走官方中继，口令由主机自动认领，什么都不用填。自己搭了中继、或想用另一枚口令，才需要改这里。',
+      ),
+    )
+    const grid = doc.createElement('div')
+    grid.className = 'drc-adv-grid'
+
+    const urlId = `${SETTINGS_ID}-server-url`
+    const urlLabel = text('label', 'drc-adv-label', '中继地址')
+    urlLabel.setAttribute('for', urlId)
+    const urlInput = doc.createElement('input')
+    urlInput.id = urlId
+    urlInput.className = 'drc-adv-input'
+    urlInput.setAttribute('type', 'text')
+    urlInput.setAttribute('spellcheck', 'false')
+    urlInput.setAttribute('autocomplete', 'off')
+    urlInput.setAttribute('placeholder', 'wss://drc.provid.cc/v05')
+    advUrlInput = urlInput
+
+    const tokenId = `${SETTINGS_ID}-host-token`
+    const tokenLabel = text('label', 'drc-adv-label', '主机口令')
+    tokenLabel.setAttribute('for', tokenId)
+    const tokenInput = doc.createElement('input')
+    tokenInput.id = tokenId
+    tokenInput.className = 'drc-adv-input'
+    // `password`：口令是凭据，屏幕上不许明文摆着（截图、投屏、旁边的人）。
+    tokenInput.setAttribute('type', 'password')
+    tokenInput.setAttribute('autocomplete', 'off')
+    tokenInput.setAttribute('placeholder', '未设置（官方中继会自动认领）')
+    advTokenInput = tokenInput
+
+    for (const node of [urlLabel, urlInput, tokenLabel, tokenInput]) grid.appendChild(node)
+    section.appendChild(grid)
+
+    const actions = doc.createElement('div')
+    actions.className = 'drc-sec-actions'
+    actions.appendChild(button('保存', () => void submitAdvanced(), 'primary'))
+    actions.appendChild(button('清除口令', () => void clearTokenAdvanced()))
+    actions.appendChild(button('恢复默认', () => void resetAdvanced()))
+    section.appendChild(actions)
+
+    advHint = text('p', 'drc-adv-note', '正在读取当前配置…')
+    section.appendChild(advHint)
+    advNote = text('p', 'drc-adv-note', '')
+    advNote.setAttribute('data-kind', '')
+    section.appendChild(advNote)
+    return section
+  }
+
+  /**
+   * 整块重画。只在"状态真的变了"的时候调用，倒计时那一拍只改一行文本。
+   *
+   * ## 版式（2026-10-09 重排）
+   *
+   * 抬头一行（标题 + 一句它在讲什么），下面是**两栏卡片**：
+   *
+   * ```
+   * ┌ 配对这台主机 ─────┐ ┌ 手机端 ───────────┐
+   * │ 状态灯 + 结论      │ │ 小程序码（静态）    │
+   * │ 配对二维码（限时）  │ │ 黑鲸远控 · 微信小程序│
+   * │ 6 位码 + 倒计时    │ └───────────────────┘
+   * │ 引导句            │ ┌ 怎么用 ───────────┐
+   * │ [换一张][退出配对] │ │ 手机端 / 再连一次   │
+   * └──────────────────┘ │ 安全 / 连不上      │
+   * ┌ 连接 ────────────┐ └───────────────────┘
+   * │ 中继状态 …        │
+   * └──────────────────┘
+   * ```
+   *
+   * 左栏是"这台主机"（要动手的那件事 + 它的读数），右栏是"手机端"（去哪儿装客户端 +
+   * 怎么用）。窄屏由 CSS 自己折成一列——判据见 `client-bundle.test.ts` 的「排版」那一组。
+   *
+   * ⚠️ 两张码同时出现，是这一版最容易出错的地方：左边的**配对二维码**每次配对现生成、
+   * 带 PSK、过几分钟就作废；右边的**小程序码**是静态的客户端入口图，长期有效。
+   * 所以两张卡各有各的标题，尺寸也差一档（200px / 148px）——不能让用户拿小程序码
+   * 去配这台主机，那是"扫了没反应且没有任何提示"。
+   */
+  const paint = (): void => {
+    if (disposed) return
+    /**
+     * 两组"这次要画的东西"（2026-10-22）：
+     * · `topChildren` —— 抬头 + 状态条，放进常驻的 `topHost`；
+     * · `leftChildren` —— 配对那张卡，放进常驻的 `leftCol`。
+     *
+     * ⚠️ **「进阶」那张卡不在这里**：它住在常驻的 `rightCol` 里，
+     * 一次都不许被摘出来重插（那会让 input 失焦 —— 见上面「常驻骨架」的说明）。
+     */
+    const topChildren: unknown[] = []
+    const leftChildren: unknown[] = []
+    countNode = undefined
+
+    // ── 抬头：标题 + 一句"这一页是干什么的" ──────────────────────────
+    const header = doc.createElement('div')
+    header.className = 'drc-sec-header'
+    header.appendChild(text('h2', 'drc-sec-title', SETTINGS_LABEL))
+    header.appendChild(
+      text('p', 'drc-sec-sub', '用微信小程序远程操作这台主机上的 DSH 会话：发指令、看流式输出、审批工具调用。'),
+    )
+    topChildren.push(header)
+    /**
+     * ── 状态条：一整行回答「现在连上没有」 ──────────────────────────
+     *
+     * 2026-10-09 用户判定旧版"排版很大问题"之后重排的关键一条：
+     * **"连上没有"这件事原来藏在配对卡里的一行小字**，而那一行小字
+     * 与二维码、6 位码、说明文字挤在同一张卡里，第一眼根本读不到。
+     *
+     * ⇒ 把它提到整栏最上面，左边一颗灯 + 结论，右边一行元信息。
+     * 元信息（中继 / 版本 / 待处理）也在这里读完 —— 它们原来各占**一整张卡**，
+     * 两张加起来 510px，占整栏高度的 63%（实测 802px 里的 510px）。
+     */
+    const statusBar = doc.createElement('div')
+    statusBar.className = 'drc-sec-status'
+    const barHead = doc.createElement('div')
+    barHead.className = 'drc-sec-statushead'
+    const dot = doc.createElement('span')
+    dot.className = 'drc-dot'
+    dot.setAttribute('data-tone', pillLabel(status).tone)
+    dot.setAttribute('aria-hidden', 'true')
+    barHead.appendChild(dot)
+    barHead.appendChild(text('strong', 'drc-sec-statustext', pillLabel(status).text))
+    barHead.appendChild(text('span', 'drc-sec-statushint', relayStateRow(status)))
+    statusBar.appendChild(barHead)
+    topChildren.push(statusBar)
+
+    // ── 第一张卡：配对（这一页的主动作） ────────────────────────────
+    //
+    // 动作**先建好再传给 card()**：它落在标题行右端，而不是卡片底部。
+    const actions = doc.createElement('div')
+    actions.appendChild(button(view.kind === 'qr' ? '换一张' : '生成配对码', () => void mint(), 'primary'))
+    if (paired) actions.appendChild(button('退出配对', () => void unpair()))
+    /**
+     * 主卡：**这一页唯一的大块**。二维码能给到多大取决于这一张有多宽，
+     * 所以它不再和「手机端」那张图并排挤成两列 353px（实测那张次卡里只有一张图 + 两行字，
+     * 却被迫和主卡等高到 468px —— 就是用户说的"大空间放小内容"）。
+     */
+    const pair = card('配对这台主机', actions)
+    pair.setAttribute('data-role', 'pair')
+
+    /**
+     * 确认码在**卡片内容的最前面**，与"这一屏长什么样"无关（2026-10-21 真机事故）。
+     *
+     * ⚠️ **3.2.5 起主机端没有放行按钮**：确认只留在手机端，主机自动放行；
+     * 这里只剩那 6 位数字给人比对。但"必须每一屏都能显示"的理由没变。
+     *
+     * 原来它只画在 `view.kind === 'qr'` 那一支里。而这一页在**已配对**时
+     * 根本不走那一支（不出二维码）⇒ **主机明明挂着一条待放行的申请，
+     * 界面上却没有那 6 位数字** ⇒ 用户无从比对 ⇒ 主机永远不回 `pair-grant`
+     * ⇒ 手机永远卡在"正在连接…"。
+     *
+     * 而"已配对"读的是**密钥簿**（"配过对"），与"此刻有没有人在等你放行"是两件事。
+     *
+     * ⇒ 确认码属于"有申请"这件事，不属于"哪一屏"。
+     * 放在**最前面**是为了保住"数字排在码之前"那条约定（用户先比对再扫，
+     * 比扫完回头找数字少一次来回）。与 pill 弹窗同一套断言、同一句话，两条路不许分叉。
+     */
+    if (lastApproval !== null) {
+      pair.appendChild(text('p', 'drc-sec-sas', lastApproval.sas))
+      pair.appendChild(text('p', 'drc-sec-sasnote', '手机上也显示这串数字，两处不一致就在手机上选不一致'))
+    }
+
+    if (view.kind === 'loading') {
+      pair.appendChild(text('p', 'drc-sec-state', '正在生成配对码…'))
+    } else if (view.kind === 'qr') {
+      /**
+       * ── 有人在等放行：先给 6 位确认码，再给那张码 ──────────────────
+       *
+       * 顺序刻意是"先数字后码"——用户先比对再扫，比先扫完再回头找数字少一次来回。
+       * 与 pill 弹窗同一个顺序、同一句话，两条路不许分叉。
+       */
+      /**
+       * 那张码。
+       *
+       * ⚠️ **复用同一个元素**（与 pill 同一套控制器，见 `createMpCodeImage`）：
+       * `/pairing.png` 是 `no-store`，每新建一个 `<img>` 都必然回源一次、
+       * 宿主那边重新签一张码。**这一页原来每 2 秒重画一次就新建一个** ——
+       * 于是图每 2 秒闪一次、中继每 2 秒被叫一次。
+       *
+       * ⚠️ **先取元素、再读状态**：src 变了的时候 `element(src)` 会换一张新的、
+       * 状态回到 `loading`，而状态是从**当前那一张**上读的。
+       */
+      const image = mpCode.element(view.imageSrc)
+      /**
+       * 图还在路上 ⇒ 把"等大的那一格"画上（理由见 `createMpCodeImage`）：
+       * 那条路由要中继去微信那边签一张码才回得来（1～3 秒），
+       * 而 `<img>` 在它落地之前是**一个空框**——用户分不清"正在取"与"取不到"。
+       */
+      const loadState = mpCode.state()
+      if (loadState !== 'ready') pair.appendChild(mpCodeLoadingBox(doc, loadState))
+      pair.appendChild(image)
+
+      /**
+       * 6 位码与它上面那行小字分两个节点：判据钉的是 `drc-code` 的 `textContent`
+       * **恰好是那 6 位**（`client-bundle.test.ts`），说明文字混进去会让"手输这条路"
+       * 变得没法机械核对。
+       */
+      const code = doc.createElement('div')
+      code.className = 'drc-sec-code'
+      code.appendChild(text('span', 'drc-sec-code-label', '或在小程序里手输这 6 位码'))
+      code.appendChild(text('p', 'drc-code', view.token))
+      pair.appendChild(code)
+
+      countNode = text('p', 'drc-count', `${secondsText(expiresInMs)}后过期`)
+      if (expiresInMs <= 30_000) countNode.setAttribute('data-kind', 'urgent')
+      pair.appendChild(countNode)
+
+      pair.appendChild(
+        text('p', 'drc-sec-guide', '用微信扫这张码。扫一次以后这台主机就在小程序的列表里，之后自动连上。'),
+      )
+    } else if (view.kind === 'unavailable') {
+      pair.appendChild(text('p', 'drc-sec-state', view.reason))
+    } else if (view.kind === 'failed') {
+      const node = text('p', 'drc-sec-state', `发不出配对码：${view.detail}`)
+      node.setAttribute('data-kind', 'failed')
+      pair.appendChild(node)
+    } else {
+      /**
+       * 已配对：**不出二维码**（配对已经发生过，再摆一张只会让人以为还要扫），
+       * 但也不该拿一大块空白说一句话 —— 一行字 + 主机标识就够，
+       * 高度交给下面那张「手机端」卡去消化。
+       */
+      const done = doc.createElement('p')
+      done.className = 'drc-sec-state drc-sec-done'
+      done.appendChild(text('span', '', '已配对，不用再扫码。'))
+      pair.appendChild(done)
+    }
+
+    leftChildren.push(pair)
+
+    // ⚠️ **原来那张「连接」卡整张删掉了**（2026-10-09 重排）。
+    // ⚠️ 这里原来构造 `meta`（中继 / 版本 / 待处理 三条 `drc-sec-meta-item`），
+    // 它**只被页脚 push** —— 2026-10-11 删掉页脚后它就成了"建了没人用"的死代码，一并删。
+    //
+    // 「中继地址」与「主机版本」属于**只读诊断**：这一页是给小白配东西的地方，
+    // 把诊断摆在配置页底部只会让人以为"我该去改它"。要排错走 status.json 与 host-doctor。
+    //
+    // ⚠️ 这里**不再**把 grid 塞进整棵子树（2026-10-22）：grid 是常驻节点，
+    // 每次重画只换它**内部**那两个列容器的内容 ⇒ 「进阶」那张卡里的 input 不会被移动。
+    // ⚠️ 这里原来有一段「── 第四张卡：怎么用 ──」的注释，列着四条说明文案，
+    // 而**它描述的结构在这一轮重排里已经不存在了**（下一段就是页脚）。
+    // 留着它 = 下一位读代码会以为页面上还有那四条说明 —— 而实际上「环境自检」
+    // 「不用再扫」这两条**页面上一个都不存在**（它们在别的文档里，不在这一栏）。
+
+    // ── 页脚：2026-10-11 **整段删除**（用户裁决）────────────────────────
+    //
+    // 删掉的是三样东西：
+    //   1. 「扫上面的码 / 在手机上下指令 / 审批工具调用」这三步；
+    //   2. 那条脚注（「扫不出怎么办 · 端到端加密 · 退出配对会作废钥匙」）；
+    //   3. 底部那行「中继 <地址>　版本 <x.y.z>」元信息（`meta`）。
+    //
+    // 为什么这次连"排错时会用到"的理由也不保留：那一段的论证是"比正文低一等但删不得"，
+    // 而低一等的东西在这一页恰恰是**用户根本不会去找**的 —— 它假设用户已经知道
+    // "小程序里有手动输入""退出配对会作废钥匙"，而这两件事都属于**不该让用户知道**的内部。
+    //
+    // 「中继地址 / 版本」同理：这两个值属于**只读诊断**，而这一页是**给小白配东西的地方**，
+    // 把诊断信息摆在配置页底部只会让人以为"我该去改它"。要排错走 status.json 与 host-doctor。
+
+    /**
+     * ── 「进阶：自部署 / 自定义」那一张卡（2026-10-11 加）──────────────
+     *
+     * ⚠️ **只建一次**：`paint()` 每 2 秒被状态轮询调一次，每次重建这张卡会把
+     * 用户正在输入的内容抹掉（输入框的值只活在节点上）。所以这里复用同一个节点，
+     * 表单值由 `loadConfig()` / 提交结果**就地更新**。
+     */
+    if (!advancedCard) {
+      advancedCard = buildAdvanced()
+      /**
+       * ⚠️ 插进**常驻**的右列，而且**只插这一次**（2026-10-22）。
+       *
+       * 原来它被塞进每次重建的 `grid` ⇒ 每 2 秒被摘出 DOM 再插回去
+       * ⇒ 里面两个 `<input>` 的焦点每 2 秒丢一次（真机报："焦点一直丢失"）。
+       */
+      rightCol.appendChild(advancedCard)
+    }
+    /**
+     * ── 放哪儿：右栏，与「配对」那张卡并排、等高（2026-10-21 用户截图三条标注）
+     *
+     * 小程序码成为唯一入口之后，原先右栏那张「手机端」静态码整块删掉；若这一栏仍独占
+     * 一行，一页里就是两块内容各占一条横带、谁也不是主角。⇒ 恒放进网格右列，
+     * `data-two` 负责让两栏各半并等高。
+     */
+    // `data-two` 与两个列容器在**建骨架时**就设好了（常驻），这里不再动它们。
+
+    /**
+     * 只换这两处的**内部**（2026-10-22）。
+     *
+     * ⚠️ **不许再 `box.replaceChildren(...)`** —— 那会把常驻的 `grid` 一起换掉，
+     * 于是「进阶」那张卡（含两个 input）被摘出再插回 ⇒ **焦点丢**。
+     */
+    topHost.replaceChildren(...(topChildren as Node[]))
+    leftCol.replaceChildren(...(leftChildren as Node[]))
+  }
+
+  paint()
+  void loadStatus()
+  void mint()
+  // 「进阶」那一栏的读数：与状态轮询分开取（它不在那条 2 秒节拍上——那是"手机上刚扫完，
+  // 电脑这一页马上就变"的路，而配置几乎不会在你看这一页的时候变）。
+  void loadConfig()
+  /**
+   * 状态每 2 秒回来一次：这是"手机上刚扫完，电脑这一页马上就变"的那条路。
+   * 与 pill 同一个节拍——用户在设置页停留时也应当看到别人扫码的结果。
+   */
+  statusTimer = setInterval(() => void loadStatus(), 2000)
+
+  return () => {
+    disposed = true
+    if (statusTimer !== undefined) clearInterval(statusTimer)
+    if (countTimer !== undefined) clearInterval(countTimer)
+    statusTimer = undefined
+    countTimer = undefined
+    try {
+      box.remove()
+    } catch {
+      /* 宿主已经把它摘掉了 */
+    }
+  }
+}
+
+interface SettingsHost {
+  effect?(execute: (() => unknown) | void): unknown
+  /** 模块 `inject: ['slots']` 声明之后这一格直接可读（宿主自带模板就是这个写法）。 */
+  slots?: unknown
+  get?(name: string, strict?: boolean): unknown
+  /** 这一代宿主没把 slots 当服务给时的退路：等 `inject(['slots'], cb)` 回调。 */
+  inject?(names: string[], callback: (...args: unknown[]) => void): unknown
+}
+
+/** 认得出 slots 服务吗（与 `pill.ts` 同一个判据，这里再看一遍是为了不导出内部工具）。 */
+interface SlotRegistry {
+  inject(name: string, callback: () => unknown): unknown
+  register(options: Record<string, unknown>, component: unknown): unknown
+}
+
+function isSlots(value: unknown): value is SlotRegistry {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.inject === 'function' && typeof record.register === 'function'
+}
+
+function pickSlots(source: unknown): SlotRegistry | undefined {
+  if (isSlots(source)) return source
+  const gettable = source as { get?: (name: string, strict?: boolean) => unknown } | null | undefined
+  if (gettable && typeof gettable.get === 'function') {
+    try {
+      const got = gettable.get('slots', true)
+      if (isSlots(got)) return got
+    } catch {
+      /* 这个候选没有该服务 */
+    }
+  }
+  return undefined
+}
+
+/**
+ * 把这一页注册进 `settings.section`。
+ *
+ * 与 `mountPill` 同一套：`slots.inject(槽位名, 回调)` 等到**槽位声明**再注册
+ * （这正是它存在的理由——宿主可能晚声明；直接 `register` 一个未声明的槽位会抛）。
+ * 返回 false = "到这一刻还没挂上"，调用方只关心它不外抛。
+ */
+export function mountSettingsSection(ctx: SettingsHost, createElement: CreateElement | undefined): boolean {
+  if (!createElement) {
+    // 拿不到 react 就连挂载点都没有。pill 那边也是这条：少一页，不是整页起不来。
+    warnSection('装载器给不出 react：设置里的那一页不会出现')
+    return false
+  }
+  let mounted = false
+  const mount = (slots: SlotRegistry): void => {
+    if (mounted) return
+    /** `ref` 回调必须身份稳定，否则宿主每次重渲染都会先 `ref(null)` 再 `ref(node)`。 */
+    let cleanup: (() => void) | undefined
+    const attach = (node: unknown): void => {
+      const element = node as Element | null
+      if (element && typeof element.appendChild === 'function' && element.ownerDocument) {
+        if (cleanup) return
+        cleanup = buildSettingsSection(element, {
+          fetchImpl: (input, init) => globalThis.fetch(resolveHostUrl(String(input)), init as RequestInit | undefined),
+          warn: (message) => warnSection(message),
+        })
+      } else if (cleanup) {
+        cleanup()
+        cleanup = undefined
+      }
+    }
+    const component = (): unknown => createElement('div', { ref: attach })
+    mounted = true
+    try {
+      slots.inject(SETTINGS_SLOT, () => {
+        try {
+          slots.register(
+            {
+              name: SETTINGS_SLOT,
+              id: SETTINGS_ID,
+              order: SETTINGS_ORDER,
+              label: () => SETTINGS_LABEL,
+            },
+            component,
+          )
+        } catch (error) {
+          warnSection('设置分区注册失败（这一页不出现）', error)
+        }
+      })
+    } catch (error) {
+      mounted = false
+      warnSection('设置分区注入失败（这一页不出现）', error)
+      return
+    }
+    try {
+      ctx.effect?.(() => () => {
+        if (cleanup) {
+          cleanup()
+          cleanup = undefined
+        }
+      })
+    } catch {
+      /* 没有 effect 口就不登记卸载：宿主整页卸载会带走这一页 */
+    }
+  }
+  /**
+   * 两条路都要有，形状照 `mountPill`（真机取证过的那一份）：
+   *
+   * ⚠️ 2026-08-09 这一条是**判据逼出来的**：夹具里 `lateSlots` 那个形状
+   * （apply 时拿不到 slots，注入回调之后才有）下，只写"早"这一条会让设置分区
+   * **整块不出现**——而宿主那边的常态恰恰就是"apply 早于服务到位"。
+   * 少了晚到这条退路，屏幕上就是"设置里没有这一页"，日志里什么都没有。
+   */
+  let early: SlotRegistry | undefined
+  try {
+    early = pickSlots(ctx.slots) ?? pickSlots(ctx.get?.('slots', true))
+  } catch {
+    /* 这一代宿主没这个服务名，或读它就是抛 */
+  }
+  if (early) mount(early)
+
+  try {
+    ctx.inject?.(['slots'], ((...args: unknown[]) => {
+      for (const candidate of [...args, ctx]) {
+        const found = pickSlots(candidate)
+        if (found) {
+          mount(found)
+          return
+        }
+      }
+    }) as never)
+  } catch (error) {
+    warnSection('ctx.inject 口不可用：slots 再晚到也没人补挂', error)
+  }
+  if (!mounted) {
+    warnSection('apply 时没探到 slots（已挂注入回调等它晚到）；设置里一直没有这一页就是这代宿主没这个服务')
+  }
+  return mounted
+}

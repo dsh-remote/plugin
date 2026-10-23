@@ -1,0 +1,21 @@
+node_modules/
+dist/
+lib/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+.pnpm-store/
+coverage/
+
+# 微信开发者工具的本机私有配置（每台机器一份）
+project.private.config.json
+
+# ⚠️ 配对密钥簿：**含每个会话的 PSK**。
+# 真机落点在 ~/.dsh 下（不进任何仓库），但测试与脚本可能把它落在工作区里 ——
+# 提交出去等于把整台主机的历史密文密钥公开。
+# 单仓的根 .gitignore 里也有这一条；**这里必须有**，因为拆成独立仓之后
+# 包根就是仓根，只有根那份 `.gitignore` 的写法会让这个保护在独立仓里消失
+# （2026-10-10 拆仓时发现，判据 `tests/pair-store.test.ts` 会当场报出来）。
+conversations-*.json
+conversations.json

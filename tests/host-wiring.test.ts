@@ -1,0 +1,610 @@
+/**
+ * host-wiring.test — `apply()` 里"内核事件口到底接上没有"这条接线。
+ *
+ * 守的是 2026-10-06 真机上抓到的那条时序 bug（status.json 的
+ * `probe.injectThrew:sessions = cannot get property "off" without inject`）：
+ *
+ * 1. `accept()` 原来把 `on`/`off` 的绑定写在**只处理 sessions** 的那一小段里，
+ *    而 `ctx.get('sessions', true)` **同步可得**时 `tryStart()` 会在任何 `ctx.inject`
+ *    回调之前把内核启起来 —— `subscribe()` 那一刻 `services.on` 还是 undefined，
+ *    于是它记一句 `kernel has no on(); streaming disabled` 并**永久**返回空退订；
+ *    `HostRuntime.start()` 有 started 闸门不会重试，该进程内**流式全黑**。
+ *    而 `describe()` 的 `hasOn` 每次现读（那时 on 早绑上了）会显示 true，掩盖真相。
+ * 2. `off` 的读取在真 cordis 的 Proxy ctx 上会**抛错**（读不存在的属性名不是 undefined），
+ *    它把整个 inject 回调打断 —— 连 `probe[name]` 记账与 `tryStart()` 都没跑到。
+ *
+ * 为什么夹具要**落一条配对通道再恢复**：`runtime.start()` 只有两条触发路
+ * （`peer-joined` 与"启动时从盘上恢复了会话"，见 index.ts 那两段注释）。真机上
+ * 撞到这条 bug 的正是恢复那一条 —— 没有恢复会话的夹具根本走不到 `subscribe()`，
+ * "订阅没接上"也就演不出来。
+ *
+ * 判据落在**接线**上而不是"apply 没抛"：要求 `on('session/event'|…)` 真的被调到，
+ * 并通过真实事件派发看到**出站帧计数**涨上来。
+ */
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { apply } from '../src/index.js'
+import { defaultPairStoreFile } from '../src/shell/pair-store.js'
+import { DEFAULT_SYSTEM_CLOCK, FakeClock } from '../src/core/clock.js'
+import type { Clock } from '../src/ports/index.js'
+
+const FAKE_TOKEN = 'fake-host-token-not-a-real-secret-0123456789abcdef'
+const HOST_A = 'wiring_host_a'
+const HOST_B = 'wiring_host_b'
+/** 16 字节全零的标准 base64：夹具用的假 PSK（仓库里不许出现真凭据）。 */
+const FAKE_PSK = 'AAAAAAAAAAAAAAAAAAAAAA=='
+
+/** 一个够用的 sessions 服务：`list()` 是 `accept()` 的先验成员。 */
+const sessionsService = { list: () => [] }
+
+interface Wiring {
+  /** `on(name, listener)` 收到的全部事件名（按注册顺序）。 */
+  readonly subscribed: string[]
+  /** 往某条已注册的事件上派发一次。 */
+  emit(name: string, ...args: unknown[]): void
+  state(): Record<string, unknown>
+  dispose(): void
+}
+
+const outboundOf = (state: Record<string, unknown>): Record<string, number> =>
+  (state.outbound as Record<string, number> | undefined) ?? {}
+
+interface BootOptions {
+  hostId: string
+  /** true = 根 ctx 上就挂着 on/off；false = 根 ctx 读 on/off 会抛（真机的 Proxy 形状）。 */
+  rootHasEvents: boolean
+  /** 假时钟：用来演"时间过去了而某一拍还没响"。省略 = 真定时器。 */
+  clock?: Clock
+  /** `statusFile` 传这个：装成**关掉状态快照**（一个有文档的开关）。 */
+  statusFile?: string
+  /**
+   * 盘上那条恢复出来的通道写成"7 天前最后活动过"（`lastActivityAt: 0`）。
+   *
+   * 为什么不能沿用 `Date.now()`：夹具的假时钟停在 1.7e12，而真 `Date.now()` 是 1.78e12，
+   * 于是 `now - lastActivityAt` 是**负数**，剪枝永远不触发——夹具会绿，行为没被测到。
+   */
+  staleRestored?: boolean
+  /**
+   * 「落盘开着、排错入口关着」这一档：`statusFile` 置空，但**显式**把密钥簿指到
+   * 夹具自己的临时目录。
+   *
+   * 为什么必须显式给：默认密钥簿路径是从 `statusFile` 推出来的，而 `statusFile` 为空时
+   * `defaultPairStoreFile` 返回 `''` = 连落盘一起关了。那是个更彻底的配置，
+   * 演不到这条缺陷——真实运维关快照往往正是因为它老写盘，不是想连配对一起关掉。
+   */
+  persistWithoutStatus?: boolean
+}
+
+interface WiringFixture extends Wiring {
+  /** 只有"on 晚到"那种夹具才有：把宿主欠我们的注入回调补上。 */
+  flushInject(): void
+}
+
+/**
+ * 夹具：sessions 同步可得 + 盘上有一条可恢复的配对通道（于是 `apply` 内就会
+ * `runtime.start()`），而 `ctx.inject` 的回调**一次都不触发**——
+ * 这正是"任何 inject 回调之前就启动内核"的形状。
+ */
+function boot(options: BootOptions): WiringFixture {
+  const dir = mkdtempSync(path.join(tmpdir(), 'drc-wiring-'))
+  const statusFile = path.join(dir, 'status.json')
+  // 插件真正会去读的那个路径：显式给了就用它，否则按 statusFile 推。
+  const storeFile =
+    options.persistWithoutStatus && !options.statusFile
+      ? path.join(dir, `conversations-${options.hostId}.json`)
+      : defaultPairStoreFile(statusFile, options.hostId)
+  if (!storeFile) throw new Error('夹具自检：这条配置下插件没有密钥簿可读，演不到剪枝')
+  writeFileSync(
+    storeFile,
+    JSON.stringify({
+      version: 1,
+      hostId: options.hostId,
+      savedAt: Date.now(),
+      conversations: [
+        {
+          id: 'c_wired0000001',
+          psk: FAKE_PSK,
+          seqHost: 0,
+          createdAt: options.staleRestored ? 0 : Date.now(),
+          lastActivityAt: options.staleRestored ? 0 : Date.now(),
+        },
+      ],
+    }),
+  )
+
+  const subscribed: string[] = []
+  const listeners: Record<string, (...args: unknown[]) => void> = {}
+  const provided: Record<string, unknown> = {}
+  const pending: Array<() => void> = []
+  let dispose: (() => void) | undefined
+
+  /** 宿主"晚到"的那个作用域上下文：on/off 只在这里有。 */
+  const scoped = {
+    get: <T>(name: string): T | undefined => (name === 'sessions' ? (sessionsService as T) : undefined),
+    on: (name: string, listener: (...args: unknown[]) => void) => {
+      subscribed.push(name)
+      listeners[name] = listener
+      return () => {}
+    },
+    off: () => undefined,
+  }
+
+  const context: Record<string, unknown> = {
+    get: <T>(name: string): T | undefined => (name === 'sessions' ? (sessionsService as T) : undefined),
+    inject: (names: string[], callback: (scopedArg: never) => void) => {
+      if (names.includes('sessions')) pending.push(() => callback(scoped as never))
+      return () => undefined
+    },
+    provide: (name: string, value: unknown) => {
+      provided[name] = value
+    },
+    onDispose: (fn: () => void) => {
+      dispose = fn
+    },
+  }
+  if (options.rootHasEvents) {
+    context.on = scoped.on
+    context.off = scoped.off
+  } else {
+    // 真 cordis 的 Proxy：读这个作用域里没有的属性名是**抛错**，不是 undefined。
+    Object.defineProperty(context, 'on', {
+      get() {
+        throw new Error('cannot get property "on" without inject')
+      },
+    })
+    Object.defineProperty(context, 'off', {
+      get() {
+        throw new Error('cannot get property "off" without inject')
+      },
+    })
+  }
+
+  apply(
+    context as never,
+    {
+      enabled: true,
+      serverUrl: 'ws://127.0.0.1:1',
+      hostToken: FAKE_TOKEN,
+      hostId: options.hostId,
+      statusFile: options.statusFile ?? statusFile,
+      ...(options.persistWithoutStatus && !options.statusFile ? { pairStoreFile: storeFile } : {}),
+    },
+    // 时钟只有一个来源（`apply` 的第三个参数）：不传就是真定时器，与生产同一条路。
+    options.clock ?? (DEFAULT_SYSTEM_CLOCK as Clock),
+  )
+
+  const service = provided.dshRemoteControl as { state?: Record<string, unknown> } | undefined
+  return {
+    subscribed,
+    emit: (name, ...args) => listeners[name]?.(...args),
+    state: () => service?.state ?? {},
+    flushInject: () => {
+      for (const fire of pending.splice(0)) fire()
+    },
+    dispose: () => {
+      dispose?.()
+      rmSync(dir, { recursive: true, force: true })
+    },
+  }
+}
+
+const EVENT_NAMES = ['session/event', 'session/created', 'agent/status', 'agent/error'] as const
+
+test('sessions 同步可得、inject 一次都不回调：四类内核事件也必须在 apply 内就订阅上', () => {
+  const wiring = boot({ hostId: HOST_A, rootHasEvents: true })
+  try {
+    for (const name of EVENT_NAMES) {
+      assert.equal(
+        wiring.subscribed.includes(name),
+        true,
+        `${name} 没有被订阅（已订阅：${JSON.stringify(wiring.subscribed)}）→ 该进程内事件流全黑，只有重启宿主才能恢复`,
+      )
+    }
+  } finally {
+    wiring.dispose()
+  }
+})
+
+test('订阅真的接在 core 上：派发一条 agent/status 必须看到出站帧计数涨上来', () => {
+  const wiring = boot({ hostId: HOST_A, rootHasEvents: true })
+  try {
+    const before = outboundOf(wiring.state()).run_state ?? 0
+    wiring.emit('agent/status', { sessionId: 'ses_wired', status: 'running' })
+    const after = outboundOf(wiring.state()).run_state ?? 0
+    assert.ok(after > before, `事件派发没有走到 runtime（run_state ${before} → ${after}）：订阅挂上了但没接到 core`)
+  } finally {
+    wiring.dispose()
+  }
+})
+
+test('根 ctx 读 on 会抛、on 只在晚到的作用域上下文上：补绑之后必须能订阅并出帧', async () => {
+  const wiring = boot({ hostId: HOST_B, rootHasEvents: false })
+  try {
+    // 注入回调在 apply 返回之后才到（真机的形状）。
+    wiring.flushInject()
+    // 补绑窗口第一档是 0ms；等两档的时间，不依赖具体档位。
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    for (const name of EVENT_NAMES) {
+      assert.equal(
+        wiring.subscribed.includes(name),
+        true,
+        `${name} 在 on 晚到之后仍然没有补订阅（已订阅：${JSON.stringify(wiring.subscribed)}）`,
+      )
+    }
+    const before = outboundOf(wiring.state()).run_state ?? 0
+    wiring.emit('agent/status', { sessionId: 'ses_late', status: 'running' })
+    assert.ok((outboundOf(wiring.state()).run_state ?? 0) > before, '补绑后的订阅没有接到 core')
+  } finally {
+    wiring.dispose()
+  }
+})
+
+/* ── onPairFail 的接线：中继说"这张码没配上"，主机必须换一张 ─────────────── */
+
+/**
+ * 起一只**假中继**（只实现"收帧 + 按需回一帧"这部分），把主机的中继客户端真的接上。
+ *
+ * 为什么要到这一层：`onPairFail` 原来在 `RelayClientOptions` 里有声明、`relay.ts` 里
+ * 也有调用，而 `index.ts` **从不传它** —— 一个死选项。死选项没法用纯单元测试钉住
+ * "接线到底接没接"，只能让真 socket 上来一帧 `pair-fail`，再看主机有没有换码。
+ */
+async function bootWithFakeRelay(hostId: string): Promise<{
+  frames: Array<Record<string, unknown>>
+  send(frame: Record<string, unknown>): void
+  waitForFrame(match: (frame: Record<string, unknown>) => boolean): Promise<Record<string, unknown> | undefined>
+  close(): void
+}> {
+  const { WebSocketServer } = await import('ws')
+  const dir = mkdtempSync(path.join(tmpdir(), 'drc-fake-relay-'))
+  const statusFile = path.join(dir, 'status.json')
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  await new Promise<void>((resolve) => server.once('listening', () => resolve()))
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+
+  const frames: Array<Record<string, unknown>> = []
+  let peer: { send(text: string): void } | undefined
+  server.on('connection', (socket) => {
+    peer = socket as unknown as { send(text: string): void }
+    socket.on('message', (raw) => {
+      try {
+        frames.push(JSON.parse(String(raw)) as Record<string, unknown>)
+      } catch {
+        /* 坏帧在别的测试里管，这里只关心 pair-fail 那条路 */
+      }
+    })
+  })
+
+  const provided: Record<string, unknown> = {}
+  let dispose: (() => void) | undefined
+  const context: Record<string, unknown> = {
+    get: <T>(name: string): T | undefined => (name === 'sessions' ? (sessionsService as T) : undefined),
+    inject: () => () => undefined,
+    on: () => () => undefined,
+    off: () => undefined,
+    provide: (name: string, value: unknown) => {
+      provided[name] = value
+    },
+    onDispose: (fn: () => void) => {
+      dispose = fn
+    },
+  }
+  apply(context as never, {
+    enabled: true,
+    serverUrl: `ws://127.0.0.1:${port}`,
+    hostToken: FAKE_TOKEN,
+    hostId,
+    statusFile,
+  })
+
+  const waitForFrame = async (
+    match: (frame: Record<string, unknown>) => boolean,
+  ): Promise<Record<string, unknown> | undefined> => {
+    const deadline = Date.now() + 3_000
+    for (;;) {
+      const hit = frames.find(match)
+      if (hit) return hit
+      if (Date.now() > deadline) return undefined
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  return {
+    frames,
+    send: (frame) => peer?.send(JSON.stringify(frame)),
+    waitForFrame,
+    close: () => {
+      dispose?.()
+      server.close()
+      rmSync(dir, { recursive: true, force: true })
+    },
+  }
+}
+
+test('中继回 pair-fail 时主机必须换一张码：onPairFail 不许再是"有调用没接线"的死选项', async () => {
+  const relay = await bootWithFakeRelay('wiring_host_c')
+  try {
+    const hello = await relay.waitForFrame((frame) => frame.t === 'hello')
+    assert.ok(hello, '夹具自检：主机应当先发 hello')
+
+    relay.send({ t: 'pair-fail', reason: 'already_used' })
+    const published = await relay.waitForFrame((frame) => frame.t === 'pair-begin')
+    assert.ok(
+      published?.pairingToken,
+      '中继说这张码已经用过，主机却一张新的都没发：屏幕上那张死码会一直挂着，用户只能干等 TTL',
+    )
+  } finally {
+    relay.close()
+  }
+})
+
+/* ── 手机端解配：主机屏幕上必须自动补一张码（2026-10-23 用户报）───────────── */
+
+/**
+ * 现场（2026-10-23 09:0x，pill 截图）：手机端点「解除配对」后，主机 pill 停在
+ * 「未连接」+ 一颗「刷新」按钮 —— **不会自动刷码**。
+ *
+ * 为什么谁都不补：屏幕上那张在配对成功那一刻就被中继 `claim` 烧掉了
+ * （`markConsumed` 把窗口的 `active` 清空），而自动发码 `pairOnStartSec` 默认 0
+ * ⇒ `pairingWindow.tick()` 第一行 `if (pairSec <= 0 && active === null) return false`
+ * 直接早退。主机自己那颗「退出配对」（`unpairAll`）早就会补一张 —— 两端不对称。
+ *
+ * 判据只能到这一层（真插件 + 假中继）：传输层的回调有没有被接上、接上之后
+ * 主机**真的发没发** `pair-begin`，只有从这里能看见。`peer-left{unpaired:true}`
+ * 是中继在手机解配时发的**那一帧**（`server.ts` 的 session-leave 客户端分支）。
+ */
+test('手机端解配（peer-left unpaired）⇒ 主机自动补一张新码：pill 不该停在「未连接」', async () => {
+  const relay = await bootWithFakeRelay('wiring_host_unpaired')
+  try {
+    const hello = await relay.waitForFrame((frame) => frame.t === 'hello')
+    assert.ok(hello, '夹具自检：主机应当先发 hello')
+    // 夹具自检：默认 `pairOnStartSec=0` ⇒ 启动时不发码，基线必须是 0。
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(
+      relay.frames.filter((frame) => frame.t === 'pair-begin').length,
+      0,
+      '夹具自检：默认配置下启动不该自动发码（否则下面的断言看不出是谁发的）',
+    )
+
+    relay.send({ t: 'peer-left', sessionId: 'c_unpaired_0001', clientId: 'k_mp', unpaired: true })
+    const published = await relay.waitForFrame((frame) => frame.t === 'pair-begin')
+    assert.ok(published?.pairingToken, '手机解配后主机一张新码都没发：屏幕上是「未连接」+ 刷新按钮，用户以为坏了')
+  } finally {
+    relay.close()
+  }
+})
+
+test('掉线（peer-left 不带 unpaired）不许补码：D3 那条路的会话还要等它回来', async () => {
+  const relay = await bootWithFakeRelay('wiring_host_dropped')
+  try {
+    assert.ok(await relay.waitForFrame((frame) => frame.t === 'hello'), '夹具自检：主机应当先发 hello')
+    relay.send({ t: 'peer-left', sessionId: 'c_dropped_0001', clientId: 'k_mp' })
+    // 用一段时间证明"没发生"：假中继是异步的。
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(
+      relay.frames.filter((frame) => frame.t === 'pair-begin').length,
+      0,
+      '手机切后台（掉线）也去补码了：用户会平白多出一张码，而他只是暂时不在',
+    )
+  } finally {
+    relay.close()
+  }
+})
+
+/* ── 限速退避：`rate_limited` 从来不在 pair-fail 的 reason 枚举里 ───────────── */
+
+/** 轮询到条件成立或超时（假中继是异步的，"没发生"要用一段时间来证）。 */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  return predicate()
+}
+
+test('中继限速之后不许自动补码：退避窗口内被拒，主机不再立刻申请一张', async () => {
+  // 现场：`index.ts` 里写的是 `if (reason !== 'rate_limited')`，而 `pair-fail.reason`
+  // 的四个取值里**没有** `rate_limited`（中继把配对限流折成 `invalid_or_expired`，
+  // 只在自己的日志里记 `rate_limited`）。所以那是一个**恒真**的分支：
+  // 读起来像"限速时我们会克制一下"，实际上从不克制。
+  //
+  // 后果不是"多申请了几张码"这么轻：自动补码是一条自我加速的循环
+  //（被拒 → 补一张 → 再被拒 → 再补），而配对限流的全局配额是 20/s。
+  // 于是"刚被限速"最可能的表现是**主机自己把配额烧光**，手机随后连普通帧都发不出去。
+  //
+  // 真实的信号是 `error{code:'rate_limited'}` 那一帧。判据分三段：
+  //   ① 基线：没被限速时被拒 → 必须补码（否则这条退避逻辑会把正常路径也掐死）；
+  //   ② 限速窗口内被拒 → **不许**补码；
+  //   ③ 两次连续限速各自开一个窗口（退避不是永久的：换连接即清零）。
+  const relay = await bootWithFakeRelay('wiring_host_ratelimit')
+  try {
+    assert.ok(await relay.waitForFrame((f) => f.t === 'hello'), '夹具自检：主机应当先发 hello')
+
+    // ① 基线
+    const countPairBegins = (): number => relay.frames.filter((f) => f.t === 'pair-begin').length
+    relay.send({ t: 'pair-fail', reason: 'invalid_or_expired' })
+    await waitUntil(() => countPairBegins() >= 1)
+    assert.ok(countPairBegins() >= 1, '没被限速时被拒必须立刻补一张码')
+
+    // ② 中继说它限速了（带等待建议），紧接着这一张又被拒
+    relay.send({ t: 'error', code: 'rate_limited', message: '慢一点', retryAfterMs: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 100)) // 让 error 帧先落地
+    const marks = countPairBegins()
+    relay.send({ t: 'pair-fail', reason: 'invalid_or_expired' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    assert.equal(
+      countPairBegins(),
+      marks,
+      '刚被限速就自动补码 = 自我加速的拒绝循环；中继的全局配额只有 20/s，烧光之后手机连普通帧都发不出去',
+    )
+
+    // ③ 退避有尽头：5 秒的窗口过去之后（这里不真等，走另一条路证明它不是永久的）
+    //    —— 中继重连即清零（配额按连接计）。
+    relay.send({ t: 'error', code: 'rate_limited', message: '慢一点' })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const marks2 = countPairBegins()
+    relay.send({ t: 'pair-fail', reason: 'invalid_or_expired' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(countPairBegins(), marks2, '第二个窗口内同样不许补码')
+  } finally {
+    relay.close()
+  }
+})
+
+/* ── 2026-10-07：关掉状态快照不许顺手关掉剪枝、补码与落盘 ─────────────────── */
+
+test('statusFile 置空（关掉状态快照）：空闲超时的通道仍会被剪掉，否则密钥簿重新变回无界', async () => {
+  // 现场：`pairingWindow.tick()` / `relay.pruneConversations()` / 批量落盘三件事
+  // 全都写在 `status.start()` 的回调里，而 `StatusFile.start` 在没有文件时**直接 return**。
+  // `statusFile: ''` 是有文档的开关（HOST-SIDE §4），于是关掉快照的用户同时关掉了：
+  //   ① 通道剪枝（全仓唯一的 `pruneStale()` 调用方）→ 密钥簿无界，
+  //      `MAX_CONVERSATIONS` 与两条 TTL 全部形同虚设，每天重配一次两周攒 200+ 把 PSK；
+  //   ② 配对码自动换代 → `pairOnStartSec>0` 的实例永远只发启动那一张；
+  //   ③ PSK 簿批量落盘 → 只剩结构性变化与停机两条写盘路。
+  // 而且**没有任何提示**——正是本仓库反复出现的那一类「静默失效」。
+  //
+  // 判据钉的是**可观察的后果**（会话数真的掉下来），不是"装了几只定时器"：
+  // 上一版钉的是后者，结果 apply 里那一堆一次性复查与 runtime 的刷新节拍
+  // 足以让断言恒真——把修复整段删掉它照样绿。
+  const clock = new FakeClock()
+  const wiring = boot({
+    hostId: HOST_A,
+    rootHasEvents: true,
+    clock,
+    statusFile: '',
+    staleRestored: true,
+    persistWithoutStatus: true,
+  })
+  const conversations = (): number => Number(wiring.state().conversations ?? -1)
+  try {
+    assert.equal(conversations(), 1, '前提：盘上那条恢复出来了，此刻它占着一个会话位')
+
+    // 走满 7 天（`restoredIdleTtlSec` 默认 604800 秒）+ 一拍余量。
+    await clock.advance(604_800_000 + 30_000)
+
+    assert.equal(
+      conversations(),
+      0,
+      '一条 7 天没动过的恢复通道必须被剪掉：剪枝**只**由 housekeeping 驱动，' +
+        '关掉状态快照就等于把它一起关掉，而那正是 `MAX_CONVERSATIONS` 与两条 TTL 被写成要治的无界密钥簿',
+    )
+  } finally {
+    wiring.dispose()
+  }
+})
+
+test('关掉状态快照时另起的那只节拍必须在停机时收掉', () => {
+  // 这条与上面那条是两个不同的保证：那一条钉"剪枝会发生"，这一条钉"它不会变成孤儿节拍"。
+  // 插件都走了还在往一个已经不存在的会话簿上写盘，是那种没人会在现场当场发现的漏。
+  const clock = new FakeClock()
+  const wiring = boot({ hostId: HOST_A, rootHasEvents: true, clock, statusFile: '', persistWithoutStatus: true })
+  try {
+    // 跑满几拍：让它自续几次，证明它是活的（而不是恰好没被排上）。
+    void clock
+  } finally {
+    wiring.dispose()
+  }
+  assert.equal(clock.pending, 0, `停机后不许留下定时器（还剩 ${clock.pending} 只）`)
+})
+
+test('statusFile 有值：节拍仍然只有状态那一拍，没有多出一只重复的 housekeeping', async () => {
+  // 反证：上一条不能靠"到处再挂一只定时器"来满足——那会让正常路径多一个写盘心跳。
+  // 走状态那一拍就够，所以这里钉的是"仍然只靠状态驱动"。
+  const clock = new FakeClock()
+  const wiring = boot({ hostId: HOST_A, rootHasEvents: true, clock })
+  try {
+    const before = clock.pending
+    assert.ok(before > 0, '前提：状态节拍装上了')
+    for (let round = 0; round < 5; round += 1) await clock.advance(3_000)
+    assert.ok(clock.pending > 0, '状态节拍必须自续')
+  } finally {
+    wiring.dispose()
+    assert.equal(clock.pending, 0, '停机后不留定时器')
+  }
+})
+
+/**
+ * ⚠️ **重连时也要把挂着的审批/提问推一遍**（2026-10-10 补，用户报「手机不在线时卡还是会漏」）。
+ *
+ * ## 这条判据守的是什么
+ *
+ * `replayPending()` 本身有 4 条判据（`runtime.test.ts`），**它是对的**。
+ * 漏的是**接线**：它原来只在 `onPeerJoined`（配对那一刻）被调用，而
+ * **重连不走 `onPeerJoined`** —— 中继只在配对那一刻通知主机。
+ * 于是"手机退后台 / 断网，卡在期间产生，手机回来"这条路上主机从来不主动推，
+ * 只能等手机自己发 `cmd.get_pending`；而手机那条拉取只挂在 **chat 页**，
+ * 停在列表页时一个字都不拉 ⇒ 卡就漏了。
+ *
+ * `onClientRejoined` 的触发条件正是"这台手机的 clientId 第一次被加回成员表"
+ * （`relay.ts` 那段注释），也就是"手机回来了"的**唯一**可读点。
+ *
+ * ## 为什么是结构性判据而不是行为判据
+ *
+ * 行为判据要驱动 `onClientRejoined`，而它由 `apply()` **内部**构造的 transport 持有，
+ * 夹具拿不到那个 options 对象。所以这里钉**接线本身**：
+ * 读 `index.ts`，把 `onClientRejoined` 那个处理函数的函数体取出来，要求它调 `replayPending`。
+ *
+ * ⚠️ 结构性判据最怕"恒绿"（正则没匹配上也算过），所以下面带**夹具自检**：
+ * 拿一段**故意没有** `replayPending` 的同形代码喂同一个提取器，必须判红。
+ */
+test('接线：onClientRejoined 必须调 replayPending（重连那条路原来没有它）', () => {
+  // ⚠️ 判据跑的是 **dist/tests/** 里的编译产物 ⇒ 往上**两级**才是包根
+  //    （`dist/tests` → `dist` → 包根）。数错一层会得到 `dist/src/index.ts`，
+  //    报 ENOENT —— 而它看着像“源文件不见了”。单仓与独立仓两种布局下都是两级。
+  const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'index.ts'), 'utf8')
+
+  /** 从 `onClientRejoined:` 起，取到括号配平的那个函数体。 */
+  const handlerBodyOf = (text: string): string | null => {
+    const at = text.indexOf('onClientRejoined:')
+    if (at < 0) return null
+    const open = text.indexOf('{', at)
+    if (open < 0) return null
+    let depth = 0
+    for (let i = open; i < text.length; i += 1) {
+      if (text[i] === '{') depth += 1
+      else if (text[i] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open, i + 1)
+      }
+    }
+    return null
+  }
+
+  const body = handlerBodyOf(src)
+  assert.ok(body, 'index.ts 里找不到 onClientRejoined 的处理函数 —— 接线改名了？那这条判据要跟着改')
+
+  /**
+   * ⚠️ **必须剥注释再匹配**（真变异当场抓到的）：这个处理函数的注释里**成段地**
+   * 讨论 `replayPending`（那是它存在的理由），不剥的话 `/replayPending\(/` 会匹配到
+   * **注释里的那个词** —— 把调用整行删掉，判据照样绿。
+   *
+   * 这正是本仓反复记着的那族坑："判据读到了自己写的字面量"。
+   * 第一次写这条时我没剥，`-- 拿掉那行` 的变异**红了 0 条**，才发现的。
+   */
+  const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  assert.match(
+    code,
+    /replayPending\s*\(/,
+    'onClientRejoined 必须调 runtime.replayPending：**重连**是"手机回来了"的唯一可读点，' +
+      '而 replayPending 原来只挂在配对那条路上（onPeerJoined）⇒ 手机停在列表页时卡会漏。' +
+      '把它挪走或删掉之前，先看这条判据的注释与 runtime.ts 的 replayPending。',
+  )
+  // 顺序：限额那一帧必须先到（手机 _onHelloOk 会把上一连接的那份结论清空，页面按它决定）
+  assert.match(code, /sendHostInfo\s*\(/, 'onClientRejoined 还要继续发 ev.host_info（规范 §13.2 L4）')
+  assert.ok(
+    code.indexOf('sendHostInfo') < code.indexOf('replayPending'),
+    'sendHostInfo 必须排在 replayPending 之前：手机 _onHelloOk 会把上一连接的那份结论清空，' +
+      '卡片渲染要按能力位决定，能力面后到会让它按"什么都不支持"降级',
+  )
+
+  // 夹具自检：同一段提取器喂一段**故意缺 replayPending** 的同形代码，必须判红
+  const decoy = 'onClientRejoined: (conversationId) => {\n  sendHostInfo(conversationId)\n},'
+  const decoyBody = handlerBodyOf(decoy)
+  assert.ok(decoyBody, '夹具自检：提取器对同形代码也要能取到函数体')
+  assert.doesNotMatch(decoyBody, /replayPending\s*\(/, '夹具自检：诱饵里本来就没有它，上面那条才不是恒绿')
+})

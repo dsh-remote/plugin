@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "resolveJsonModule": true,
+    "noEmitOnError": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "//": "浏览器半 `src/client/` 走的是另一个编译面（DOM lib、无 node 类型），由 tsconfig.client.json 负责。这里必须 exclude，否则 node 面会拿 ES2022 lib 去编译它，Document/HTMLElement 全都不存在。",
+  "exclude": ["src/client"]
+}

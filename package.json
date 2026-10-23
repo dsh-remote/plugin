@@ -1,0 +1,84 @@
+{
+  "name": "@dsh-remote/plugin",
+  "version": "0.5.0",
+  "description": "DSH Remote Control 的宿主侧插件：把本机 DeepSeek Harness 与中继配对，微信小程序可发指令、看流式输出、回答审批。载荷级端到端加密。",
+  "type": "module",
+  "license": "MIT",
+  "author": "dsh-remote",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dsh-remote/plugin.git"
+  },
+  "homepage": "https://github.com/dsh-remote/plugin#readme",
+  "bugs": "https://github.com/dsh-remote/plugin/issues",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "deepseek",
+    "remote-control",
+    "relay",
+    "websocket",
+    "wechat",
+    "miniprogram",
+    "e2e-encryption",
+    "cordis",
+    "plugin",
+    "qrcode"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/bundle/index.js",
+  "exports": {
+    ".": "./dist/bundle/index.js",
+    "./client": "./dist/bundle/client.cjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "copy",
+    "dist/bundle",
+    "cordis.patch.yml",
+    "docs/images/miniprogram-qr.jpg",
+    "icon.svg",
+    "locale"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.client.json",
+    "build": "pnpm clean && tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/bundle-plugin.mjs",
+    "test": "pnpm build && node --test \"dist/tests/*.test.js\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.3.3",
+    "typescript": "^7.0.2",
+    "@dsh-remote/protocol": "^0.5.0",
+    "qrcode": "^1.5.4",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0",
+    "zod": "^4.6.5"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "icon": "./icon.svg"
+}
