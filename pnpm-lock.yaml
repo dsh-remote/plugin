@@ -10,7 +10,7 @@ importers:
     devDependencies:
       '@dsh-remote/protocol':
         specifier: ^0.5.0
-        version: 0.5.0
+        version: 0.5.1
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.5
@@ -44,8 +44,8 @@ importers:
 
 packages:
 
-  '@dsh-remote/protocol@0.5.0':
-    resolution: {integrity: sha512-VJQQOnfJxgXMWvpleAUyycNfcDsTn12/mlvxcGioYp9vJHq+ncEbmRTD0X0kNGbWZzbXlMgSW192ekTPnxkj4A==}
+  '@dsh-remote/protocol@0.5.1':
+    resolution: {integrity: sha512-v4JGqmVWYLTMmnVIfM7DSfknEEaxwayWj68dQTzpgbN0xTNl+BofU3F9Um8RVBcBUhfaUuurrqnJ0f9ReabFwQ==}
     engines: {node: '>=20'}
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -480,7 +480,7 @@ packages:
 
 snapshots:
 
-  '@dsh-remote/protocol@0.5.0':
+  '@dsh-remote/protocol@0.5.1':
     dependencies:
       tweetnacl: 1.0.3
       zod: 4.6.7
