@@ -1095,7 +1095,7 @@ function buildPill(root: Element, deps: PillDeps): () => void {
     return node
   }
 
-  /** 二维码那一行的说明：没过期报剩余时间，过期了就明说要自己再按一次（不再自动补一张）。 */
+  /** 二维码那一行的说明。⚠️ 2026-10-23 起过期会**自动换码**（`expireCountdown`），这句只剩竞态间隙一闪。 */
   // 2026-10-05 用户定的口径：不加间隔号、不用书名号——扫一眼的行，一个多余符号
   // 就多一分"像系统消息不像人话"的感觉。"微信扫码配对"直接点名用哪个 App 扫。
   // 过期那句话现在由倒计时那行与 note 分工：倒计时说"还有多久"，note 只在
@@ -1404,8 +1404,8 @@ function buildPill(root: Element, deps: PillDeps): () => void {
       countTimer = setInterval(() => {
         // 只判"还剩多少"，不负责推进 —— 推进是墙钟的事（见 `syncCountdown`）。
         if (!syncCountdown()) {
-          // 到点**换一张的能力没有了**（2026-10-03 拍板）：不自动补、也没有「换一张」按钮。
-          // 停表并就地把它说成"已过期"，重发与否由人再按一次那颗按钮决定。
+          // 到点就地换一张（2026-10-23 用户裁决，推翻 2026-10-03"让用户自己按"的拍板）：
+          // `expireCountdown` 停表 + 自动补码，与配置页（settings.ts）同一口径。
           expireCountdown()
           return
         }

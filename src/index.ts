@@ -1067,7 +1067,6 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
   }
 
   /**
-   * pill 抬头那句  /**
    * pill 抬头那句"连接状态"与点开那三行（中继 / 状态 / 版本）：中继那一行取值口径与
    * `status.json` 完全一致（同一个 `relayState()`），免得两处说两种话。
    * 这里出去的四个字段都不是凭据——6 位码、PSK、配对 URI 一个都不带。

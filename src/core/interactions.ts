@@ -504,7 +504,8 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
     try {
       // **有期限才设**：宿主没给就不设（见上面那段长注）。与提问那条逐字同形。
       const hostTimeout = hostTimeoutMs(info.timeoutMs)
-      const expiresAt = hostTimeout ? new Date(Date.now() + hostTimeout).toISOString() : undefined
+      // 时刻走注入时钟（与 oldestSec 同一条纪律：FakeClock 要能演「到期」，见 349 行注释）。
+      const expiresAt = hostTimeout ? new Date(deps.clock.now() + hostTimeout).toISOString() : undefined
       return await new Promise<ApprovalDecision>((resolve) => {
         const timer = hostTimeout
           ? deps.clock.setTimeout(() => {
@@ -597,7 +598,8 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
     // `return await` + finally：releaseHold 与 hold 必须一一对应（同审批那条的理由）。
     try {
       const hostTimeout = hostTimeoutMs(info.timeoutMs)
-      const expiresAt = hostTimeout ? new Date(Date.now() + hostTimeout).toISOString() : undefined
+      // 时刻走注入时钟（与 oldestSec 同一条纪律：FakeClock 要能演「到期」，见 349 行注释）。
+      const expiresAt = hostTimeout ? new Date(deps.clock.now() + hostTimeout).toISOString() : undefined
       return await new Promise<AskUserQuestionAnswerValue | null>((resolve) => {
         const timer = hostTimeout
           ? deps.clock.setTimeout(() => {

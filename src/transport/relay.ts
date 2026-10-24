@@ -65,10 +65,8 @@ export interface RelayClientOptions {
   label: string
   /**
    * 本端软件版本（2026-10-22）：**给了就填进 `hello` 帧**，不给就不带。
-   *
-   * ⚠️ **`hello` 是明文帧** ⇒ 中继看得见 ⇒ **默认不给**（`undefined`）
-   * ⇒ 发出去的帧**逐字节与加这个字段之前相同** ⇒ **零知识不变**。
-   * 只有显式打开（`DRC_REPORT_VERSION=1`）的部署才会给。
+   * 现状（2026-10-23 裁决后）：插件**无条件**给（`index.ts` 装配处直接传 `PLUGIN_VERSION`），
+   * 中继有就记 —— 这里的"默认不给"只剩"老调用方不传"这一层含义。
    */
   softwareVersion?: string
   /** 中继侧 `DRC_HOST_TOKEN` 的同值副本；只在这一条出站帧上出现。 */

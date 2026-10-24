@@ -147,7 +147,11 @@ export function createKernelEventHandler(deps: KernelEventsDeps): (event: Kernel
  * **但"合并"不等于"丢掉"**（第一版就是把它写成了丢掉）：被合并的那一次必须变成一次
  * 尾随推送，否则最后那次变化永远没人告知手机——F8 要求"任何会改变会话状态的动作
  * 之后都必须额外推一条 session_changed"，而手机不看 `ev.result.data.sessions`，
- * 于是"发完指令列表却停在旧状态"最长要等到 15 秒的兜底刷新。\n}\n\n/**
+ * 于是"发完指令列表却停在旧状态"最长要等到 15 秒的兜底刷新。
+ * （合并/尾随推送的实现住在 `runtime.ts` 的 pushSessions 接线处，本文件只出接口。）
+ */
+
+/**
  * `KernelEvent` → 历史条目。
  *
  * 运行态 / 标题 / 列表变化在历史里没有位置——它们是"此刻"的事，回放历史不该去改顶栏；
