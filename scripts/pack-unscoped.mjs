@@ -10,6 +10,10 @@
  * ——「给竞对做嫁衣」的机制就是这个：名字是我们的，装出来的是僵尸。
  * ⇒ 每次发 0.5.x，必须把它一起发出去（`latest` 指过去）。
  *
+ * ⚠️ 反过来不成立：**正名 `@dsh-remote/plugin` 不许弃用**。小程序首页展示给用户的
+ * 安装包名就是它（`packages/client/pages/sessions/sessions.wxml` 的 hero-note），
+ * 那条路径有真实安装流量。这个脚本是**加一个入口**，不是**换一个入口**。
+ *
  * 四处必须同时改成无 scope 名，少一处就是"文件都在、插件不加载"：
  *   1. `package.json` 的 `name`（loader 按包名解析模块）
  *   2. `cordis.patch.yml` 的 `insert.name`（同上）

@@ -12,6 +12,11 @@ name: Release
 # 工作流会在"发布无 scope 别名"那步红 —— 而那一步刻意排在正名之前，就是为了
 # 让这种红发生在**版本号还没被烧掉**的时候。
 #
+# ⚠️ **别把两个名字合并成一个**：正名 `@dsh-remote/plugin` 是小程序首页直接展示给
+# 用户的安装包名（`packages/client/pages/sessions/sessions.wxml` 的 hero-note），
+# 那条路径有真实安装流量；别名是 npm 搜索位。判据 `e2e/npm-publish-tp.test.mjs`
+# 「小程序首页展示的安装包名仍是正名」钉住这一点。
+#
 # ⚠️ **包名参数就是包名**（无 scope 就写裸名，别加 `@`；scoped 才带 `@scope/`），
 # 而 `--repo` 要的是**GitHub 仓库**（`owner/repository`，没有 `github.com/`、没有 `.git`）。
 # 把两者写反的报错是 `GitHub repository must be specified in the format owner/repository`。
