@@ -62,4 +62,4 @@ allowBuilds:
 minimumReleaseAge: 0
 
 minimumReleaseAgeExclude:
-  - '@dsh-remote/protocol@0.5.1'
+  - '@dsh-remote/protocol@0.5.2'
