@@ -868,7 +868,7 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     }
     relay.connect()
     // 自动发码走 pairingWindow，而不是启动时发一张就完事：
-    // 一张码是一次性的，用完/中继重启/过半程都得换一张（判据见 core/pairing-window.ts）。
+    // 一张码是一次性的，用完/中继重启/剩余不足安全余量都得换一张（判据见 core/pairing-window.ts）。
     // tick 挂在 status 的 3 秒节拍上（旧实现就是挂在这里）。
     //
     // ⚠️ 这里的 `tick()` 在启动这一轮里**必然空转**，而它原来那句注释说
@@ -1127,6 +1127,14 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
        * 只给 `status.json` 加、忘了这里，那主机屏幕上**照样没有**那串数字
        * （e2e 装置读的是 status.json，所以它会全绿，而真机是坏的）。
        */
+      /**
+       * **码龄 / 剩余寿命**（2026-10-26）：`null` = 屏幕上现在没有能用的码。
+       *
+       * 只给 UX 用（"这张码已经 45 秒，还有 135 秒"），**不含 token/psk**
+       * —— 与 `status.json` 那份 `pairing`（0600、带凭据）刻意分开：
+       * 这里是每 2 秒被宿主 UI 轮询的只读面，白名单多一条就是一次外泄面。
+       */
+      pairing: issuance.info(),
       lastPairApproval: pairApproval.lastGranted() ?? null,
     }
   }

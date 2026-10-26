@@ -125,6 +125,14 @@ export interface PillStatus {
    */
   lastPairApproval: { sas: string; remainSec: number } | null
   /**
+   * **码龄 / 剩余寿命**（2026-10-26）：`null` = 屏幕上现在没有能用的码。
+   *
+   * 只回答"这张码多老了、还能撑多久"（`ageSec` / `expiresInSec`），
+   * **不含 token 与 psk** —— 它是 UI 每 2 秒轮询的只读面，凭据一律不许过这里
+   * （带凭据的那份在 `status.json`，0600）。
+   */
+  pairing: { ageSec: number; expiresInSec: number } | null
+  /**
    * 挂在手机上等回答的审批/提问**件数**（0 = 没有）。
    *
    * 这条为什么值得占一个字段：一张挂起的审批阻塞着远端一条正在跑的回合，
@@ -414,6 +422,9 @@ export function pillStatusHandler(deps: PillRouteDeps) {
         //
         // ⚠️ 白名单是**逐字**列的 ⇒ 少列这一条，UI 就读不到它（而 status.json 里有，
         // 于是 e2e 全绿、真机是坏的 —— 这条判据就是为它准备的）。
+        // 2026-10-26：码龄 / 剩余寿命（只有两个数字，不含 token/psk）——
+        // UI 据此显示"这张码 45 秒前生成，还有 135 秒"，而不是让用户扫了才知道失效。
+        pairing: status.pairing,
         lastPairApproval: status.lastPairApproval,
       })
     } catch (error) {

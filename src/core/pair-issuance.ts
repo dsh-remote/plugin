@@ -45,6 +45,14 @@ export interface PairIssuance {
   describe(): Record<string, unknown> | null
   /** 当前仍然有效的那张，只读。 */
   current(): LivePair | null
+  /**
+   * **码龄 / 剩余寿命**（2026-10-26）：`null` = 现在屏幕上没有能用的码。
+   *
+   * 只给 UX 用（"这张码 45 秒前生成，还有 135 秒"），**不含 token 与 psk**
+   * —— 与 `describe()`（status.json / 0600、带凭据）刻意分开：
+   * `/status` 是宿主 UI 轮询的**只读**接口，白名单多一条就是凭据外泄。
+   */
+  info(): { ageSec: number; expiresInSec: number } | null
   /** 发一张新的（登记展示位 + 认领进窗口）。 */
   publish(ttlMs?: number): { token: string; psk: string; expiresAt: number } | null
   /** 幂等版发码：已经有能用的就给那张，没有才向中继申请。 */
@@ -148,7 +156,6 @@ export function createPairIssuance(deps: PairIssuanceDeps): PairIssuance {
 
   /**
    * 幂等版发码：已经有一张能用的就给那张，没有才向中继申请新的。
-   *
    * 为什么必须幂等：状态栏那颗 pill 是可以连点的，而每点一次发一张的话，
    * 中继的 pending 表里会同时挂着三个 PSK，屏幕上显示的却是其中一张——
    * 手机扫到没被显示的那张就全线解不开。那正是当初"多码事故"的形状。
@@ -160,7 +167,7 @@ export function createPairIssuance(deps: PairIssuanceDeps): PairIssuance {
      * 中继重启后它内存里的 pending-pair 表已经空了：屏幕上那张码在中继那边**已经死了**，
      * 而本地 `expiresAt` 还没到。旧实现把它直接当 fresh 返回 —— 用户点"刷新"拿到的
      * 还是同一张死码，只能干等 TTL 走完（用户报的"要等下次刷新的二维码才能用"里，
-     * 最坏的一档就是这个）。`staleNow()` 复用窗口那套判据（代次变了 / 过期 / 过半程），
+     * 最坏的一档就是这个）。`staleNow()` 复用窗口那套判据（代次变了 / 过期 / 剩余不足余量），
      * 与自动换码同一口径，两处不会分叉。
      */
     const shown = current()
@@ -176,6 +183,30 @@ export function createPairIssuance(deps: PairIssuanceDeps): PairIssuance {
     return { token: fresh.token, expiresAt: fresh.expiresAt }
   }
 
+  /**
+   * 码龄 / 剩余寿命（2026-10-26）：只回答"这张码多老了、还能撑多久"。
+   *
+   * 与 `describe()` 同一份时间口径（`slot.createdAt` / `slot.expiresAt`，
+   * 后者已被服务端权威 TTL 改写过），但**只吐两个数字**：
+   * · 调用方是 `/status` —— 宿主 UI 每 2 秒轮询的只读接口，
+   *   白名单里每多一个字段就是一次凭据外泄面（token/psk 一律不许过这里）；
+   * · 用途是「码龄可见」：屏幕被拍了照、或者用户盯着二维码发呆时，
+   *   "还有 40 秒"比"扫了才知道失效"有用得多。
+   *
+   * 没有能用的码（花掉/过期/没发过）⇒ null，与 `current()` 同一套判据。
+   */
+  function info(): { ageSec: number; expiresInSec: number } | null {
+    const shown = current()
+    if (!shown) return null
+    const slot = slots.resolveFor(shown.token)
+    if (!slot) return null
+    const now = clock.now()
+    return {
+      ageSec: Math.max(0, Math.round((now - slot.createdAt) / 1000)),
+      expiresInSec: Math.max(0, Math.round((slot.expiresAt - now) / 1000)),
+    }
+  }
+
   return {
     spend,
     shown: () => shownState.pairing,
@@ -184,6 +215,7 @@ export function createPairIssuance(deps: PairIssuanceDeps): PairIssuance {
     },
     describe,
     current,
+    info,
     publish,
     ensureFresh,
   }

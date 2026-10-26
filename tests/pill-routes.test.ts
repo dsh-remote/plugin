@@ -123,6 +123,7 @@ function deps(
       waiting: 0,
       waitingOldestSec: 0,
       pairApproval: null,
+      pairing: null,
       lastPairApproval: null,
     }),
     approvePair: () => false,
@@ -404,7 +405,7 @@ test('取码自己抛错 → 500 且带截断后的原因，不抛到宿主', as
 /** 一张最小但真的 JPEG：成败判据看的就是这两个字节。 */
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8])
 
-test('状态路由只出九个非凭据字段：relay / paired / pairings / serverUrl / version / waiting / waitingOldestSec / pairApproval / lastPairApproval', async () => {
+test('状态路由只出十个非凭据字段：relay / paired / pairings / serverUrl / version / waiting / waitingOldestSec / pairApproval / pairing / lastPairApproval', async () => {
   const d = deps()
   const { res, reply } = response()
   await pillStatusHandler(d)(request('GET', { host: '127.0.0.1:19387' }), res)
@@ -419,6 +420,9 @@ test('状态路由只出九个非凭据字段：relay / paired / pairings / serv
     waiting: 0,
     waitingOldestSec: 0,
     pairApproval: null,
+    // 2026-10-26：码龄 / 剩余寿命（两个数字，不含 token/psk）—— UI 据此显示
+    // "这张码 45 秒前生成，还有 135 秒"，而不是让用户扫了才知道失效。
+    pairing: null,
     // 2026-10-21 晚：主机自动放行之后，最近放行的那 6 位数字改由这一格带着
     // （放行是"取走即焚"，`pairApproval` 立刻变 null ⇒ 主机界面就再也显示不出那串数字）。
     // 它**不是凭据**（真正的凭据在密文里），所以留在非凭据字段这一侧是对的。
@@ -444,6 +448,7 @@ test('runtime 还没起来时 relay 是 idle，不是 offline（pill 要说的�
       waiting: 0,
       waitingOldestSec: 0,
       pairApproval: null,
+      pairing: null,
       lastPairApproval: null,
     }),
   })
@@ -460,6 +465,7 @@ test('runtime 还没起来时 relay 是 idle，不是 offline（pill 要说的�
     waiting: 0,
     waitingOldestSec: 0,
     pairApproval: null,
+    pairing: null,
     lastPairApproval: null,
   })
 })

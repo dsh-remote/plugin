@@ -55,6 +55,21 @@ test('花名账防线：spend 过的码不许再出现在展示位/快照里', (
   assert.equal(issuance.describe(), null, '花掉的码不许进 status 快照（外部脚本会照抄它）')
 })
 
+test('info()：码龄/剩余寿命只有两个数字，花掉的码立刻变 null（且绝不含 token/psk）', () => {
+  const { issuance } = fixture()
+  assert.equal(issuance.info(), null, '还没发码时不许编一个码龄出来')
+  const created = issuance.publish()
+  assert.ok(created, '夹具自检：发得出一张码')
+  const info = issuance.info()
+  assert.ok(info, '发出去的码必须有码龄读数')
+  assert.deepEqual(Object.keys(info!).sort(), ['ageSec', 'expiresInSec'], '只许这两个数字（凭据一个字都不许过这里）')
+  assert.ok(info!.ageSec <= 2, `刚发的码码龄应≈0，实际 ${info!.ageSec}`)
+  assert.ok(info!.expiresInSec > 100, `120s 的码剩余应≈120s，实际 ${info!.expiresInSec}`)
+
+  issuance.spend(created!.token)
+  assert.equal(issuance.info(), null, '花掉的码不许还报"还剩多少秒"（那会让人以为还能扫）')
+})
+
 test('同码重发是"复活展示"而不是"复活认领"：publish 把它从花名账摘掉（认领与否由中继判）', () => {
   const { issuance } = fixture()
   const first = issuance.publish()

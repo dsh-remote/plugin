@@ -133,12 +133,12 @@ test('剩余寿命不足半程才重发，仍在半程内不动（判据三：�
   assert.equal(staleReason({ active: h.window.active, now: h.clock.now(), generation: 1, ttlMs: 60_000 }), null)
   assert.equal(h.window.tick(), false, '没到半程就换码：手机上刚刷出来的二维码又变了，人永远扫不上')
 
-  void h.clock.advance(35_000) // 累计 55s：剩余 5s < 半程
+  void h.clock.advance(35_000) // 累计 55s：剩余 5s < 余量（60s 的码余量仍按半程 30s 封顶）
   assert.equal(
     staleReason({ active: h.window.active, now: h.clock.now(), generation: 1, ttlMs: 60_000 }),
-    'past-half-life',
+    'near-expiry',
   )
-  assert.equal(h.window.tick(), true, '过了半程不换码：等用户去扫时它已经过期了')
+  assert.equal(h.window.tick(), true, '剩余不足安全余量还不换：等用户去扫时它已经过期了')
 
   void h.clock.advance(60_000) // 彻底过期
   h.window.tick()
@@ -237,13 +237,34 @@ test('pairOnStartSec=0（默认）时"中继重启换码"这条判据也必须�
   assert.equal((h.window.active as unknown as ActivePair).token, '400001')
 })
 
-test('pairOnStartSec=0 时"过半程"同样要换：那张码按常规 TTL 老化，不会每 tick 换一张', async () => {
+test('pairOnStartSec=0 时剩余不足安全余量同样要换：那张码按常规 TTL 老化，不会每 tick 换一张', async () => {
   const h = harness(0)
   h.window.adopt({ token: 'SHOWN', createdAt: h.clock.now(), expiresAt: h.clock.now() + 120_000 })
   await h.clock.advance(59_000)
-  assert.equal(h.window.tick(), false, '还没过半程就换码：用户刚看到的码立刻作废')
+  assert.equal(h.window.tick(), false, '还没到余量线就换码：用户刚看到的码立刻作废')
+  // 2026-10-26：换码线从"半程"（60s）推到"剩余 30 秒"（90s）—— 换码不作废旧码，
+  // 早换只剩副作用（屏幕上的码频繁变脸、pair token issued 刷屏）。
+  await h.clock.advance(30_000)
+  assert.equal(h.window.tick(), false, '剩余 31s 仍大于余量 30s：不许换（旧行为在这里就会换）')
   await h.clock.advance(2_000)
-  assert.equal(h.window.tick(), true, '过半程之后不换：手机扫到一张刚刚过期的码')
+  assert.equal(h.window.tick(), true, '剩余不足 30s 还不换：手机扫到一张快要过期的码')
+})
+
+test('线上 TTL 180s：90 秒时不许换码（旧"半程"行为的现场），150 秒后剩余 30s 才换', async () => {
+  /**
+   * 反面判据（2026-10-26）：这条钉的是**新阈值本身**。
+   * 旧判据 `ttl/2` 在 180s 的码上会在第 90 秒换一张 —— 屏幕上的二维码在用户
+   * 正要扫的时候变脸，而换码并不作废旧码（中继里它活到自己的 TTL）⇒ 纯副作用。
+   */
+  const h = harness(0)
+  h.window.adopt({ token: 'SHOWN', createdAt: h.clock.now(), expiresAt: h.clock.now() + 180_000 })
+  // 服务端权威 TTL 落地（线上中继 180s）：窗口把请求 TTL 与在挂那张的过期时刻一起改写。
+  h.window.applyServerTtl('SHOWN', 180_000)
+  await h.clock.advance(95_000) // 剩余 85s：旧判据早就换了
+  assert.equal(h.window.tick(), false, '剩余 85s 还很充裕，不许换码（旧"半程"判据在这里会换）')
+  await h.clock.advance(60_000) // 累计 155s：剩余 25s < 余量 30s
+  assert.equal(h.window.tick(), true, '剩余不足 30s 必须换：否则用户扫到的码随时会过期')
+  assert.deepEqual(h.published, [180_000], '换码请求的 TTL 用服务端权威值')
 })
 
 test('staleNow() 与 tick() 同一套判据：刷新按钮据此拒发死码，且它自己不改状态', () => {

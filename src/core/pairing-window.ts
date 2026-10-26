@@ -8,8 +8,15 @@
  * - `!active` → 防"永远没有码"（一次发布失败之后就再也不发了）；
  * - `generationChanged` → 防"中继重启后一直挂一张死码"：中继的 pending-pair 表是内存的，
  *   重启即清空，那张码的 TTL 还没到但已经没人认得了；
- * - `剩余寿命 < 半程` → 防"用户扫到一个刚刚过期的码"。半程 + 3s 轮询 ⇒ 一张码在
- *   status.json 里的实际存活期约 `ttl/2 ~ ttl`。
+ * - `剩余寿命 < 安全余量` → 防"用户扫到一个刚刚过期的码"。**2026-10-26 从"半程"
+ *   改成固定余量**：半程 + 3s 轮询 ⇒ 一张码在 status.json 里的实际存活期只有
+ *   `ttl/2 ~ ttl`（线上 TTL 180s ⇒ 每 90 秒换一张），而换码**不会**作废旧码
+ *   （中继的 pending 表里它一直活到自己的 TTL），所以早换的唯一效果是让屏幕上的
+ *   二维码频繁变脸、`pair token issued` 刷屏（实测一晚 409 条）。改成"剩余不到
+ *   30 秒才换"之后：屏幕上的码稳定 ~150 秒，而换码那一刻仍有 30 秒余量
+ *   （认领是一个来回，秒级；30 秒是十倍安全系数）。
+ *   ⚠️ **余量不许压到 0**（到期才换）：那样用户扫到的码可能只剩几秒，
+ *   一次慢一点的扫码就撞 `invalid_or_expired`。
  *
  * 新实现再加第四条判据，它是这次重写才有的能力：
  *
@@ -70,8 +77,26 @@ export function staleReason(input: WindowInput): string | null {
   if (!active) return 'no-active-pair'
   if (active.generation !== generation) return 'relay-generation-changed'
   if (active.expiresAt < now) return 'expired'
-  if (active.expiresAt < now + ttlMs / 2) return 'past-half-life'
+  if (active.expiresAt < now + rotateMarginMs(ttlMs)) return 'near-expiry'
   return null
+}
+
+/**
+ * 换码的安全余量（2026-10-26，原判据是 `ttlMs / 2`）。
+ *
+ * 30 秒的出处：认领是**一个来回**（手机扫码 → 建连 → `pair-begin-client` → 中继 `claim`），
+ * 真机上通常 1–3 秒；30 秒是十倍余量，同时把"屏幕上的码多久变一次"从 90 秒拉到 150 秒
+ * （线上 TTL 180s）—— 换码本身不会作废旧码，变脸快只剩坏处（拍屏/慢扫的人对不上
+ * 屏幕上那张、日志被 `pair token issued` 刷屏）。
+ *
+ * ⚠️ 上限仍是半程：TTL 很短时（判据里 20s、自建中继有人会把 TTL 收紧）余量不许超过
+ * 寿命的一半，否则一张码刚发出来就被判"该换了"—— 3 秒一轮的换码风暴，
+ * 屏幕上永远没有能用的码（2026-10-04 的现场，`pairOnStartSec=0` 那档踩过）。
+ */
+const ROTATE_MARGIN_MS = 30_000
+
+function rotateMarginMs(ttlMs: number): number {
+  return Math.min(ROTATE_MARGIN_MS, ttlMs / 2)
 }
 
 export interface WindowDeps {
@@ -147,7 +172,7 @@ export class PairingWindow {
   /**
    * 此刻这张码还能不能递给用户；返回原因字符串表示"不能"，null 表示仍然可用。
    *
-   * 与 `tick()` 的换码判据同一套（代次变了 / 已过期 / 过半程），只是**不发布**。
+   * 与 `tick()` 的换码判据同一套（代次变了 / 已过期 / 剩余不足安全余量），只是**不发布**。
    * 为什么要有这一口：`tick()` 挂在 3 秒的状态节拍上，而用户点的那条"刷新"是即时的
    * —— 少了这一判，中继重启后屏幕上那张码在中继那边已经死了（它的 pending 表是内存的），
    * 本地 TTL 却还没到，两次 tick 之间的那次刷新会把死码原样递回去，用户干等一整个 TTL。
@@ -166,7 +191,7 @@ export class PairingWindow {
    *
    * **"要不要自动补发"与"要不要刷新已经挂出去的那张"是两件事**（2026-10-06）：
    * 原来第一行 `if (pairSec <= 0) return false` 把两件事一起掐了，于是
-   * `pairOnStartSec` 默认 0 的机器上 `generation-changed` 与 `past-half-life`
+   * `pairOnStartSec` 默认 0 的机器上 `generation-changed` 与 `near-expiry`
    * 两条判据**永不生效** —— 中继重启后屏上那张码已经死了，而"刷新"因为本地
    * 未过期会原样返回它，用户只能干等 TTL。现在只在"没有活动码且不自动发码"时早退。
    */
@@ -208,7 +233,7 @@ export class PairingWindow {
    * 请求值来自 `pairOnStartSec`；服务端一旦回过 `ttlMs` 就以它为准。
    *
    * `pairOnStartSec <= 0`（默认）时不能拿 `pairSec*1000` 当基线——那会得到 1 秒，
-   * 于是"已经挂出去的那张"每次 tick 都被判成过半程、3 秒换一张（永远没有能用的码）。
+   * 于是"已经挂出去的那张"每次 tick 都被判成该换、3 秒换一张（永远没有能用的码）。
    * 这一档用 `defaultTtlMs`（调用方传的是配置里的 `pairTtlMs`）：屏幕上那张码是
    * 用户点出来的，它按常规 TTL 老化。
    */
