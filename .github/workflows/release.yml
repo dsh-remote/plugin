@@ -5,6 +5,16 @@ name: Release
 # ## 前置条件：npm 侧要有指向**本仓、本文件**的 Trusted Publishing
 #
 #     npm trust github @dsh-remote/plugin --repo dsh-remote/plugin --file release.yml --allow-publish
+#     npm trust github dsh-remote-control --repo dsh-remote/plugin --file release.yml --allow-publish
+#
+# ⚠️ **两个包各要一条**（2026-10-26 起双包发布）：`@dsh-remote/plugin` 是正名，
+# `dsh-remote-control` 是无 scope 别名。信任是按**包**记的，别名那条不配的话，
+# 工作流会在"发布无 scope 别名"那步红 —— 而那一步刻意排在正名之前，就是为了
+# 让这种红发生在**版本号还没被烧掉**的时候。
+#
+# ⚠️ **包名参数就是包名**（无 scope 就写裸名，别加 `@`；scoped 才带 `@scope/`），
+# 而 `--repo` 要的是**GitHub 仓库**（`owner/repository`，没有 `github.com/`、没有 `.git`）。
+# 把两者写反的报错是 `GitHub repository must be specified in the format owner/repository`。
 #
 # ⚠️ **`--file` 必须逐字等于本文件名。** npm 侧**不校验它存不存在** —— 2026-10-10 实测：
 # 拿一个根本不存在的文件名做 `--dry-run`，它照样打印"配好了"，一句警告都没有。
@@ -81,6 +91,51 @@ jobs:
             exit 1
           }
 
+      # ── 无 scope 别名 `dsh-remote-control` ────────────────────────────────
+      # 为什么要多这一步（2026-10-26 裁决）：npm 上无 scope 的 `dsh-remote-control`
+      # 在 providcc 名下，是这份产品**唯一**的无 scope 品牌位——竞对只能用
+      # `@copylee/…`、`@mazov2love/…`（已核实两个撞名仓的 package.json），拿不到它。
+      # 但它 1.x/2.x 是 2026-10 之前的老线：**`latest` 一旦落回那里，
+      # `dsh plugin add dsh-remote-control` 装到的就是旧代码** —— 名字是我们的、
+      # 装出来是僵尸，这才是"给竞对做嫁衣"的真正机制。
+      # ⇒ 每次发 0.5.x 必须把它一起发出去，`latest` 跟着动。
+      #
+      # 顺序是**先别名、后正名**，不是随手排的：别名这条路新（TP 没配好会红），
+      # 放在前面 ⇒ 红了的时候正名还没发出去，**版本号没被烧掉**，改完还能移 tag 重跑。
+      # 反过来排的话，正名发成功了、别名红，就成了"包发了、attestation 也在、
+      # 工作流却是红的"那种看起来像发布失败的形状。
+      - name: 构建无 scope 别名（就地改名 + 构建）
+        run: node scripts/pack-unscoped.mjs --rename
+
+      - name: 发布无 scope 别名到 npm
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          # 与正名那步同理：必须**显式清空**，否则 pnpm 会在 OIDC 失败时静默回落成
+          # token 发布（版本发出去、工作流绿、attestation 一个没有）。
+          NODE_AUTH_TOKEN: ''
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          if [ -n "$(npm view "dsh-remote-control@${version}" version 2>/dev/null || true)" ]; then
+            echo "dsh-remote-control@${version} 已经在注册表里：跳过 publish"
+            exit 0
+          fi
+          pnpm publish --access public --no-git-checks
+
+      # 还原四个改名文件（`--rename` 模式刻意不还原，见脚本注释），再把 dist 重建回
+      # scoped —— 紧接着那步 `pnpm publish` 打的就是这个 dist，名字对不上会发错包。
+      - name: 还原源码并重建 dist（回到 @dsh-remote/plugin）
+        run: |
+          set -e
+          git checkout -- package.json cordis.patch.yml scripts/bundle-plugin.mjs src/client/main.ts
+          version="$(node -p "require('./package.json').version")"
+          [ "$(node -p "require('./package.json').name")" = "@dsh-remote/plugin" ] || {
+            echo "::error::还原后包名不是 @dsh-remote/plugin —— 下面的发布会把别名再发一次。"
+            exit 1
+          }
+          pnpm build
+          echo "已还原为 @dsh-remote/plugin@${version}"
+
       - name: 发布到 npm
         env:
           TAG_NAME: ${{ github.ref_name }}
@@ -104,31 +159,35 @@ jobs:
       # 发完必须**独立验一次 provenance**：工作流绿不等于带 attestation（见上面那条回落）。
       # ⚠️ 窗口给到 400s（80 × 5s），不是 60s：注册表侧的落地延迟不该由我们判红，而
       # **假红比不红更坏** —— 它把"已发布的版本号不可复用"变成一条人去重发同一个号的死路。
-      - name: 验 provenance 真的挂上了
+      # ⚠️ 两个包都要验：别名那条是新路，最可能悄悄回落成 token 发布（因此没有 attestation）。
+      - name: 验 provenance 真的挂上了（双包）
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -e
           version="${TAG_NAME#v}"
-          url="https://registry.npmjs.org/-/npm/v1/attestations/@dsh-remote/plugin@${version}"
-          # ⚠️ 判据必须证明**至少有一条 attestation**，不能只证明"回答里出现过这个词"：
-          # 旧的 `grep -q '"attestations"'` 连**空数组** `{"attestations":[]}` 都会放行。
-          # 成功形状是 `{"attestations":[{"predicateType":…`；查不到的版本回
-          # `{"error":"Not found"}`。**空白也不写死**：`-E` + `[[:space:]]*` 让压缩与
-          # 展开两种 JSON 都认（假红比不红更坏 —— 格式一变就空等 400s 不可接受）。
-          # `\[[[:space:]]*\{` 还要求数组第一项是对象 ⇒ 空数组不算。
-          for i in $(seq 1 80); do
-            if curl -s "$url" | grep -Eq '"attestations"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{' ; then
-              echo "provenance 已挂上：@dsh-remote/plugin@${version}（第 ${i} 次轮询）"
-              exit 0
-            fi
-            sleep 5
+          for pkg in dsh-remote-control "@dsh-remote/plugin"; do
+            url="https://registry.npmjs.org/-/npm/v1/attestations/${pkg}@${version}"
+            # ⚠️ 判据必须证明**至少有一条 attestation**，不能只证明"回答里出现过这个词"：
+            # 旧的 `grep -q '"attestations"'` 连**空数组** `{"attestations":[]}` 都会放行。
+            # 成功形状是 `{"attestations":[{"predicateType":…`；查不到的版本回
+            # `{"error":"Not found"}`。**空白也不写死**：`-E` + `[[:space:]]*` 让压缩与
+            # 展开两种 JSON 都认（假红比不红更坏 —— 格式一变就空等 400s 不可接受）。
+            # `\[[[:space:]]*\{` 还要求数组第一项是对象 ⇒ 空数组不算。
+            for i in $(seq 1 80); do
+              if curl -s "$url" | grep -Eq '"attestations"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{' ; then
+                echo "provenance 已挂上：${pkg}@${version}（第 ${i} 次轮询）"
+                continue 2
+              fi
+              sleep 5
+            done
+            echo "::error::发布后 400s 仍查不到 ${pkg}@${version} 的 attestation。先别重发 —— 版本号发出去就不可复用。"
+            echo "先手工复核一次：curl -s '$url'"
+            echo "确实没有，才说明 Trusted Publishing 没配好，或配的 workflow 文件名不是 release.yml："
+            echo "  npm trust github <包名> --repo dsh-remote/plugin --file release.yml --allow-publish"
+            echo "  （正名是 @dsh-remote/plugin，别名是 dsh-remote-control，**两个包各配一条信任**）"
+            exit 1
           done
-          echo "::error::发布后 400s 仍查不到 @dsh-remote/plugin@${version} 的 attestation。先别重发 —— 版本号发出去就不可复用。"
-          echo "先手工复核一次：curl -s '$url'"
-          echo "确实没有，才说明 Trusted Publishing 没配好，或配的 workflow 文件名不是 release.yml："
-          echo "  npm trust github @dsh-remote/plugin --repo dsh-remote/plugin --file release.yml --allow-publish"
-          exit 1
 
       - name: 建 GitHub Release
         env:
