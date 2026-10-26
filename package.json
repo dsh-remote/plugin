@@ -40,7 +40,6 @@
     "copy",
     "dist/bundle",
     "cordis.patch.yml",
-    "docs/images/miniprogram-qr.jpg",
     "icon.svg",
     "locale"
   ],
