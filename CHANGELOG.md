@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.2 —— 换码节奏放慢 + 码龄可见
+
+### 屏幕上的码不再每 90 秒变一次脸
+
+换码线从「剩余不足半程」（线上 TTL 180s ⇒ 每 90 秒换一张）改成「**剩余不足 30 秒**」
+（`core/pairing-window.ts` 的 `ROTATE_MARGIN_MS`；TTL 很短时仍封顶半程，防换码风暴）。
+
+换码**不会作废旧码**（中继的 pending 表里它一直活到自己的 TTL），所以早换只剩下副作用：
+二维码在用户正要扫的时候变脸、`pair token issued` 刷屏（实测一晚 409 条）。
+改完之后屏幕上的码稳定约 150 秒，而换码那一刻仍有 30 秒余量——认领是一个来回，秒级。
+
+### `/status` 新增码龄 / 剩余寿命
+
+`pairing: { ageSec, expiresInSec } | null`（`core/pair-issuance.ts` 的 `info()`）。
+**只有两个数字**：宿主 UI 可以显示"这张码 45 秒前生成、还有 135 秒"，而不必让用户扫了
+才知道失效。凭据（token/psk）**一个字都不许**过这条每 2 秒被轮询的只读接口——
+带凭据的那份仍在 0600 的 `status.json`。
+
+判据：`tests/pairing-window.test.ts` 改 2 条 + 新 1 条（180s 的码在 95 秒时不许换）、
+`tests/pair-issuance.test.ts` +1（`info()` 只吐两个数字、花掉即 null）、
+`tests/pill-routes.test.ts` 的 `/status` 白名单（九个 → 十个非凭据字段）。
+
+## 0.5.1 —— 三包深审收口（行为零变化）
+
+- `helloOkFor*` 缺省补 `PROTOCOL_VERSION`（schema 必填；构造器不许造出"对侧静默丢帧"的形状）；
+- 协议注释与现状对齐（版本上报默认方向、`FRAME_TYPES` 计数）；
+- `kernel-events.ts` / `index.ts` 两处注释编辑残迹清掉；
+- 中继侧那条死开关（`reportSoftwareVersion`）在 relay 包删掉，插件侧同步注释。
+
 ## 3.2.14 —— 与 3.2.13 逐字节相同（版本对齐）
 
 `src/` 无任何改动。3.2.14 的实质改动在 relay（`/code` 拒渲染死码 + 主机宽限改挂起），
