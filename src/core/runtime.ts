@@ -63,6 +63,7 @@ import {
 } from '@dsh-remote/protocol/outbound'
 import type { EvHostInfo } from '@dsh-remote/protocol'
 import { imageAttachmentsSupported } from './capabilities.js'
+import type { NotifyItem } from '@dsh-remote/protocol'
 import type {
   ApprovalDecision,
   ApprovalOutcomeValue,
@@ -101,6 +102,19 @@ export interface RuntimeTransport {
    * 返回送达的会话数（本地记账，不是送达回执）。
    */
   pushSummary(digest: StatusDigest): number
+  /**
+   * 中继支持通知面吗（`notify.v1`，2026-10-27）。
+   *
+   * **按声明开**：老中继返回 false ⇒ 主机**连提醒定时器都不挂**
+   * （老中继解析不了 `notify-approval`，发了只会换来 `unknown_frame`）。
+   */
+  supportsNotify?(): boolean
+  /**
+   * 发一帧 `notify-approval`（host → relay 的**明文控制帧**）。
+   *
+   * 可选：没实现这一条的老宿主 ⇒ 提醒那一路整体不存在（不是"发了没反应"）。
+   */
+  notifyApproval?(conversationId: string, items: NotifyItem[]): boolean
 }
 
 export interface RuntimeOptions {
@@ -310,6 +324,9 @@ export class HostRuntime {
       },
       hasClient: (conversationId) => this.transport.hasClient(conversationId),
       conversationIds: () => this.transport.conversationIds(),
+      // 通知面（2026-10-27）：按声明开。老中继 ⇒ 不挂定时器。
+      supportsNotify: () => this.transport.supportsNotify?.() === true,
+      notifyApproval: (conversationId, items) => this.transport.notifyApproval?.(conversationId, items) ?? false,
     })
   }
 

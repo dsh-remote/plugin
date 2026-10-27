@@ -16,7 +16,7 @@
  *    runtime 还没起来时 `createPairing()` 返回 null，而不是"这个插件不存在"。
  */
 import path from 'node:path'
-import { type CmdPayload, type EvPayload } from '@dsh-remote/protocol'
+import { type CmdPayload, type EvPayload, type NotifyItem } from '@dsh-remote/protocol'
 import { HostRuntime, type RuntimeTransport } from './core/runtime.js'
 import { KeepAwake } from './core/sleep-policy.js'
 import { PairingSlots } from './core/keys.js'
@@ -551,6 +551,14 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     pushSummary(digest: { at: number; running: boolean; steps?: number; pending?: number }): number {
       // 没有中继客户端就没人可登记（本地记账为 0）：摘要是幂等快照，下次推送还会带。
       return relay ? relay.pushSummary(digest) : 0
+    },
+    /** 中继声明了通知面吗（`notify.v1`，2026-10-27）。没有中继 ⇒ 没有。 */
+    supportsNotify(): boolean {
+      return relay ? relay.supportsNotify() : false
+    },
+    /** 发一帧 `notify-approval`（提醒：这条会话有卡在等）。 */
+    notifyApproval(conversationId: string, items: NotifyItem[]): boolean {
+      return relay ? relay.notifyApproval(conversationId, items) : false
     },
   }
 

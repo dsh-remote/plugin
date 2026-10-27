@@ -44,6 +44,8 @@ import {
   encToClient,
   helloForHost,
   isRetryableError,
+  notifyApproval as notifyApprovalFrame,
+  type NotifyItem,
   open,
   pairBegin,
   pairGrant,
@@ -687,6 +689,30 @@ export class RelayClient {
    *
    * 作废（voided）的通道跳过：那条已经对中继宣布过"别再转"，别再写它的条目。
    */
+  /**
+   * 发一帧 `notify-approval`（2026-10-27）：host → relay 的**明文控制帧**。
+   *
+   * ## 走 `raw()` 不走加密信封
+   *
+   * 与 `summary` 同款理由：它是**控制面**（"这个会话有卡要提醒"），
+   * 不是会话内容。帧里只有元数据（哪张卡、什么时候挂起的、审批还是提问）——
+   * **一个字的正文都没有**（模板正文由中继按固定文案填，见 relay/src/notify.ts）。
+   *
+   * ## 按声明开
+   *
+   * 中继没声明 `notify.v1` ⇒ 一个字节都不发：老中继解析不了这一帧，
+   * 发了只会换来一句 `unknown_frame`（给两端刷错误）。
+   */
+  notifyApproval(conversationId: string, items: NotifyItem[]): boolean {
+    if (!this.relayCaps['notify.v1']) return false
+    return this.raw(notifyApprovalFrame(conversationId, items))
+  }
+
+  /** 中继声明了通知面吗（`notify.v1`）。 */
+  supportsNotify(): boolean {
+    return this.relayCaps['notify.v1'] === true
+  }
+
   pushSummary(digest: StatusDigest): number {
     // 按声明开（M-C）：中继没声明 digest.v1 ⇒ 一个字节都不发。
     // 老中继解析不了 `summary` 帧（回 unknown_frame），发了就是给两端刷错误。

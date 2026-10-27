@@ -11,7 +11,7 @@
  *
  * ⚠️ **行为零变化**（R4 纪律）：判据一片未动照样全绿。
  */
-import type { AnswerItem, EvPayload, QuestionItem } from '@dsh-remote/protocol'
+import type { AnswerItem, EvPayload, NotifyItem, QuestionItem } from '@dsh-remote/protocol'
 import {
   permissionRequest,
   permissionResolved,
@@ -28,11 +28,31 @@ import { RUN_OUTPUT } from './kernel-events.js'
 
 export type VoidReason = 'desktop' | 'withdrawn' | 'timeout'
 
+/**
+ * 挂起多久之后才发提醒（毫秒）。
+ *
+ * **60 秒**（2026-10-27 用户裁决：原方案的 3 分钟改为 1 分钟）。
+ *
+ * 为什么这么短：用户是在**电脑前**等着审批的人 —— 他离开电脑去做别的事，
+ * 一分钟之内还会回来看看；发通知的窗口越短，"我刚走开就收到提醒"的概率越高，
+ * 而误发的代价（额度是**一次性**的）由频控（10 分钟冷却 / 3 条每小时）兜着。
+ */
+export const NOTIFY_DELAY_MS = 60_000
+
 export interface PendingInteraction {
   conversationId: string
   sessionId: string
   resolve: (value: unknown) => void
   timer?: unknown
+  /**
+   * 提醒定时器（2026-10-27）：挂起满 `NOTIFY_DELAY_MS` 后若**手机不在线**就发通知。
+   *
+   * 与 `timer`（宿主给的期限）是**两回事**：`timer` 到点是**结算**这张卡，
+   * `notifyTimer` 到点是**提醒**用户 —— 两者互不替代，都要在 `settle()` 里清掉。
+   */
+  notifyTimer?: unknown
+  /** 这张卡**已经触发过**通知（一次性）。 */
+  notified?: boolean
   expiresAt?: string
   options?: QuestionItem[]
   kind: 'approval' | 'question'
@@ -61,6 +81,20 @@ export interface InteractionsDeps {
   hasClient(conversationId: string): boolean
   /** `transport.conversationIds()`：台上的全部通道。 */
   conversationIds(): string[]
+  /**
+   * 中继支持通知面吗（按声明开，`notify.v1`）。
+   *
+   * ⚠️ **老中继返回 false**：那时不但发不出去，连发帧都会被回一句
+   * `unknown_frame`（给两端刷错误）。⇒ 这种情况**连定时器都不挂**。
+   */
+  supportsNotify(): boolean
+  /**
+   * 发一帧 `notify-approval`（host → relay 的**明文控制帧**，不走加密信封）。
+   *
+   * 返回 false = 没发出去（通道没了/老中继）。**没有回执**（v1 不做失败重试），
+   * 所以主机这边靠"这张卡通知过了"的标记去重。
+   */
+  notifyApproval?(conversationId: string, items: NotifyItem[]): boolean
 }
 
 export interface Interactions {
@@ -123,6 +157,10 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
      * 而 `settle()` 统一清它 —— 将来若某个宿主真的带了期限，加回来只需要一处。
      */
     timer?: unknown
+    /** 提醒定时器（2026-10-27）：见导出那份的同名注释。 */
+    notifyTimer?: unknown
+    /** 这张卡已经触发过通知（一次性）。 */
+    notified?: boolean
     /**
      * 到期时刻**只在宿主给了期限时才有**（2026-10-11）。它是可选的：缺省即"无期限"，
      * 而这正是这一代内核的样子。`replayPending` 原样重发它、不重算 —— 顺延等于骗手机。
@@ -512,7 +550,7 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
               settle(id, 'decline', 'timeout')
             }, hostTimeout)
           : undefined
-        pending.set(id, {
+        const item: PendingInteraction = {
           conversationId,
           sessionId: info.sessionId,
           resolve: (value) => resolve(value === undefined ? 'decline' : (value as ApprovalDecision)),
@@ -522,7 +560,9 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
           askedAt: deps.clock.now(),
           action: info.action,
           reason: info.reason,
-        })
+        }
+        pending.set(id, item)
+        armNotifyTimer(id, item)
         // `reason` 是 `carrier-services.participate()` 打的标记：'desktop' = 桌面先答了，
         // 其余（'platform'）是宿主自己把这次请求撤了。两种都要让手机把卡收掉，
         // 但说出来的话不一样。
@@ -606,7 +646,7 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
               settle(id, null, 'timeout')
             }, hostTimeout)
           : undefined
-        pending.set(id, {
+        const item: PendingInteraction = {
           conversationId,
           sessionId: info.sessionId,
           resolve: (value) => resolve((value as AskUserQuestionAnswerValue | undefined) ?? null),
@@ -615,7 +655,9 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
           options: info.questions,
           kind: 'question',
           askedAt: deps.clock.now(),
-        })
+        }
+        pending.set(id, item)
+        armNotifyTimer(id, item)
         // 与审批那条同样：'desktop' 是桌面先答，其余是宿主自己撤了这次请求。
         info.signal?.addEventListener(
           'abort',
@@ -696,11 +738,82 @@ export function createInteractions(deps: InteractionsDeps): Interactions {
     return true
   }
 
+  /**
+   * 挂上提醒定时器（2026-10-27）。
+   *
+   * ## 为什么要有它
+   *
+   * 审批/提问挂起时，手机**可能不在**（用户去干别的了）。而这恰恰是最需要他的时刻
+   * —— 桌面那一半只能干等（不设期限），用户回到电脑前才发现"刚才有个审批没答"。
+   * ⇒ 挂起满 `NOTIFY_DELAY_MS`（60 秒）还没结算，就发一条微信服务通知。
+   *
+   * ## 四条纪律
+   *
+   * ① **按声明开**：中继没声明 `notify.v1` ⇒ **连定时器都不挂**（老中继会回
+   *    `unknown_frame`，发了就是给两端刷错误）。
+   * ② **在线不发**（v1）：手机此刻在线的话，它本来就能看到卡 ⇒ 通知是多余的。
+   * ③ **一张卡一条**：标记 `notified`，聚合成一条（同会话的审批+提问打包）。
+   * ④ **不重试、不补发**：发完就完；主机重启后 pending 本身已丢，不会恢复提醒。
+   */
+  function armNotifyTimer(id: string, item: PendingInteraction): void {
+    if (!deps.supportsNotify()) return
+    const timer = deps.clock.setTimeout(() => {
+      onNotifyDue(id)
+    }, NOTIFY_DELAY_MS)
+    item.notifyTimer = timer
+  }
+
+  /**
+   * 提醒定时器到点（2026-10-27）。
+   *
+   * 五步（顺序有讲究）：① 卡还在吗 ② 手机在线吗 ③ 收集同会话里未通知的卡
+   * ④ 全部标记 notified ⑤ 发一帧。
+   *
+   * ⚠️ **④ 在 ⑤ 之前**：标记在前 ⇒ 同一张卡绝不会被两条定时器各发一次
+   * （同会话多张卡时，每张卡都有自己的定时器，它们会先后到点）。
+   */
+  function onNotifyDue(id: string): void {
+    const item = pending.get(id)
+    // ① 已经结算了（手机答了/桌面答了/被撤回）⇒ 什么都不做。
+    if (item === undefined) return
+    // ② 手机在线 ⇒ 它本来就能看到卡，不发。
+    if (deps.hasClient(item.conversationId)) return
+    // ③ 收集**同一会话**里所有还没通知过的卡（审批 + 提问打包成一条）。
+    const items: NotifyItem[] = []
+    for (const [requestId, p] of pending) {
+      if (p.conversationId !== item.conversationId) continue
+      if (p.notified === true) continue
+      items.push({
+        requestId,
+        sessionId: p.sessionId,
+        kind: p.kind,
+        askedAt: new Date(p.askedAt).toISOString(),
+      })
+    }
+    if (items.length === 0) return
+    // ④ 全部标记"通知过了"（先标记 ⇒ 同一张卡不会被两条定时器各发一次）。
+    for (const it of items) {
+      const p = pending.get(it.requestId)
+      if (p !== undefined) p.notified = true
+    }
+    // ⑤ 发一帧（**明文控制帧**：只带元数据，不带任何内容）。
+    const sent = deps.notifyApproval?.(item.conversationId, items) ?? false
+    deps.log('approval notify dispatched', {
+      conversationId: item.conversationId,
+      count: items.length,
+      sent: sent ? 1 : 0,
+    })
+  }
+
   function settle(id: string, value: unknown, voidAs?: VoidReason): void {
     const item = pending.get(id)
     if (!item) return
     pending.delete(id)
     if (item.timer !== undefined) deps.clock.clearTimeout(item.timer)
+    // ⚠️ **提醒定时器也要清**（2026-10-27）：不清的话，一张已经结算的卡到点时
+    // 还会去查 pending 表 —— 查不到就返回，看起来"没事"，但那个定时器会一直挂着
+    // 到 60 秒后（宿主 shutdown 时若有未清的定时器，进程可能退不出去）。
+    if (item.notifyTimer !== undefined) deps.clock.clearTimeout(item.notifyTimer)
     // 只有"不是手机自己点的"才需要作废：那种情况下手机上那张卡还亮着，而它已经没用了。
     if (voidAs) voidStaleCard(id, item, voidAs)
     item.resolve(value)
