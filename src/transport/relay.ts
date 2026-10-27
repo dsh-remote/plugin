@@ -98,8 +98,15 @@ export interface RelayClientOptions {
    * 那也是为什么协议要求每条 `cmd.*` 都带 `cmdId`。
    */
   onInvalidCommand?: (conversationId: string, cmdId: string | undefined, payloadType: string) => void
-  /** 一条新配对建立：调用方要立刻把会话与防休眠状态推过去。 */
-  onPeerJoined: (conversationId: string, pairingToken: string | undefined) => void
+  /**
+   * 一条新配对建立：调用方要立刻把会话与防休眠状态推过去。
+   *
+   * `clientId` 是**加入这一条通道的那台手机**（中继在 `peer-joined` 里带上，
+   * 协议 `peerJoinedFrame` 早就有这个字段）。它必须在「只允许一台」那条策略里
+   * 被看见 —— 否则主机分不清「新设备进来，该踢旧设备」与「同一台手机重配，
+   * 不该踢自己」，会把同一台手机自己的旧通道作废掉（见 {@link RelayClient.clientIdsOf}）。
+   */
+  onPeerJoined: (conversationId: string, pairingToken: string | undefined, clientId: string | undefined) => void
   /** 一条配对通道被彻底作废（本端解不开、或本端主动声明它没人接了）。 */
   onConversationGone: (conversationId: string) => void
   /** 某个客户端离开，但**会话保留**（D3）：它下次用同一个 convId 回来时还能接上。 */
@@ -679,6 +686,21 @@ export class RelayClient {
   }
 
   /**
+   * 一条通道当前登记着哪些手机（`clientIds` 成员表）。
+   *
+   * 「只允许一台」那条策略要靠它判断**该不该作废**某条旧通道：
+   * 旧通道的成员里**有**刚进来的这台手机 ⇒ 它是同一台手机的重配，**不作废**；
+   * 没有 ⇒ 是真的换了一台设备，照旧作废。
+   *
+   * ⚠️ 成员表是**瞬时态**（进程起来时为空，只有收到这台手机的帧之后才有），
+   * 所以查不到**不等于**「不是同一台」—— 上层必须把「查不到」当作
+   * 「无法证明是同一台」来处理，而不是当作「一定是另一台」。
+   */
+  clientIdsOf(conversationId: string): string[] {
+    return [...(this.conversations.get(conversationId)?.clientIds ?? [])]
+  }
+
+  /**
    * 登记状态摘要（M2，REVIEW §5.1）：控制面**明文**帧，中继存进会话条目并落盘。
    *
    * 与 `broadcast` 的两条差别：
@@ -876,7 +898,7 @@ export class RelayClient {
         this.voided.delete(frame.sessionId)
         this.raw(resyncFrame(this.conversations.ids()))
         this.emitState('online')
-        this.options.onPeerJoined(frame.sessionId, frame.pairingToken)
+        this.options.onPeerJoined(frame.sessionId, frame.pairingToken, frame.clientId)
         return
       }
       case 'peer-left':

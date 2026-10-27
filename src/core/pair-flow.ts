@@ -36,8 +36,19 @@ export interface PairFlowDeps {
   issuance: PairIssuance
   /** 把 psk 加密送回手机（`relay.sendPairGrant`）。 */
   sendPairGrant(granted: { hostPub: string; nonce: string; wrappedPsk: string; sessionId: string }): void
-  /** 只允许一台：新通道进来，其余全部作废。 */
-  voidOtherConversations(keepId: string): void
+  /**
+   * 只允许一台：新通道进来，其余全部作废。
+   *
+   * `joiningClientId` 是**刚进来的那台手机**。实现方靠 {@link PairFlowDeps.clientIdsOf}
+   * 查出某条旧通道的成员里有没有它 ⇒ **同一台手机**的旧通道**不作废**
+   * （它只是重配，不是换设备）。
+   *
+   * ⚠️ 查不到成员（空表）**不等于**「不是同一台」—— 成员表是瞬时态，进程刚起来时为空。
+   * 那时只能按「无法证明是同一台」处理，即**照旧作废**（保持「只允许一台」的原意）。
+   */
+  voidOtherConversations(keepId: string, joiningClientId: string | undefined): void
+  /** 读一条通道的成员表（「只允许一台」那条策略要靠它判断是不是同一台手机）。 */
+  clientIdsOf(conversationId: string): string[]
   /** 新配对建立 ⇒ 运行时起来。 */
   startRuntime(): void
 }
@@ -45,7 +56,7 @@ export interface PairFlowDeps {
 export interface PairFlow {
   onPairRequest(pairingToken: string, clientPub: string, sessionId: string): void
   onPairReady(pairingToken: string, ttlMs: number): void
-  onPeerJoined(conversationId: string, pairingToken: string | undefined): void
+  onPeerJoined(conversationId: string, pairingToken: string | undefined, clientId: string | undefined): void
   onPairFail(reason: string, failedToken: string | undefined): void
   onClientUnpaired(): void
   /** 放行一条挂起的申请（取走即焚）。 */
@@ -120,7 +131,7 @@ export function createPairFlow(deps: PairFlowDeps): PairFlow {
     pairingWindow.applyServerTtl(pairingToken, ttlMs)
   }
 
-  function onPeerJoined(conversationId: string, pairingToken: string | undefined): void {
+  function onPeerJoined(conversationId: string, pairingToken: string | undefined, clientId: string | undefined): void {
     /**
      * **只允许一台**（2026-10-03 拍板）。中继在通知我们之前已经把这条新通道开好了
      * （`relay.ts` 的 peer-joined 先 `conversations.open` 再回调），所以这里要作废的是
@@ -128,8 +139,22 @@ export function createPairFlow(deps: PairFlowDeps): PairFlow {
      *
      * 走 `voidConversation` 而不是只删本地：只删本地的话，中继仍会把旧手机的密文转过来，
      * 而那台手机面对的是一个听不见的对端（R1 那个静默黑洞）。
+     *
+     * ⚠️ **但同一台手机的重配不该作废它自己的旧通道**（2026-10-27 线上取证）。
+     *
+     * 现场（生产 relay 容器日志 10-27 10:29–10:38Z）：一台主机 `drc-63a5d5717e5b`
+     * 配过 **6 个不同 clientId**，每一台新手机进来就把上一台踢掉（作废发生在
+     * 配成后 **+16.7s ～ +101.7s**，`clients=1`）。被踢的手机手里还捏着那张
+     * **已经烧掉的码**，重连再拿它认领 ⇒ 中继 `already_used` ⇒ 用户看到
+     * 「配上了又断、又要重新扫码」，而主机侧一条异常日志都没有。
+     *
+     * ⇒ 判据是**成员表**：旧通道的成员里有刚进来的这台手机 ⇒ 它是同一台手机，
+     * **留着**（它会被中继侧 `leaveAll` 摘成员，但通道本身不必作废）。
+     *
+     * ⚠️ 查不到成员**不等于**「不是同一台」（成员表是瞬时态，进程刚起来时为空）。
+     * 那时**照旧作废** —— 保持「只允许一台」的原意，不因为一条信息缺失就放宽策略。
      */
-    deps.voidOtherConversations(conversationId)
+    deps.voidOtherConversations(conversationId, clientId)
     deps.startRuntime()
     /**
      * ⚠️ **这里不推任何东西**（2026-10-21 订正，3.2 配对改造的后果）。

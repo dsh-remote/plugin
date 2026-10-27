@@ -83,7 +83,7 @@ interface Harness {
   outOf(type: string): Array<Record<string, unknown>>
   feed(frame: Record<string, unknown>): void
   feedText(text: string): void
-  readonly joined: Array<{ conversationId: string; token: string | undefined }>
+  readonly joined: Array<{ conversationId: string; token: string | undefined; clientId: string | undefined }>
   readonly gone: string[]
   readonly left: Array<{ conversationId: string; clientId: string }>
   /** 手机主动解配（`peer-left{unpaired:true}`）——与 `left`（掉线）严格分开记。 */
@@ -128,7 +128,13 @@ function harness(): Harness {
     onInvalidCommand: (conversationId, cmdId, payloadType) => {
       invalid.push({ conversationId, cmdId, payloadType })
     },
-    onPeerJoined: (conversationId, pairingToken) => joined.push({ conversationId, token: pairingToken }),
+    /**
+     * ⚠️ **第三个参数（clientId）也要验**（2026-10-27）：「只允许一台」那条策略
+     * 靠它判断「同一台手机重配」⇒ 丢了它，主机就会把自己那台手机的旧通道也踢掉
+     * （线上现场：被踢的手机拿着烧掉的码重连 ⇒ `already_used` ⇒ 用户反复扫码）。
+     */
+    onPeerJoined: (conversationId, pairingToken, clientId) =>
+      joined.push({ conversationId, token: pairingToken, clientId }),
     onConversationGone: (conversationId) => gone.push(conversationId),
     onClientLeft: (conversationId, clientId) => left.push({ conversationId, clientId }),
     onClientUnpaired: (conversationId) => unpaired.push(conversationId),
@@ -219,6 +225,19 @@ test('pair-ready 的 ttlMs 必须改写本地过期：忘了这一步就是"配�
   feed({ t: 'peer-joined', sessionId: 'c_aaa111222333', clientId: 'k_mp', pairingToken: slot.token })
   assert.equal(joined.length, 1, 'peer-joined 取不到 PSK 被静默丢弃 → 手机显示配对成功、会话列表却是空的')
   assert.equal(client.hasClient('c_aaa111222333'), true, '会话没建起来：后续每一条下行都返回 false')
+  /**
+   * ⚠️ **clientId 必须一路透传到上层**（2026-10-27）。
+   *
+   * 「只允许一台」那条策略靠它判断「这一台新手机是不是旧通道的那台手机」⇒
+   * 丢了它，主机会把**同一台手机**自己的旧通道也踢掉 ⇒ 那台手机拿着**已经烧掉的码**
+   * 重连认领 ⇒ 中继 `already_used` ⇒ 用户被迫反复扫码（线上现场：一台主机配过 6 个
+   * 不同 clientId，每来一台新手机就把上一台踢掉）。
+   */
+  assert.equal(
+    joined[0]?.clientId,
+    'k_mp',
+    'clientId 没有透传给上层：「只允许一台」分不清同一台手机重配 ⇒ 会误伤自己的旧通道',
+  )
 })
 
 test('peer-joined 缺 pairingToken 时不建会话（那是重连通知，不是新客户端加入）', () => {

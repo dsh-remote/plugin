@@ -27,6 +27,7 @@ import { createPairIssuance } from './core/pair-issuance.js'
 import { buildLogRecord } from './shell/log-line.js'
 import { isoOrUndefined } from './shell/iso.js'
 import { createPairFlow } from './core/pair-flow.js'
+import { selectConversationsToVoid } from './core/void-policy.js'
 import { createHousekeeping } from './core/housekeeping.js'
 import { createCarrierProbe } from './core/carrier-probe.js'
 import { SERVICE_NAMES, type HostContext as LooseContext } from './core/host-context.js'
@@ -1238,11 +1239,30 @@ function applyInner(ctx: LooseContext, injected: Partial<PluginConfig>, clock: C
     pairingWindow,
     issuance,
     sendPairGrant: (granted) => relay?.sendPairGrant?.(granted),
-    voidOtherConversations: (keepId) => {
-      for (const id of relay?.conversationIds() ?? []) {
-        if (id !== keepId) relay?.voidConversation(id)
-      }
+    voidOtherConversations: (keepId, joiningClientId) => {
+      /**
+       * **只允许一台**，但**同一台手机重配不算换设备**（2026-10-27 线上取证）。
+       *
+       * 现场：一台主机配过 6 个不同 clientId，每来一台新手机就把上一台踢掉
+       * （作废发生在配成后 +16.7s～+101.7s，`clients=1`）。被踢的手机手里还捏着
+       * 那张**烧掉的码** ⇒ 重连再认领 ⇒ `already_used` ⇒ 用户被迫反复扫码。
+       *
+       * ⇒ 判据是**成员表**：旧通道的成员里有刚进来的这台手机 ⇒ **不作废**。
+       * ⇒ 查不到成员（空表，进程刚起来）⇒ **照旧作废**（无法证明是同一台，
+       *   不因为信息缺失就放宽「只允许一台」）。
+       *
+       * 决策本身在 `core/void-policy.ts`（纯函数）：判据跑**同一份代码**，
+       * 不在这里另抄一遍 —— 抄一遍就会出现「判据绿、产品没修」的假绿（2026-10-27 真踩过）。
+       */
+      const toVoid = selectConversationsToVoid(
+        relay?.conversationIds() ?? [],
+        keepId,
+        joiningClientId,
+        (id) => relay?.clientIdsOf(id) ?? [],
+      )
+      for (const id of toVoid) relay?.voidConversation(id)
     },
+    clientIdsOf: (id) => relay?.clientIdsOf(id) ?? [],
     startRuntime: () => runtime?.start(),
   })
 
