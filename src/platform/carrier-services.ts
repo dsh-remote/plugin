@@ -273,7 +273,20 @@ interface SessionRecordLike {
 export function createServicesKernel(services: ServicesBundle, options: ServicesOptions): KernelPort {
   const log = (message: string, fields: Record<string, string | number | boolean | undefined> = {}): void =>
     options.log?.(message, fields)
-  const titleCache = new Map<string, { title: string; at: number }>()
+  /**
+   * 标题缓存 + **内核报的最后修改时刻**。
+   *
+   * `updatedAt` 那一格来自内核 `readTitleSnapshots` 的 `value.title.updatedAt`
+   * —— **内核持久化**的"这条会话最后一次被改动的时刻"（取证：
+   * `docs/legacy-spec/host-plugin-cordis.md` 的 `readTitleSnapshots` 那行）。
+   *
+   * ⚠️ **为什么必须有它**（2026-10-28 用户报「排序特别乱…每次返回后要找半天刚才会话」）：
+   * 排序用的 `updatedAt` 原本只来自 `lastActivityAt` —— 那是**进程内存**的 Map，
+   * **主机一重启就全丢** ⇒ 全表退回 `createdAt`（创建时间）⇒
+   * 「三天前建、今天刚用过」的会话排到自己分组的最下面 ⇒ 用户找刚才那条要找半天。
+   * ⇒ 内核那一格是**跨重启**的（它自己落盘），用它当兜底，排序才稳。
+   */
+  const titleCache = new Map<string, { title: string; at: number; updatedAt?: number }>()
   /**
    * 本进程刚造出来、**持久化那面还没追上**的会话（见 `listSessions` 末尾的合并）。
    * 不合并的话，用户新建完回到列表会发现那条会话不在里面。
@@ -512,7 +525,28 @@ export function createServicesKernel(services: ServicesBundle, options: Services
     // 见过活动就用它；没见过就退回旧口径（创建时间），而"连标题都还没看到"的会话仍然
     // 不给 updatedAt —— 手机对 undefined 与 ISO 串的处理是分开的（`formatTime` 返回空串），
     // 别把一个我们并不知道的时刻编出来。
-    const updatedAt = activity !== undefined ? iso(activity) : cached ? iso(record.headerTime) : undefined
+    /**
+     * 「最后活动时刻」的三级取值（2026-10-28）：
+     * ① `lastActivityAt`（本进程收到的最后一条事件）—— 最准，但**进程重启即丢**；
+     * ② **内核报的 `title.updatedAt`** —— 跨重启的"这条会话最后被改动的时刻"；
+     * ③ `record.headerTime`（创建时间）—— 最后兜底。
+     *
+     * ⚠️ ① 与 ② 取**较晚**的那个，不是"有 ① 就只用 ①"：
+     * 内存里的 ① 可能比内核那一格新（内核那一格只在**标题**改动时更新，
+     * 而用户在会话里干活不一定改标题）⇒ 少了那个"较晚"就会把刚用过的会话
+     * 按旧时刻排回去，正是用户报的「找半天刚才会话」。
+     */
+    const kernelAt = cached?.updatedAt
+    let updatedAt: string | undefined
+    if (activity !== undefined && kernelAt !== undefined) {
+      updatedAt = iso(Math.max(activity, kernelAt))
+    } else if (activity !== undefined) {
+      updatedAt = iso(activity)
+    } else if (kernelAt !== undefined) {
+      updatedAt = iso(kernelAt)
+    } else if (cached) {
+      updatedAt = iso(record.headerTime)
+    }
     return {
       id: record.id,
       state,
@@ -544,7 +578,17 @@ export function createServicesKernel(services: ServicesBundle, options: Services
         for (const row of rows ?? []) {
           const title = row?.value?.title?.title
           if (row?.status === 'fulfilled' && typeof title === 'string' && title) {
-            titleCache.set(String(row.sessionId), { title, at: options.clock.now() })
+            /**
+             * 内核报的那一格（`value.title.updatedAt`）是**跨重启**的"最后改动时刻" ⇒ 存下来。
+             * 形状不对（不是 ISO 串 / 解析不了）就当没有 ⇒ 下面退回旧口径。
+             */
+            const stamp = row?.value?.title?.updatedAt
+            const parsed = typeof stamp === 'string' ? Date.parse(stamp) : NaN
+            titleCache.set(String(row.sessionId), {
+              title,
+              at: options.clock.now(),
+              ...(Number.isFinite(parsed) ? { updatedAt: parsed } : {}),
+            })
           }
         }
       } catch (error) {

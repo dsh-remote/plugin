@@ -2885,3 +2885,76 @@ test('反向：登记失败不许让"新建会话"失败（会话已经建好了
   assert.equal(made.ok, true, '登记失败不能让用户看到"新建失败"——会话其实建出来了，只是暂时未分组')
   assert.equal(made.sessionId, 'session-orphan')
 })
+
+test('重启后排序不退回创建时间：updatedAt 取内核那一格（跨重启的「最后改动时刻」）', async () => {
+  /**
+   * 用户报（2026-10-28）：「排序特别乱…每次返回后要找半天刚才会话」。
+   *
+   * 根因：排序用的 `updatedAt` **只**来自 `lastActivityAt` —— 那是**进程内存**的 Map，
+   * **主机一重启就全丢** ⇒ 全表退回 `createdAt` ⇒ 「三天前建、今天刚用过」的会话
+   * 排到自己分组的最下面。
+   *
+   * 内核 `readTitleSnapshots` 报的 `value.title.updatedAt` 是**内核自己落盘**的
+   * 「这条会话最后被改动的时刻」⇒ 跨重启可用（取证：
+   * `docs/legacy-spec/host-plugin-cordis.md` 的 `readTitleSnapshots` 那行）。
+   *
+   * ⚠️ 夹具**不发任何 session 事件**（模拟"刚重启、还没收到一条事件"）⇒
+   * 内存表是空的 ⇒ 这一刻的 updatedAt 只能来自内核那一格。
+   */
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const CREATED = 1_700_000_000_000 // 很久以前创建
+  const TOUCHED = 1_700_000_600_000 // 之后被改动过（内核那一格）
+  services.sessionQuery = {
+    listSessions: () => Promise.resolve([{ header: { id: 'ses_a', createdAt: CREATED, cwd: platformPath('proj') } }]),
+    readTitleSnapshots: () =>
+      Promise.resolve([
+        {
+          sessionId: 'ses_a',
+          status: 'fulfilled',
+          value: { title: { title: '刚才那条', updatedAt: new Date(TOUCHED).toISOString() } },
+        },
+      ]),
+  }
+  const list = await f.kernel(services).listSessions(50)
+  const row = list.find((s) => s.summary.id === 'ses_a')
+  assert.ok(row, '列表里要有那条会话')
+  assert.ok(row!.summary.updatedAt, 'updatedAt 不许空（空 ⇒ 手机排序退回创建时间）')
+  assert.equal(
+    Date.parse(row!.summary.updatedAt!),
+    TOUCHED,
+    'updatedAt 必须是内核那一格（跨重启的「最后改动时刻」），不是 createdAt',
+  )
+})
+
+test('内存里的活动时刻比内核那一格新时，取较晚的那个（用户在会话里干活不一定改标题）', async () => {
+  const f = fixture()
+  const services = f.bundle({ live: true })
+  const KERNEL_AT = 1_700_000_600_000
+  services.sessionQuery = {
+    listSessions: () =>
+      Promise.resolve([{ header: { id: 'ses_b', createdAt: 1_700_000_000_000, cwd: platformPath('proj') } }]),
+    readTitleSnapshots: () =>
+      Promise.resolve([
+        {
+          sessionId: 'ses_b',
+          status: 'fulfilled',
+          value: { title: { title: 'B', updatedAt: new Date(KERNEL_AT).toISOString() } },
+        },
+      ]),
+  }
+  const kernel = f.kernel(services)
+  await kernel.listSessions(50)
+  // 之后收到一条 session 事件 ⇒ 内存表更新为更晚的时刻
+  ;(kernel as unknown as { emitSessionEvent?: (e: unknown, a: unknown) => void }).emitSessionEvent?.(
+    { id: 'ses_b', type: 'turn/start' },
+    {},
+  )
+  const list = await kernel.listSessions(50)
+  const row = list.find((s) => s.summary.id === 'ses_b')
+  assert.ok(row?.summary.updatedAt, 'updatedAt 不许空')
+  assert.ok(
+    Date.parse(row!.summary.updatedAt!) >= KERNEL_AT,
+    '内存里的活动时刻不能被内核那一格盖过去（盖过去 ⇒ 刚用过的会话又被排回老位置）',
+  )
+})
