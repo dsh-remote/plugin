@@ -1,0 +1,5 @@
+- insert:
+    - id: dsh-remote-control
+      name: '@dsh-remote/plugin'
+      config:
+        enabled: true

@@ -1,0 +1,22 @@
+{
+  "name": "dsh-remote-v06",
+  "version": "0.6.0",
+  "private": true,
+  "description": "DeepSeek Harness remote control via a WeChat mini program",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test --test-reporter=tap --test-timeout=12000 tests/*.test.cjs",
+    "build": "node scripts/build.cjs",
+    "relay": "node packages/relay/cli.cjs",
+    "demo": "node scripts/demo.cjs"
+  },
+  "dependencies": {
+    "js-base64": "3.7.8",
+    "marked": "15.0.12",
+    "tweetnacl": "1.0.3",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
