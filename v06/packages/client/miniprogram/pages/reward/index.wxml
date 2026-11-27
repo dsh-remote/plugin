@@ -1,0 +1,7 @@
+<view class="frame theme-{{theme}} wrap">
+  <view class="title">喜欢作者</view>
+  <view class="reward-panel">
+    <reward />
+  </view>
+  <button class="outline" bindtap="onBack">返回会话</button>
+</view>

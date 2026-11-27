@@ -1,0 +1,6 @@
+*
+!dist/
+!dist/relay/
+!dist/relay/main.cjs
+!deploy/
+!deploy/Dockerfile

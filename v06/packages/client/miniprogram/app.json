@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/sessions/index",
+    "pages/chat/index",
+    "pages/reward/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "DSH 远程控制",
+    "navigationBarTextStyle": "black"
+  },
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json"
+}

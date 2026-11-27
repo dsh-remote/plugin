@@ -1,0 +1,84 @@
+<view class="frame chat theme-{{theme}} {{keyboardHeight ? 'keyboard-open' : ''}}" style="--keyboard-height:{{keyboardHeight}}px">
+  <view class="chat-head">
+    <view class="chat-title">{{title}}</view>
+    <view class="row between chat-meta">
+      <view class="row"><view class="link-dot {{connection}}"></view><text>{{status}}</text><text wx:if="{{model}}" class="model">{{model}}</text></view>
+      <button wx:if="{{running && canWrite}}" class="danger stop" size="mini" bindtap="onInterrupt">中断</button>
+    </view>
+    <view wx:if="{{runDetail}}" class="help quiet detail">{{runDetail}}</view>
+    <view wx:if="{{connection === 'host-offline'}}" class="help warning">任务可能仍在电脑上运行。</view>
+  </view>
+  <scroll-view class="transcript" scroll-y="true" scroll-into-view="{{scrollTarget}}" lower-threshold="80" bindscroll="onScroll" bindscrolltolower="onAtBottom">
+    <view class="transcript-body">
+      <button wx:if="{{older}}" class="ghost earlier" size="mini" bindtap="onOlder" disabled="{{loading}}">查看更早消息</button>
+      <view wx:if="{{loading && !timeline.length}}" class="help quiet empty">正在读取会话…</view>
+      <view wx:if="{{historyError}}" class="error help" bindtap="onHistoryRetry">{{historyError}}。点此重试。</view>
+      <view wx:if="{{!loading && !historyError && !timeline.length && !pending.length}}" class="help quiet empty">{{canWrite ? '发送一条指令开始这次会话。' : '连上电脑后会加载这条会话。'}}</view>
+      <view class="record" wx:for="{{timeline}}" wx:key="id" id="{{item.target}}">
+        <view class="record-dot {{item.role}}"></view>
+        <view wx:if="{{item.type === 'message'}}" class="entry {{item.role}}">
+          <view class="entry-label">{{item.label}}</view>
+          <rich-text nodes="{{item.nodes}}" class="rich" selectable="true" />
+        </view>
+        <view wx:else class="tool">
+          <button class="tool-toggle row between" data-id="{{item.id}}" bindtap="onToggleTool" hover-class="press"
+            aria-label="{{item.title + '，' + item.phase + (item.expanded ? '，收起明细' : '，展开明细')}}">
+            <text class="tool-title">{{item.title}}</text>
+            <view class="row tool-meta"><text class="help quiet">{{item.phase}}</text><view class="tool-chevron {{item.expanded ? 'expanded' : ''}}"></view></view>
+          </button>
+          <view wx:if="{{item.expanded}}" class="tool-detail">
+            <block wx:if="{{item.args}}">
+              <text class="tool-label">参数</text><text class="tool-preview" user-select="{{true}}">{{item.args}}</text>
+            </block>
+            <block wx:if="{{item.result}}">
+              <text class="tool-label">{{item.phase === '失败' ? '错误' : '输出'}}</text><text class="tool-preview" user-select="{{true}}">{{item.result}}</text>
+            </block>
+            <text wx:if="{{!item.args && !item.result}}" class="help quiet">这条记录没有保存明细。</text>
+          </view>
+        </view>
+      </view>
+      <view wx:if="{{todos.length}}" class="queue">
+        <view class="section-title">待办</view>
+        <view wx:for="{{todos}}" wx:key="id" class="help todo">{{item.status === 'completed' ? '✓ ' : '○ '}}{{item.title || item.content || item.text}}</view>
+      </view>
+      <view wx:for="{{pending}}" wx:key="requestId" wx:for-item="card" class="decision">
+        <view class="row between"><text class="decision-title">{{card.permission ? '等待审批' : '等待回答'}}</text><text wx:if="{{card.expiry}}" class="help quiet mono">{{card.expiry}} 截止</text></view>
+        <block wx:if="{{card.permission}}">
+          <view class="task-title">{{card.action}}</view>
+          <view wx:if="{{card.reason}}" class="help quiet">{{card.reason}}</view>
+          <view class="row choice-row">
+            <button class="outline" wx:for="{{card.options}}" wx:key="id" wx:for-item="choice" disabled="{{!canWrite}}" bindtap="onDecision" data-request-id="{{card.requestId}}" data-decision="{{choice.id}}">{{choice.label}}</button>
+          </view>
+        </block>
+        <block wx:else>
+          <view wx:for="{{card.questions}}" wx:key="id" wx:for-item="question" class="question">
+            <view class="task-title">{{question.question}}</view>
+            <checkbox-group wx:if="{{question.multi && question.options.length}}" bindchange="onChoice" data-request-id="{{card.requestId}}" data-question-id="{{question.id}}">
+              <label wx:for="{{question.options}}" wx:key="id" class="option"><checkbox value="{{item.id}}" disabled="{{!canWrite}}" />{{item.label}}</label>
+            </checkbox-group>
+            <radio-group wx:elif="{{question.options.length}}" bindchange="onChoice" data-request-id="{{card.requestId}}" data-question-id="{{question.id}}">
+              <label wx:for="{{question.options}}" wx:key="id" class="option"><radio value="{{item.id}}" disabled="{{!canWrite}}" />{{item.label}}</label>
+            </radio-group>
+            <input class="field" placeholder="填写文字回答" disabled="{{!canWrite}}" data-request-id="{{card.requestId}}" data-question-id="{{question.id}}" bindinput="onAnswerText" />
+          </view>
+          <button class="primary reply" disabled="{{!canWrite}}" data-request-id="{{card.requestId}}" bindtap="onAnswer">提交回答</button>
+        </block>
+      </view>
+    </view>
+  </scroll-view>
+
+  <view class="composer" wx:if="{{!demo}}">
+    <view wx:if="{{attachments.length}}" class="row attach-list">
+      <view wx:for="{{attachments}}" wx:key="id" class="attach" bindtap="onRemoveAttachment" data-id="{{item.id}}">{{item.name}} ×</view>
+    </view>
+    <view wx:if="{{textCount >= max - 200}}" class="help quiet count mono">{{textCount}} / {{max}}</view>
+    <view class="row compose-row">
+      <button class="outline attach-button" aria-label="添加附件" bindtap="onAttach" disabled="{{!canWrite || !(imageCap || fileCap)}}">＋</button>
+      <textarea auto-height="{{true}}" class="compose-input" aria-label="指令" value="{{input}}" placeholder="{{inputHint}}"
+        disabled="{{!canWrite}}" maxlength="{{max}}" show-confirm-bar="{{false}}" disable-default-padding="{{true}}"
+        adjust-position="{{false}}" bindkeyboardheightchange="onComposerKeyboard" bindblur="onComposerBlur" bindinput="onInput" />
+      <button class="primary send-button" bindtap="onSend" disabled="{{!canWrite || sending || (!input && !attachments.length)}}">{{sending ? '发送中' : '发送'}}</button>
+    </view>
+  </view>
+  <canvas class="jpeg-canvas" canvas-id="jpeg" style="width: {{drawingWidth}}px; height: {{drawingHeight}}px;" />
+</view>

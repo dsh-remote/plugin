@@ -1,0 +1,14 @@
+services:
+  relay:
+    image: dsh-remote-relay:0.6.0
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    env_file: .env
+    environment:
+      DRC_BIND: 127.0.0.1
+      DRC_PORT: "8789"
+      DRC_STATE_FILE: /state/relay.json
+      DRC_TRUST_LOCAL_PROXY: "1"
+    volumes:
+      - ./state:/state

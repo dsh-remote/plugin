@@ -1,0 +1,5 @@
+node_modules/
+src/
+dist/
+.weapp-vite/
+tsconfig.json

@@ -1,0 +1,1 @@
+.reward-panel { padding: 38rpx 22rpx; margin: 30rpx 0; background: var(--drc-surface-card); border: 1px solid var(--drc-border); border-radius: 22rpx; }

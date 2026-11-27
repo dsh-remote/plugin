@@ -1,0 +1,62 @@
+<view class="frame theme-{{theme}} wrap">
+  <view class="row between heading-row">
+    <view class="title">会话</view>
+    <button class="outline theme-button" size="mini" bindtap="onTheme" hover-class="press">{{theme === 'dark' ? '浅色' : '深色'}}</button>
+  </view>
+
+  <view class="signal {{linkState}}">
+    <view class="row between signal-main">
+      <view class="row signal-word"><view class="signal-dot"></view><text>{{linkTitle}}</text></view>
+      <button class="signal-settings" size="mini" bindtap="onSettings" aria-label="连接设置" hover-class="press">设置</button>
+    </view>
+    <view class="signal-copy">{{linkCopy}}</view>
+    <view class="signal-copy" wx:if="{{lastKnown}}">{{lastKnown}}</view>
+    <view wx:if="{{!paired && !demo}}" class="pair-actions">
+      <button class="scan" bindtap="onScan" disabled="{{linkState === 'pairing' || linkState === 'verifying'}}" hover-class="press">扫码连接</button>
+      <button class="signal-demo" size="mini" bindtap="onDemo">先看演示</button>
+    </view>
+    <button wx:if="{{demo}}" class="signal-demo" size="mini" bindtap="onDemo">退出演示</button>
+  </view>
+
+  <view wx:if="{{problem}}" class="error help" role="alert">{{problem}}</view>
+
+  <block wx:if="{{paired || demo}}">
+    <view wx:if="{{pending.length}}" class="section pending">
+      <view class="section-title">等你处理</view>
+      <view wx:for="{{pending}}" wx:key="id" class="row pending-row" role="button" data-id="{{item.id}}" bindtap="onOpen" hover-class="press">
+        <text class="pending-badge">{{item.badge}}</text><text class="session-name">{{item.title}}</text><text class="chevron">›</text>
+      </view>
+    </view>
+    <view class="section">
+      <view class="row between section-head">
+        <text class="section-title">项目会话</text>
+        <button wx:if="{{!demo}}" class="ghost add-session" size="mini" bindtap="onNew" disabled="{{linkState !== 'online' || creating}}">{{creating ? '正在新建' : '＋ 新建会话'}}</button>
+      </view>
+      <view wx:if="{{!groups.length}}" class="empty help quiet">{{linkState === 'online' ? '还没有会话，点「新建会话」开始。' : '连上电脑后会同步会话。'}}</view>
+      <view wx:for="{{groups}}" wx:key="key" wx:for-item="group" class="group">
+        <view class="row between group-title"><text>{{group.title}}</text><text class="group-count mono">{{group.items.length}}</text></view>
+        <view wx:for="{{group.items}}" wx:key="id" class="session" data-id="{{item.id}}" data-pinned="{{item.pinned}}" bindtap="onOpen" bindlongpress="onRowMenu" hover-class="press" role="button">
+          <view class="row session-line"><text class="session-name">{{item.title}}</text><text class="session-time mono">{{item.time}}</text><text class="chevron">›</text></view>
+          <text wx:if="{{item.badge}}" class="session-badge">{{item.badge}}</text>
+        </view>
+      </view>
+      <view wx:if="{{archivedCount}}" class="help quiet archived">已隐藏 {{archivedCount}} 个归档会话</view>
+    </view>
+    <view wx:if="{{!demo}}" class="row services">
+      <button wx:if="{{notifyAvailable}}" class="ghost" size="mini" bindtap="onNotify">预约一次提醒</button>
+      <button class="ghost" size="mini" open-type="contact">客服</button>
+      <button class="ghost" size="mini" open-type="share">分享</button>
+      <button class="ghost" size="mini" bindtap="onReward">喜欢作者</button>
+    </view>
+  </block>
+
+  <view wx:if="{{settingsOpen}}" class="sheet-scrim" bindtap="onSettings">
+    <view class="sheet" catchtap="keepSheet">
+      <view class="row between"><text class="section-title">连接设置</text><button class="ghost" size="mini" bindtap="onSettings">关闭</button></view>
+      <view class="help quiet">填写电脑远程控制设置中的同一个中继地址。</view>
+      <input class="field" aria-label="中继地址" value="{{relayDraft}}" placeholder="wss://…" bindinput="onRelayInput" />
+      <view wx:if="{{settingsError}}" class="error help">{{settingsError}}</view>
+      <view class="row between"><button class="primary" bindtap="onSaveRelay">保存中继地址</button><button class="danger" wx:if="{{paired}}" bindtap="onUnpair">解除配对</button></view>
+    </view>
+  </view>
+</view>
