@@ -147,7 +147,7 @@ function createKernel(ctx, { newSessionCwd, stateDir, log = () => {} } = {}) {
     let known = [];
     try { known = (await query?.listSessions?.())?.map((row) => row.header || row) || []; }
     catch { log('persistent session list unavailable'); }
-    const live = get('sessions')?.list?.() || [];
+    const live = (get('sessions')?.list?.() || []).map((row) => row?.header || row);
     const rows = new Map([...fresh, ...[...known, ...live].filter((r) => r?.id).map((r) => [r.id, r])]);
     const headings = new Map();
     const ids = [...rows.keys()].slice(0, 500);
@@ -167,7 +167,7 @@ function createKernel(ctx, { newSessionCwd, stateDir, log = () => {} } = {}) {
       if (row.cwd) lastSeen.set(id, row.cwd);
       return { id, title: heading?.title || row.title?.title || (typeof row.title === 'string' ? row.title : undefined),
         updatedAt: iso(heading?.updatedAt ?? row.updatedAt ?? row.createdAt),
-        createdAt: iso(row.createdAt), workspace: row.cwd, origin: row.origin,
+        createdAt: iso(row.createdAt), workspace: row.cwd || lastSeen.get(id), origin: row.origin,
         state: archived.has(id) ? 'archived' : running(id) ? 'running' : 'idle' };
     });
   }
@@ -283,7 +283,7 @@ function createKernel(ctx, { newSessionCwd, stateDir, log = () => {} } = {}) {
     }
     on('session/event', (session, event) => {
       if (!session?.id) return;
-      currentDirectory = session.cwd || lastSeen.get(session.id) || currentDirectory;
+      currentDirectory = session.header?.cwd || session.cwd || lastSeen.get(session.id) || currentDirectory;
       for (const mapped of wireEvents(session.id, event)) consumer(mapped);
     });
     on('session/created', () => {

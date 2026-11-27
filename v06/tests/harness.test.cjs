@@ -48,6 +48,37 @@ test('H1/H2: current Harness service shapes preserve timestamps and call native 
   assert.equal((await kernel.history('s1', { since: 14 })).items[0].delta, 'Actual message');
 });
 
+test('H1: live sessions carry cwd only on header (kernel Session shape) and stay grouped', async () => {
+  class LiveSession { // @deepseek-ai/dsh-session 的真形状：顶层只有 get id()，cwd 在 header 里
+    constructor(header) { this.header = header; }
+    get id() { return this.header.id; }
+  }
+  const liveHeader = { id: 'live1', cwd: '/live/project', createdAt: 5000 };
+  const createRequests = [];
+  const handlers = {};
+  const services = {
+    sessions: { list: () => [new LiveSession(liveHeader)] },
+    sessionQuery: { listSessions: async () => [{ header: liveHeader }] },
+    agents: { get: () => undefined },
+    sessionController: { commands: {
+      create: async (request) => { createRequests.push(request); return { sessionId: 'fresh1' }; },
+    } },
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], create: async () => ({ attachSession: async () => {} }) },
+  };
+  const ctx = { get: (name) => services[name], on: (name, fn) => { handlers[name] = fn; return () => {}; } };
+  const kernel = createKernel(ctx, {});
+  assert.deepEqual((await kernel.listSessions()).map((r) => [r.id, r.workspace]), [['live1', '/live/project']]);
+  // 持久化面挂了也不能把 live 会话打成未分组
+  services.sessionQuery.listSessions = async () => { throw new Error('gone'); };
+  assert.deepEqual((await kernel.listSessions()).map((r) => [r.id, r.workspace]), [['live1', '/live/project']]);
+  // session/event 同样从 header 认工作区：之后不带参数新建时兜底到它，而不是掉进未分组
+  delete liveHeader.cwd; // 连 live 行都拿不到时的最后防线：lastSeen
+  kernel.subscribe(() => {});
+  handlers['session/event'](new LiveSession(liveHeader), { type: 'noop', seq: 1, data: {} });
+  assert.equal(await kernel.newSession(), 'fresh1');
+  assert.equal(createRequests[0].cwd, '/live/project');
+});
+
 test('H2: event translation separates human messages, stream updates and tool steps', () => {
   assert.deepEqual(wireEvents('s', { type: 'user/message', seq: 1, data: { source: { kind: 'time-context' }, text: 'internal' } }), []);
   const [model] = wireEvents('s', { type: 'request/header', seq: 2, data: { config: { model: 'deepseek', provider: 'example' } } });

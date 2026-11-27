@@ -34,7 +34,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           test "$(node -p "require('./package.json').version")" = "${RELEASE_TAG#v}"
-          node --test --test-reporter=tap tests/host.test.cjs tests/harness.test.cjs tests/plugin-package.test.cjs
+          node --test --test-reporter=tap tests/host.test.cjs tests/harness.test.cjs tests/browser-ui.test.cjs tests/plugin-package.test.cjs
       - name: Build and publish both install names under next
         run: |
           set -eu
