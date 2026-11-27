@@ -1,5 +1,7 @@
 'use strict';
 
+const { version } = require('../../package.json');
+
 const { randomBytes, randomInt } = require('node:crypto');
 const { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync } = require('node:fs');
 const { dirname, join } = require('node:path');
@@ -80,7 +82,7 @@ function createHost({ url, hostId, label = 'DSH', token: manualToken, kernel, st
 
   function status() {
     return {
-      state, relay: state, relayProblem: problem, serverUrl: url, version: '0.6.0', hostId,
+      state, relay: state, relayProblem: problem, serverUrl: url, version, hostId,
       paired: channels.size, onlinePhones: [...channels.values()].filter((row) => row.joined).length,
       waiting: runtime.waiting().length, sas: sasUntil > clock.now() ? sas : '', pairing: active ? { expiresAt: active.expiresAt } : null,
       hostToken: { source, ...recovery.status() },
@@ -289,7 +291,7 @@ function createHost({ url, hostId, label = 'DSH', token: manualToken, kernel, st
     helloTimer = setTimeout(() => current.terminate(), 10000);
     helloTimer.unref();
     current.on('open', () => {
-      if (socket === current) send({ t: 'hello', role: 'host', protocol: PROTOCOL, hostId, token, label, softwareVersion: '0.6.0' });
+      if (socket === current) send({ t: 'hello', role: 'host', protocol: PROTOCOL, hostId, token, label, softwareVersion: version });
     });
     current.on('message', (data, binary) => {
       if (binary || socket !== current) return;

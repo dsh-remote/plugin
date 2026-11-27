@@ -1,5 +1,7 @@
 'use strict';
 
+const { version } = require('../../package.json');
+
 const { homedir } = require('node:os');
 const { join } = require('node:path');
 const { randomBytes } = require('node:crypto');
@@ -27,7 +29,7 @@ function apply(ctx, config = {}) {
   const serverUrl = () => config.serverUrl || settings.serverUrl || process.env.DRC_SERVER_URL || 'wss://drc.provid.cc/v06';
   const configuredToken = () => config.hostToken || settings.hostToken || process.env.DRC_HOST_TOKEN || '';
   const state = () => {
-    const snapshot = host?.status() || { state: 'offline', relay: 'offline', serverUrl: serverUrl(), version: '0.6.0',
+    const snapshot = host?.status() || { state: 'offline', relay: 'offline', serverUrl: serverUrl(), version,
       relayProblem: serverUrl() ? '中继暂不可用' : '请配置中继地址', paired: 0, onlinePhones: 0, waiting: 0, sas: '' };
     return { ...snapshot, tokenConfigured: !!configuredToken(), serverLocked: !!config.serverUrl };
   };

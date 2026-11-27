@@ -16,7 +16,7 @@ for (const name of ['@dsh-remote/plugin', 'dsh-remote-control']) {
     assert.equal(result.status, 0, result.stderr);
     const meta = JSON.parse(await readFile(join(out, 'package.json'), 'utf8'));
     assert.equal(meta.name, name);
-    assert.equal(meta.version, '0.6.0');
+    assert.equal(meta.version, require('../package.json').version);
     assert.equal(meta.publishConfig.tag, 'next');
     assert.equal(await readFile(join(out, 'README.md'), 'utf8'), await readFile('README.for-ai.md', 'utf8'));
     assert.equal(require(join(out, 'index.cjs')).name, name);

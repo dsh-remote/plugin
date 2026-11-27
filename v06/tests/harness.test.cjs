@@ -22,7 +22,11 @@ test('H1/H2: current Harness service shapes preserve timestamps and call native 
     },
     sessionController: { commands: {
       create: async (request) => { createRequests.push(request); return { sessionId: 's2' }; },
-      prompt: async (request) => prompts.push(request),
+      prompt: async (request, source) => {
+        assert.deepEqual(source, { kind: 'user', rpcId: request.requestId });
+        prompts.push(request);
+        return { accepted: true };
+      },
     } },
     agents: { get: () => ({ status: 'idle', cancel: (...args) => cancelled.push(args) }) },
     workspaceRegistry: registry,
@@ -35,6 +39,9 @@ test('H1/H2: current Harness service shapes preserve timestamps and call native 
   assert.deepEqual(attached, [['/chosen/project', 's2']]);
   await kernel.sendPrompt('s1', 'hi', { images: [{ name: 'image.jpg', mediaType: 'image/jpeg', data: '/9j/2Q==' }], files: [] });
   assert.deepEqual(prompts[0].content, [{ type: 'text', text: 'hi' }, { type: 'image', mediaType: 'image/jpeg', data: '/9j/2Q==' }]);
+  await kernel.sendPrompt('s1', 'next message', { images: [], files: [] });
+  assert.deepEqual(prompts[1].content, [{ type: 'text', text: 'next message' }]);
+  assert.notEqual(prompts[1].requestId, prompts[0].requestId);
   await kernel.interrupt('s1');
   assert.deepEqual(cancelled, [[{ kind: 'user' }, { keepInbox: true }]]);
   await assert.rejects(kernel.archiveSession('s1', true), /正在运行/);
@@ -49,6 +56,18 @@ test('H2: event translation separates human messages, stream updates and tool st
   const [tool] = wireEvents('s', { type: 'tool/call', seq: 3, data: { toolCallId: 'call', name: 'read' } });
   assert.equal(tool.callId, 'call');
   assert.equal(tool.phase, 'started');
+  const [bash] = wireEvents('s', { type: 'tool/call', seq: 3, data: {
+    callId: 'call', name: 'bash', arguments: '{"command":"npm test"}',
+  } });
+  assert.equal(JSON.parse(bash.argsPreview).command, 'npm test');
+  const [output] = wireEvents('s', { type: 'tool/result', seq: 4, data: { message: {
+    toolCallId: 'call', content: [{ type: 'text', text: 'All tests passed.' }],
+  } } });
+  assert.equal(output.callId, bash.callId);
+  assert.equal(output.resultPreview, 'All tests passed.');
+  const [failure] = wireEvents('s', { type: 'tool/result', seq: 4, data: { callId: 'call', error: { message: 'Command failed' } } });
+  assert.equal(failure.phase, 'failed');
+  assert.equal(failure.resultPreview, 'Command failed');
 });
 
 test('H3: real waterfall hook starts desktop concurrently; phone answer aborts only desktop signal', async () => {

@@ -20,6 +20,20 @@ function contentOf(data) {
     : String(message.text || data.delta || '');
 }
 
+function preview(value, limit) {
+  if (value === undefined || value === null) return undefined;
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  if (!text) return undefined;
+  return text.length > limit ? text.slice(0, limit) + '…' : text;
+}
+
+function argumentsPreview(value) {
+  if (typeof value === 'string') {
+    try { return preview(JSON.parse(value), 800); } catch {}
+  }
+  return preview(value, 800);
+}
+
 function wireEvents(sessionId, event) {
   if (!event?.type) return [];
   const data = event.data || {};
@@ -46,7 +60,10 @@ function wireEvents(sessionId, event) {
       if (!callId) return [];
       return emit('tool_event', { callId, tool: data.toolName || data.name || msg.toolName,
         phase: event.type === 'tool/call' ? 'started' : data.error || msg.isError ? 'failed' : 'completed',
-        title: data.title, resultPreview: typeof data.result === 'string' ? data.result.slice(0, 300) : undefined });
+        title: data.title,
+        argsPreview: event.type === 'tool/call' ? argumentsPreview(data.arguments ?? data.args) : undefined,
+        resultPreview: event.type === 'tool/result'
+          ? preview(data.result ?? data.error?.message ?? data.error ?? contentOf(data), 1200) : undefined });
     }
     case 'request/header':
       if (!data.config?.model) return [];
@@ -196,7 +213,8 @@ function createKernel(ctx, { newSessionCwd, stateDir, log = () => {} } = {}) {
       }
       for (const image of images) content.push({ type: 'image', mediaType: image.mediaType, data: image.data });
       if (commands?.prompt) {
-        await commands.prompt({ requestId: randomUUID(), sessionId, mode: 'queue', content });
+        const requestId = randomUUID();
+        await commands.prompt({ requestId, sessionId, mode: 'queue', content }, { kind: 'user', rpcId: requestId });
       } else {
         const agents = get('agents');
         let agent = agents?.get?.(sessionId);

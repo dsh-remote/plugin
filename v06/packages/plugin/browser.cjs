@@ -22,7 +22,8 @@ async function request(path, body) {
 }
 
 const style = [
-  '.drc06-link{border:1px solid #cbd3e3;border-radius:8px;padding:6px 11px;color:inherit;background:transparent;cursor:pointer;font:inherit}',
+  '.drc06-link{appearance:none;display:inline-flex;align-items:center;border:0;border-radius:999px;padding:2px 7px;color:var(--dsw-alias-label-secondary,inherit);background:transparent;cursor:pointer;font:inherit;font-size:12px;line-height:18px;white-space:nowrap}',
+  '.drc06-link:hover,.drc06-link[aria-expanded="true"]{color:var(--dsw-alias-label-primary,inherit);background:var(--dsw-alias-interactive-bg-hover,#8080801a)}',
   '.drc06-link:focus-visible,.drc06-panel button:focus-visible,.drc06-panel input:focus-visible{outline:2px solid #2f4bd6;outline-offset:2px}',
   '.drc06-panel{color:#161928;background:#eff2f7;border:1px solid #dfe5ef;border-radius:16px;padding:18px;min-width:275px;max-width:380px;box-sizing:border-box;font:14px system-ui,sans-serif}',
   '.drc06-panel h2{font-size:20px;margin:0 0 12px}.drc06-panel p{margin:8px 0;line-height:1.5}',
@@ -161,7 +162,14 @@ function mount(container, inline) {
   if (inline) container.append(panel);
   else {
     const open = el('button', '远程控制', 'drc06-link');
-    open.onclick = () => { panel.showModal(); void update(); };
+    open.setAttribute('aria-haspopup', 'dialog');
+    open.setAttribute('aria-expanded', 'false');
+    panel.addEventListener('close', () => open.setAttribute('aria-expanded', 'false'));
+    open.onclick = () => {
+      panel.showModal();
+      open.setAttribute('aria-expanded', 'true');
+      void update();
+    };
     container.append(open, panel);
   }
   void update();

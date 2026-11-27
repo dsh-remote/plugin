@@ -1,5 +1,7 @@
 'use strict';
 
+const { version } = require('../../package.json');
+
 const { validateCommand, MAX_TEXT, MAX_ATTACHMENTS } = require('../protocol/wire.cjs');
 
 const readable = new Set(['ev.message_delta', 'ev.tool_event', 'ev.todo']);
@@ -25,7 +27,7 @@ function createRuntime({ kernel, send, broadcast, summarize, now = Date.now, awa
   }
 
   function greet(id) {
-    send(id, { t: 'ev.host_info', limits: limits(), pluginVersion: '0.6.0' });
+    send(id, { t: 'ev.host_info', limits: limits(), pluginVersion: version });
   }
 
   async function list() {
