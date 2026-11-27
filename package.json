@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-v06",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "DeepSeek Harness remote control via a WeChat mini program",
   "engines": { "node": ">=20" },

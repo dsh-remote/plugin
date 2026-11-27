@@ -2,13 +2,13 @@
 
 给助手的请求示例
 
-> 按这份指南把我正在用的 DeepSeek Harness 远程控制插件升级到 0.6.1。使用现有 profile 和包名，重启对应的 Harness，验证中继已连接。
+> 按这份指南把我正在用的 DeepSeek Harness 远程控制插件升级到 0.6.3。使用现有 profile 和包名，重启对应的 Harness，验证中继已连接。
 
 ## 1. 确认升级目标
 
 - 根据实际运行方式定位 Harness profile。浏览器通常用 `web`，桌面 App 通常用 `desktop`。如果启动参数指定了其他 profile，以启动参数为准。两个端都要升级时，各自执行安装和重启。
 - 在目标 profile 的 `package.json` 中查看 `dependencies` 和 `dsh.profile.bundles`，再读取对应 `node_modules/<包名>/package.json` 的 `version`。以已有的 `@dsh-remote/plugin` 或 `dsh-remote-control` 为准。两个名字都是发布入口，同一 profile 使用其中一个。记下当前实际版本，供回退使用。发现两个入口同时启用时，先确认 Harness 正在使用哪个。
-- 官方 0.6 插件连接 `wss://drc.provid.cc/v06`。审核期间，微信正式版仍通过 `/v05` 服务 0.5 用户。要体验 0.6 扫码，需要对应的小程序开发版或体验版，并重新配对。依赖正式版小程序的用户可以等 0.6 正式发布后再升级。
+- 官方 0.6 插件连接 `wss://drc.provid.cc/v06`，可用「黑鲸远控」正式版扫码。已有 0.6 配对可继续使用。旧版 0.5 用户升级后需要重新配对。
 
 ## 2. 安装并核对版本
 
@@ -17,13 +17,13 @@
 ```sh
 profile=web
 package=@dsh-remote/plugin
-version=0.6.1
+version=0.6.3
 npm view "$package" dist-tags --json
 npm view "$package@$version" version
 dsh plugin --profile "$profile" add --save-exact "$package@$version"
 ```
 
-审核期间，无版本安装通常解析到 `latest` 上的 0.5。用户要求跟随试用通道时，可先通过 `npm view "$package@next" version` 取得当前试用版，再安装查到的精确版本。
+0.6 通过 `next` 发布。用户要求跟随该通道时，可先通过 `npm view "$package@next" version` 查询当前版本，再安装查到的精确版本。
 
 重新读取目标 profile 的 `node_modules/<包名>/package.json`，确认实际版本为指定版本。若版本不符，检查安装输出和 `~/.dsh/profiles/<profile>/.plugin-manager/logs/operation-*/pnpm.log`。如果 `minimumReleaseAge` 阻止安装，遵循 profile 的发布年龄策略，等限制到期后重试。已有可信本地 tarball 且用户允许用它时，可以用同一条 `dsh plugin --profile <profile> add` 命令安装绝对路径，再核对版本。
 
@@ -36,4 +36,4 @@ dsh plugin --profile "$profile" add --save-exact "$package@$version"
 
 ## 4. 回退
 
-使用先前记下的版本运行 `dsh plugin --profile "$profile" add --save-exact "$package@$previous_version"`，完全重启对应的 Harness，网页端再刷新页面。恢复原有的中继配置，核对重新安装的版本和连接状态。0.5 与 0.6 使用独立的本地状态目录，保留两个目录可让各自的配对继续使用。回退后用 0.5 小程序验收。
+使用先前记下的 0.6 版本运行 `dsh plugin --profile "$profile" add --save-exact "$package@$previous_version"`，完全重启对应的 Harness，网页端再刷新页面。恢复原有的中继配置，核对重新安装的版本和连接状态，然后用「黑鲸远控」验收。

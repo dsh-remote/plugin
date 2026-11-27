@@ -53,6 +53,7 @@ function mount(container, inline) {
   }
   const el = (tag, text, className) => {
     const value = document.createElement(tag);
+    if (tag === 'button') value.type = 'button';
     if (text) value.textContent = text;
     if (className) value.className = className;
     return value;
@@ -90,7 +91,6 @@ function mount(container, inline) {
   toolbar.append(pair, reset);
   if (!inline) {
     const close = el('button', '✕', 'close');
-    close.type = 'button';
     close.setAttribute('aria-label', '关闭');
     close.onclick = () => panel.close();
     panel.append(close);
@@ -101,26 +101,39 @@ function mount(container, inline) {
   let previousUrl;
   let expiry = 0;
   let inactive = false;
+  let online = false;
   let refreshing = false;
+  let activeButton;
+  let actionVersion = 0;
   let detach = () => {};
+
+  function syncControls() {
+    const busy = !!activeButton;
+    pair.disabled = busy || !online;
+    pair.textContent = activeButton === pair ? '正在生成…' : '生成配对码';
+    for (const button of [reset, save, clearToken]) button.disabled = busy;
+  }
 
   function paint(state) {
     if (inactive) return;
+    const serverUrl = state.serverUrl || '';
+    online = state.state === 'online';
     const titles = { online: state.onlinePhones ? '手机已连接' : state.paired ? '手机暂时离线' : '电脑已上线，等待配对',
       connecting: '正在连接中继', offline: '电脑未连上中继' };
     link.textContent = titles[state.state] || '连接状态未知';
     wait.textContent = state.relayProblem || (state.waiting ? '有 ' + state.waiting + ' 项任务等待处理' : '');
-    pair.disabled = state.state !== 'online';
     reset.hidden = !state.paired;
-    if (url.value === '' || url.value === previousUrl) url.value = state.serverUrl || '';
-    previousUrl = state.serverUrl || '';
+    if (url.value === '' || url.value === previousUrl) url.value = serverUrl;
+    if (objectUrl && (!online || serverUrl !== previousUrl)) clearCode();
+    previousUrl = serverUrl;
     url.disabled = state.serverLocked === true;
     check.textContent = state.sas ? '核对码 ' + state.sas : '';
-    if (expiry && Date.now() >= expiry) clearCode();
+    syncControls();
   }
 
   function clearCode() {
     expiry = 0;
+    qr.hidden = true;
     qr.style.display = 'none';
     qr.removeAttribute('src');
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -128,44 +141,74 @@ function mount(container, inline) {
   }
 
   async function update() {
-    if (inactive || refreshing || (!inline && !panel.open)) return;
+    if (inactive || (!inline && !panel.open)) return;
+    if (expiry && Date.now() >= expiry) clearCode();
+    if (refreshing || activeButton) return;
     refreshing = true;
-    try { paint(await request('/status')); }
-    catch (issue) { if (!inactive) error.textContent = issue.message; }
-    finally { refreshing = false; }
+    const version = actionVersion;
+    try {
+      const state = await request('/status');
+      if (version === actionVersion) paint(state);
+    } catch (issue) {
+      if (!inactive && version === actionVersion) {
+        online = false;
+        link.textContent = '暂时无法读取连接';
+        wait.textContent = issue.message;
+        syncControls();
+      }
+    } finally { refreshing = false; }
   }
 
   async function action(button, run) {
-    button.disabled = true;
+    if (inactive || activeButton || button.disabled) return;
+    activeButton = button;
+    actionVersion += 1;
+    syncControls();
     error.textContent = '';
     try { await run(); }
-    catch (issue) { error.textContent = issue.message; }
-    finally { button.disabled = false; await update(); }
+    catch (issue) { if (!inactive) error.textContent = issue.message; }
+    finally {
+      activeButton = undefined;
+      if (!inactive) {
+        syncControls();
+        await update();
+      }
+    }
   }
 
   pair.onclick = () => action(pair, async () => {
     clearCode();
-    const ready = await request('/pairing/new', {});
-    expiry = ready.expiresAt;
-    try {
-      objectUrl = URL.createObjectURL(await request('/pairing.png'));
-      qr.src = objectUrl;
-      qr.style.display = 'block';
-      qr.hidden = false;
-    } catch { error.textContent = '暂时无法生成微信码，请检查中继的小程序配置后重试。'; }
+    const { expiresAt } = await request('/pairing/new', {});
+    if (inactive) return;
+    const image = await request('/pairing.png').catch(() => {
+      throw new Error('暂时无法生成微信码，请检查中继的小程序配置后重试。');
+    });
+    if (inactive) return;
+    if (expiresAt <= Date.now()) throw new Error('配对码已过期，请重新生成');
+    expiry = expiresAt;
+    objectUrl = URL.createObjectURL(image);
+    qr.src = objectUrl;
+    qr.style.display = 'block';
+    qr.hidden = false;
   });
   reset.onclick = () => {
-    if (confirm('解除手机与这台电脑的配对？')) void action(reset, async () => {
+    if (!reset.disabled && confirm('解除手机与这台电脑的配对？')) void action(reset, async () => {
       await request('/unpair', {});
       clearCode();
     });
   };
-  save.onclick = () => action(save, async () => {
-    await request('/config', { ...(url.disabled ? {} : { serverUrl: url.value }), hostToken: token.value });
-    token.value = '';
+  async function saveConfig(settings) {
+    const state = await request('/config', settings);
     clearCode();
+    paint(state);
+  }
+
+  save.onclick = () => action(save, async () => {
+    const hostToken = token.value;
+    await saveConfig({ ...(url.disabled ? {} : { serverUrl: url.value }), hostToken });
+    if (token.value === hostToken) token.value = '';
   });
-  clearToken.onclick = () => action(clearToken, () => request('/config', { clearHostToken: true }));
+  clearToken.onclick = () => action(clearToken, () => saveConfig({ clearHostToken: true }));
   if (inline) container.append(panel);
   else {
     const open = el('button', '远程控制', 'drc06-link');
@@ -174,25 +217,34 @@ function mount(container, inline) {
     const outside = (event) => {
       if (!panel.open) return;
       if (panel.contains(event.target) || open.contains(event.target)) return;
-      panel.close();
+      toggle(false);
+    };
+    const syncOpen = () => {
+      open.setAttribute('aria-expanded', String(panel.open));
+      if (panel.open) document.addEventListener('pointerdown', outside, true);
+      else document.removeEventListener('pointerdown', outside, true);
     };
     const toggle = (next) => {
-      if (next) {
-        panel.show();
-        open.setAttribute('aria-expanded', 'true');
-        document.addEventListener('pointerdown', outside, true);
-        void update();
-      } else if (panel.open) panel.close();
-      else {
-        open.setAttribute('aria-expanded', 'false');
-        document.removeEventListener('pointerdown', outside, true);
-      }
+      if (next) panel.show();
+      else if (panel.open) panel.close();
+      syncOpen();
+      if (panel.open) void update();
     };
-    panel.addEventListener('close', () => toggle(false));
+    panel.addEventListener('close', syncOpen);
+    panel.onkeydown = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      toggle(false);
+      open.focus();
+    };
     open.onclick = () => toggle(!panel.open);
     container.append(open, panel);
-    detach = () => { toggle(false); cleanup(); };
+    detach = () => {
+      panel.removeEventListener('close', syncOpen);
+      toggle(false);
+    };
   }
+  syncControls();
   void update();
   const timer = setInterval(update, 1500);
   return () => {
